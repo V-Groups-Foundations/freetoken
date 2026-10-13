@@ -15,7 +15,7 @@ describe('normalizeError', () => {
     expect(normalizeError(403, h(), '').kind).toBe('auth');
     expect(normalizeError(413, h(), '').kind).toBe('rate_limit');
     expect(normalizeError(503, h(), '').kind).toBe('server');
-    expect(normalizeError(404, h(), '').kind).toBe('server');
+    expect(normalizeError(404, h(), '').kind).toBe('not_found');
     expect(normalizeError(400, h(), '{"error":"bad"}')).toMatchObject({ kind: 'bad_request', message: 'bad' });
   });
   it('survives non-JSON (HTML) bodies', () => {

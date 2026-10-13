@@ -28,7 +28,7 @@ export const PROVIDERS: ProviderDef[] = [
     name: 'Groq',
     keyUrl: 'https://console.groq.com/keys',
     steps: ['Sign in to the Groq console.', 'Click "Create API Key".', 'Copy the key (starts with gsk_) and paste it here.'],
-    validateModel: 'llama-3.1-8b-instant',
+    validateModel: 'openai/gpt-oss-20b',
     baseUrl: () => 'https://api.groq.com/openai/v1',
   },
   {
@@ -37,7 +37,7 @@ export const PROVIDERS: ProviderDef[] = [
     keyUrl: 'https://openrouter.ai/settings/keys',
     steps: ['Sign in to OpenRouter.', 'Click "Create Key".', 'Copy the key (starts with sk-or-) and paste it here.'],
     note: 'Only free (":free") models are used: 50 requests/day, or 1,000/day after a one-time $10 credit purchase.',
-    validateModel: 'meta-llama/llama-3.3-70b-instruct:free',
+    validateModel: 'nvidia/nemotron-3.5-lightning:free',
     baseUrl: () => 'https://openrouter.ai/api/v1',
   },
   {

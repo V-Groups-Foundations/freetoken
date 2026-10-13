@@ -1,6 +1,6 @@
 import type { ProviderDef } from './registry';
 
-export type ErrorKind = 'rate_limit' | 'auth' | 'server' | 'timeout' | 'bad_request';
+export type ErrorKind = 'rate_limit' | 'auth' | 'server' | 'timeout' | 'bad_request' | 'not_found';
 
 export interface ProviderError {
   kind: ErrorKind;
@@ -44,8 +44,10 @@ export function normalizeError(status: number, headers: Headers, bodyText: strin
     return { kind: 'rate_limit', status, message, retryAfterMs: parseRetryAfter(headers.get('retry-after')) };
   }
   if (status === 401 || status === 403) return { kind: 'auth', status, message };
-  // 404 usually means the model was retired by the provider: try another candidate.
-  if (status >= 500 || status === 404) return { kind: 'server', status, message };
+  // 404 = this model is retired or not on this key's plan. Skip just this model,
+  // don't penalize the provider's other models.
+  if (status === 404) return { kind: 'not_found', status, message };
+  if (status >= 500) return { kind: 'server', status, message };
   return { kind: 'bad_request', status, message };
 }
 

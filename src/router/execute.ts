@@ -87,6 +87,10 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
         status: e.kind === 'rate_limit' ? 'rate_limited' : 'error',
       });
       if (e.kind === 'bad_request') return fail(e.status, 'upstream_bad_request', e.message);
+      if (e.kind === 'not_found') {
+        // Retired/unavailable model: skip just this model, leave the provider's others usable.
+        continue;
+      }
       if (e.kind === 'auth') {
         await markInvalid(deps.db, userId, m.provider);
       } else {

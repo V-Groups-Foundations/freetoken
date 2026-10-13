@@ -60,6 +60,19 @@ describe('routeChat', () => {
     expect(second.f.calls.map((c) => c.url).some((u) => u.includes(GROQ))).toBe(false);
   });
 
+  it('does not cool a provider when a model is 404 (retired), so its other models still get tried', async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    // groq's smart model is retired (404); gemini answers this call.
+    const handler: Handler = (url) =>
+      url.includes(GROQ) ? new Response('{"error":{"message":"model_not_found"}}', { status: 404 }) : okJson();
+    await run(handler).p;
+    // Next call must still try groq (not cooled) — contrast with the 429 case which skips it.
+    const second = run(handler);
+    await second.p;
+    expect(second.f.calls.some((c) => c.url.includes(GROQ))).toBe(true);
+  });
+
   it('falls back past an HTML 502 without crashing', async () => {
     await connect('groq', 'gsk_mine');
     await connect('gemini', 'AIza_mine');
