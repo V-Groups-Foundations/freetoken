@@ -64,6 +64,29 @@ async function fetchModels(cfg) {
   }
 }
 
+const projectOrigin = (baseUrl) => baseUrl.replace(/\/api\/v1\/?$/, '');
+
+/** Load a project's saved conversation so the terminal shows the whole thread. */
+async function fetchProjectHistory(cfg, project) {
+  try {
+    const res = await fetch(`${projectOrigin(cfg.baseUrl)}/api/projects/${project}/messages`, {
+      headers: { authorization: `Bearer ${cfg.token}` },
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return { name: j.project?.name ?? project, messages: j.messages ?? [] };
+  } catch {
+    return null;
+  }
+}
+
+function printHistory(messages) {
+  for (const m of messages) {
+    if (m.role === 'user') stdout.write(cyan('› ') + m.content + '\n');
+    else stdout.write(dim(`  (${m.provider ?? 'assistant'})\n`) + m.content + '\n');
+  }
+}
+
 function originOf(baseUrl) {
   // baseUrl is .../api/v1 ; project routes live at .../api/projects/:id/chat
   return baseUrl.replace(/\/api\/v1\/?$/, '');
@@ -158,9 +181,18 @@ async function runChat(parsed) {
     return;
   }
 
-  console.log(bold(cyan('FreeToken')) + dim(`  ${cfg.baseUrl}  ·  model: ${model}  ·  /help for commands`));
-  const rl = createInterface({ input: stdin, output: stdout, prompt: cyan('› ') });
+  const where = project ? `project ${project}` : `model: ${model}`;
+  console.log(bold(cyan('FreeToken')) + dim(`  ${cfg.baseUrl}  ·  ${where}  ·  /help for commands`));
   const state = { model, messages: [], project };
+  if (project) {
+    const hist = await fetchProjectHistory(cfg, project);
+    if (hist) {
+      console.log(dim(`— ${hist.name}: ${hist.messages.length} saved message(s), shared with the web app —`));
+      printHistory(hist.messages);
+      state.messages = hist.messages.map((m) => ({ role: m.role, content: m.content }));
+    }
+  }
+  const rl = createInterface({ input: stdin, output: stdout, prompt: cyan('› ') });
   rl.prompt();
 
   rl.on('line', async (line) => {
@@ -189,7 +221,18 @@ async function runChat(parsed) {
       case 'project':
         state.project = action.project;
         state.messages = [];
-        console.log(dim(action.project ? `Using project ${action.project} (shared memory).` : 'Left project mode.'));
+        if (action.project) {
+          const hist = await fetchProjectHistory(cfg, action.project);
+          if (hist) {
+            console.log(dim(`— ${hist.name}: ${hist.messages.length} saved message(s), shared with the web app —`));
+            printHistory(hist.messages);
+            state.messages = hist.messages.map((m) => ({ role: m.role, content: m.content }));
+          } else {
+            console.log(dim(`Using project ${action.project}.`));
+          }
+        } else {
+          console.log(dim('Left project mode.'));
+        }
         break;
       case 'models': {
         const models = await fetchModels(cfg);
@@ -216,6 +259,20 @@ async function runChat(parsed) {
   });
 }
 
-const parsed = parseArgs(argv.slice(2));
+const rawArgs = argv.slice(2);
+if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
+  console.log(
+    bold('freetoken') + dim(' — terminal client for your FreeToken app\n') +
+      '\nUsage:\n' +
+      '  freetoken login                     save your base URL + ft_ token\n' +
+      '  freetoken                           interactive chat\n' +
+      '  freetoken "your question"           one-shot answer\n' +
+      '  freetoken --project <id>            use a saved project (shared with the web app)\n' +
+      '  freetoken -m <model> "question"     pick a model (auto-smart, auto-fast, provider/model)\n',
+  );
+  printHelp();
+  exit(0);
+}
+const parsed = parseArgs(rawArgs);
 if (parsed.command === 'login') await runLogin();
 else await runChat(parsed);

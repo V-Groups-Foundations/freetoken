@@ -127,7 +127,7 @@ export function Workspace({
 
       {tab === 'chat'
         ? <ChatPane msgs={msgs} busy={busy} onSend={send} />
-        : <TerminalPane msgs={msgs} busy={busy} model={model} onSend={send} />}
+        : <TerminalPane projectId={projectId} msgs={msgs} busy={busy} model={model} onSend={send} />}
 
       {error && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-[#f3c9c2] bg-[#fdf1ef] px-4 py-3 text-sm text-[#9a2b1a]">
@@ -222,13 +222,34 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
   );
 }
 
-function TerminalPane({ msgs, busy, model, onSend }: { msgs: Msg[]; busy: boolean; model: string; onSend: (t: string) => void }) {
+function TerminalPane({ projectId, msgs, busy, model, onSend }: { projectId: string; msgs: Msg[]; busy: boolean; model: string; onSend: (t: string) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+  const command = `freetoken --project ${projectId}`;
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [msgs]);
+
+  async function copyCommand() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+
   return (
     <div className="flex h-[calc(100vh-15rem)] flex-col">
+      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[#e3e6ee] bg-white px-3 py-2 text-sm">
+        <span className="text-[#697086]">Open this project in your own terminal:</span>
+        <code className="rounded bg-[#0f1320] px-2 py-1 font-mono text-xs text-[#cdd3e0]">{command}</code>
+        <button onClick={copyCommand} className="rounded-md bg-[#0f766e] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#0c5f58]">
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+        <span className="text-xs text-[#9aa0b2]">same saved conversation as here</span>
+      </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl bg-[#0f1320] p-4 font-mono text-[13px] leading-relaxed text-[#cdd3e0]">
         <div className="text-[#5b647e]">freetoken · {model} · shares memory with the Chat tab</div>
         {msgs.map((m, i) => {
