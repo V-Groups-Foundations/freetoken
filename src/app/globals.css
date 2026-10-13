@@ -4,3 +4,23 @@
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
+
+/* Streaming caret shown while the assistant is replying. */
+@keyframes ft-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.ft-caret::after {
+  content: "";
+  display: inline-block;
+  width: 0.5ch;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: ft-blink 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ft-caret::after { animation: none; }
+}
