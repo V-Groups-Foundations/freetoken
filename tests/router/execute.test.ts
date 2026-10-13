@@ -126,4 +126,20 @@ describe('routeChat', () => {
     await connect('gemini', 'AIza_mine');
     expect((await listUserModels(db, userId)).map((m) => m.id)).toEqual(['gemini/flash']);
   });
+
+  it('falls back when an upstream 200 body is not valid JSON', async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    const { p } = run((url) => (url.includes(GROQ) ? new Response('<html>captive portal</html>', { status: 200, headers: { 'content-type': 'text/html' } }) : okJson()));
+    const out = await p;
+    expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('gemini/flash');
+  });
+
+  it('says no model can handle the request instead of blaming quota', async () => {
+    await connect('groq', 'gsk_mine');
+    const huge = [{ role: 'user', content: 'x'.repeat(500_000) }];
+    const { f, p } = run(() => okJson(), { messages: huge });
+    expect(await p).toMatchObject({ ok: false, status: 400, code: 'no_capable_model' });
+    expect(f.calls).toHaveLength(0);
+  });
 });

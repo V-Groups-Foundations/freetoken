@@ -39,7 +39,8 @@ export function parseRetryAfter(value: string | null): number | undefined {
 
 export function normalizeError(status: number, headers: Headers, bodyText: string): ProviderError {
   const message = extractMessage(bodyText) ?? `HTTP ${status}`;
-  if (status === 429) {
+  // Groq answers 413 when a request exceeds its per-minute token budget.
+  if (status === 429 || status === 413) {
     return { kind: 'rate_limit', status, message, retryAfterMs: parseRetryAfter(headers.get('retry-after')) };
   }
   if (status === 401 || status === 403) return { kind: 'auth', status, message };

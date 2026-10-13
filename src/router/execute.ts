@@ -50,7 +50,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   }
 
   const promptEstimate = estimateTokens(body.messages);
-  const candidates = selectCandidates({
+  const selectInput = {
     requested,
     models: catalog,
     connected: [...creds].map(([provider, c]) => ({ provider, excludedFromAuto: c.excludedFromAuto })),
@@ -58,7 +58,14 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     usageToday: await usageToday(deps.db, userId, new Date(now())),
     promptTokens: promptEstimate,
     needsTools: Array.isArray(body.tools) && body.tools.length > 0,
-  });
+  };
+  const candidates = selectCandidates(selectInput);
+  // Empty even with quota ignored: no connected model can serve this request at all.
+  if (candidates.length === 0 && selectCandidates({ ...selectInput, cooling: new Set(), usageToday: new Map() }).length === 0) {
+    return fail(400, 'no_capable_model',
+      'None of your connected models can handle this request (it may need tool support or a longer context window, ' +
+      'or every provider is excluded from auto-routing). Connect more providers at /connect.');
+  }
 
   const stream = body.stream === true;
 
@@ -109,7 +116,17 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       return { ok: true, response: new Response(tapped, { status: 200, headers }) };
     }
 
-    const json = await r.response.json();
+    let json;
+    try {
+      json = await r.response.json();
+    } catch {
+      // A 200 with a non-JSON body (proxy/captive page): nothing sent to the client yet, so fall back.
+      await recordUsage(deps.db, { ...usageBase, promptTokens: 0, completionTokens: 0, status: 'error', latencyMs: now() - started });
+      await deps.kv.set(cooldownKey(userId, m.provider), String(now() + 30_000), 30_000);
+      resetTimes.push(now() + 30_000);
+      cooling.add(m.provider);
+      continue;
+    }
     await recordUsage(deps.db, {
       ...usageBase,
       promptTokens: json.usage?.prompt_tokens ?? promptEstimate,

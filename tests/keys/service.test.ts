@@ -59,6 +59,10 @@ describe('validateKey', () => {
     const r = await validateKey(groq, creds, fakeFetch(() => new Response('{}', { status: 429 })).fn);
     expect(r).toMatchObject({ ok: true, note: expect.stringContaining('rate-limited') });
   });
+  it('saves with a note when the test model is gone (404)', async () => {
+    const r = await validateKey(groq, creds, fakeFetch(() => new Response('{}', { status: 404 })).fn);
+    expect(r).toMatchObject({ ok: true, note: expect.stringContaining('test model') });
+  });
   it('rejects a key the provider refuses', async () => {
     const r = await validateKey(groq, creds, fakeFetch(() => new Response('{}', { status: 401 })).fn);
     expect(r).toEqual({ ok: false, message: 'The provider rejected this key.' });

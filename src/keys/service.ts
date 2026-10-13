@@ -79,5 +79,6 @@ export async function validateKey(
   }
   if (r.error.kind === 'rate_limit') return { ok: true, note: 'Key works but is currently rate-limited.' };
   if (r.error.kind === 'auth') return { ok: false, message: 'The provider rejected this key.' };
+  if (r.error.status === 404) return { ok: true, note: 'Key saved, but the test model is unavailable, so the key could not be fully verified.' };
   return { ok: false, message: `Could not verify the key: ${r.error.message}` };
 }
