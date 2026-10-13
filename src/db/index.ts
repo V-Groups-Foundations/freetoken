@@ -5,6 +5,7 @@ import { Pool } from 'pg';
 import { mkdirSync } from 'node:fs';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import * as schema from './schema';
+import { acquireDirLock } from './lock';
 
 export type DB = PgDatabase<PgQueryResultHKT, typeof schema>;
 
@@ -12,7 +13,10 @@ export type DB = PgDatabase<PgQueryResultHKT, typeof schema>;
 export function createDb(url: string): DB {
   if (url.startsWith('pglite:')) {
     const dir = url.slice('pglite:'.length);
-    if (dir) mkdirSync(dir, { recursive: true });
+    if (dir) {
+      mkdirSync(dir, { recursive: true });
+      acquireDirLock(dir);
+    }
     return drizzlePglite(dir ? new PGlite(dir) : new PGlite(), { schema }) as unknown as DB;
   }
   return drizzlePg(new Pool({ connectionString: url }), { schema }) as unknown as DB;

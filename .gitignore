@@ -43,3 +43,5 @@ next-env.d.ts
 .data/
 .superpowers/
 !.env.example
+
+.data/*.lock

@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Geist, Geist_Mono } from 'next/font/google';
-import { auth, signOut } from '@/auth';
+import { signOut } from '@/auth';
+import { sessionUserId } from '@/lib/session';
 import './globals.css';
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
@@ -13,14 +14,14 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const session = await auth();
+  const signedIn = Boolean(await sessionUserId());
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
       <body className="min-h-screen bg-neutral-50 text-neutral-900">
         <header className="border-b bg-white">
           <nav className="mx-auto flex max-w-4xl items-center gap-6 px-4 py-3 text-sm">
             <Link href="/" className="font-semibold">FreeToken</Link>
-            {session && (
+            {signedIn && (
               <>
                 <Link href="/connect">Connect</Link>
                 <Link href="/chat">Chat</Link>
@@ -30,7 +31,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 </form>
               </>
             )}
-            {!session && <Link href="/login" className="ml-auto">Sign in</Link>}
+            {!signedIn && <Link href="/login" className="ml-auto">Sign in</Link>}
           </nav>
         </header>
         <main className="mx-auto max-w-4xl px-4 py-8">{children}</main>

@@ -1,8 +1,10 @@
 import { redirect } from 'next/navigation';
-import { auth, devLoginEnabled, signIn } from '@/auth';
+import { devLoginEnabled, signIn } from '@/auth';
+import { sessionUserId } from '@/lib/session';
 
 export default async function LoginPage() {
-  if ((await auth())?.user) redirect('/connect');
+  // Checks the user row too, so a stale session can't bounce between /login and /connect.
+  if (await sessionUserId()) redirect('/connect');
   const google = Boolean(process.env.AUTH_GOOGLE_ID);
   return (
     <section className="mx-auto max-w-sm space-y-6 py-12">
