@@ -1,0 +1,31 @@
+import { redirect } from 'next/navigation';
+import Link from 'next/link';
+import { getDb } from '@/db';
+import { requireUserId } from '@/lib/session';
+import { getProject, listMessages } from '@/projects/service';
+import { listUserModels } from '@/router/models';
+import { Workspace } from './workspace';
+
+export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
+  const uid = await requireUserId();
+  const { id } = await params;
+  const db = getDb();
+  const project = await getProject(db, uid, id);
+  if (!project) redirect('/projects');
+  const [messages, models] = await Promise.all([listMessages(db, id), listUserModels(db, uid)]);
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Link href="/projects" className="text-sm text-neutral-500 hover:text-neutral-900">← Projects</Link>
+        <h1 className="text-xl font-semibold">{project.name}</h1>
+      </div>
+      <Workspace
+        projectId={id}
+        initialModel={project.model}
+        models={models}
+        initialMessages={messages.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content, provider: m.provider ?? undefined }))}
+      />
+    </section>
+  );
+}

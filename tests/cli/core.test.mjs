@@ -31,15 +31,19 @@ describe('deltaFromLine', () => {
 
 describe('parseArgs', () => {
   it('defaults to the chat command', () => {
-    expect(parseArgs([])).toEqual({ command: 'chat', model: null, message: null });
+    expect(parseArgs([])).toEqual({ command: 'chat', model: null, project: null, message: null });
   });
   it('parses login', () => {
     expect(parseArgs(['login'])).toMatchObject({ command: 'login' });
   });
   it('takes a one-shot message and a model flag', () => {
     expect(parseArgs(['--model', 'auto-fast', 'hello', 'there']))
-      .toEqual({ command: 'chat', model: 'auto-fast', message: 'hello there' });
+      .toEqual({ command: 'chat', model: 'auto-fast', project: null, message: 'hello there' });
     expect(parseArgs(['-m', 'groq/llama', 'hi'])).toMatchObject({ model: 'groq/llama', message: 'hi' });
+  });
+  it('takes a project flag', () => {
+    expect(parseArgs(['--project', 'abc123', 'hi'])).toMatchObject({ project: 'abc123', message: 'hi' });
+    expect(parseArgs(['-p', 'abc123'])).toMatchObject({ project: 'abc123', message: null });
   });
 });
 
@@ -59,6 +63,10 @@ describe('applyCommand', () => {
   it('lists help and models', () => {
     expect(applyCommand('/help', state)).toMatchObject({ type: 'help' });
     expect(applyCommand('/models', state)).toEqual({ type: 'models' });
+  });
+  it('switches project', () => {
+    expect(applyCommand('/project abc', state)).toEqual({ type: 'project', project: 'abc' });
+    expect(applyCommand('/project', state)).toEqual({ type: 'project', project: null });
   });
   it('treats unknown slash commands as an error and plain text as a message', () => {
     expect(applyCommand('/nope', state)).toMatchObject({ type: 'error' });

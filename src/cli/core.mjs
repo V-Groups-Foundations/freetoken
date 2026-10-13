@@ -26,19 +26,22 @@ export function deltaFromLine(line) {
   }
 }
 
-/** Parse argv (without node/script) into { command, model, message }. */
+/** Parse argv (without node/script) into { command, model, project, message }. */
 export function parseArgs(argv) {
-  if (argv[0] === 'login') return { command: 'login', model: null, message: null };
+  if (argv[0] === 'login') return { command: 'login', model: null, project: null, message: null };
   let model = null;
+  let project = null;
   const words = [];
   for (let i = 0; i < argv.length; i++) {
     if ((argv[i] === '--model' || argv[i] === '-m') && argv[i + 1]) {
       model = argv[++i];
+    } else if ((argv[i] === '--project' || argv[i] === '-p') && argv[i + 1]) {
+      project = argv[++i];
     } else {
       words.push(argv[i]);
     }
   }
-  return { command: 'chat', model, message: words.length ? words.join(' ') : null };
+  return { command: 'chat', model, project, message: words.length ? words.join(' ') : null };
 }
 
 /** Decide what a REPL input means. Returns a tagged action. */
@@ -58,6 +61,8 @@ export function applyCommand(input) {
       return { type: 'models' };
     case '/model':
       return rest.length ? { type: 'model', model: rest.join(' ') } : { type: 'error', message: 'Usage: /model <id>' };
+    case '/project':
+      return { type: 'project', project: rest.length ? rest.join(' ') : null };
     default:
       return { type: 'error', message: `Unknown command ${cmd}. Try /help.` };
   }

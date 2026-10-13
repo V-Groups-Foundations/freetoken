@@ -15,6 +15,13 @@
       "when": 1791856804381,
       "tag": "0001_bent_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791859344882,
+      "tag": "0002_thin_crystal",
+      "breakpoints": true
     }
   ]
 }

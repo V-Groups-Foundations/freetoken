@@ -64,20 +64,32 @@ async function fetchModels(cfg) {
   }
 }
 
+function originOf(baseUrl) {
+  // baseUrl is .../api/v1 ; project routes live at .../api/projects/:id/chat
+  return baseUrl.replace(/\/api\/v1\/?$/, '');
+}
+
 /**
- * Stream one completion. Prints tokens as they arrive.
- * @returns {Promise<{provider:string|null, ok:boolean, error?:string}>}
+ * Stream one reply. In a project, posts {content} to the project endpoint (shared memory);
+ * otherwise posts the full message list to the stateless completions endpoint.
+ * @returns {Promise<{provider:string|null, ok:boolean, error?:string, text?:string}>}
  */
-async function streamChat(cfg, model, messages) {
+async function streamChat(cfg, model, messages, project) {
+  const url = project
+    ? `${originOf(cfg.baseUrl)}/api/projects/${project}/chat`
+    : `${cfg.baseUrl}/chat/completions`;
+  const payload = project
+    ? { content: messages[messages.length - 1].content }
+    : { model, messages, stream: true };
   let res;
   try {
-    res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify(payload),
     });
   } catch (e) {
-    return { provider: null, ok: false, error: `Could not reach ${cfg.baseUrl} (${e.message}).` };
+    return { provider: null, ok: false, error: `Could not reach ${url} (${e.message}).` };
   }
   if (!res.ok || !res.body) {
     let msg = `HTTP ${res.status}`;
@@ -118,6 +130,7 @@ function printHelp() {
     [
       bold('Commands'),
       '  /model <id>   switch model (e.g. auto-smart, auto-fast, groq/…)',
+      '  /project <id> use a project (shared memory with the web app); blank to leave',
       '  /models       list your available models',
       '  /clear        start a new conversation',
       '  /help         show this help',
@@ -133,10 +146,11 @@ async function runChat(parsed) {
     exit(1);
   }
   const model = parsed.model ?? 'auto-smart';
+  const project = parsed.project ?? null;
 
   // One-shot mode: freetoken "question"
   if (parsed.message) {
-    const r = await streamChat(cfg, model, [{ role: 'user', content: parsed.message }]);
+    const r = await streamChat(cfg, model, [{ role: 'user', content: parsed.message }], project);
     if (!r.ok) {
       console.error(red(r.error));
       exit(1);
@@ -146,16 +160,17 @@ async function runChat(parsed) {
 
   console.log(bold(cyan('FreeToken')) + dim(`  ${cfg.baseUrl}  ·  model: ${model}  ·  /help for commands`));
   const rl = createInterface({ input: stdin, output: stdout, prompt: cyan('› ') });
-  const state = { model, messages: [] };
+  const state = { model, messages: [], project };
   rl.prompt();
 
   rl.on('line', async (line) => {
+    rl.pause(); // hold further input until this turn finishes, so replies can't overlap
     const action = applyCommand(line);
     switch (action.type) {
       case 'message': {
         if (!action.text) break;
         state.messages.push({ role: 'user', content: action.text });
-        const r = await streamChat(cfg, state.model, state.messages);
+        const r = await streamChat(cfg, state.model, state.messages, state.project);
         if (r.ok) state.messages.push({ role: 'assistant', content: r.text });
         else {
           state.messages.pop();
@@ -170,6 +185,11 @@ async function runChat(parsed) {
       case 'model':
         state.model = action.model;
         console.log(dim(`Model set to ${action.model}.`));
+        break;
+      case 'project':
+        state.project = action.project;
+        state.messages = [];
+        console.log(dim(action.project ? `Using project ${action.project} (shared memory).` : 'Left project mode.'));
         break;
       case 'models': {
         const models = await fetchModels(cfg);
@@ -186,6 +206,7 @@ async function runChat(parsed) {
         rl.close();
         return;
     }
+    rl.resume();
     rl.prompt();
   });
 

@@ -78,6 +78,26 @@ export const models = pgTable('models', {
   enabled: boolean('enabled').notNull().default(true),
 }, (t) => [uniqueIndex('models_provider_model').on(t.provider, t.modelId)]);
 
+/** A workspace with its own saved conversation, shared by the web chat and the terminal. */
+export const projects = pgTable('projects', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  model: text('model').notNull().default('auto-smart'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [index('projects_user').on(t.userId, t.updatedAt)]);
+
+/** The shared memory: one row per turn, read and written by both the chat and the terminal. */
+export const projectMessages = pgTable('project_messages', {
+  id: serial('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  role: text('role').notNull(), // user | assistant
+  content: text('content').notNull(),
+  provider: text('provider'), // which provider/model answered (assistant rows)
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('project_messages_project').on(t.projectId, t.id)]);
+
 /** Latest rate-limit numbers a provider reported (via response headers) for this user's key. */
 export const providerLimits = pgTable('provider_limits', {
   id: serial('id').primaryKey(),
