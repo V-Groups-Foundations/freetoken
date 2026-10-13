@@ -35,26 +35,26 @@ export function Tokens() {
   }
 
   return (
-    <div className="space-y-4 rounded-xl border bg-white p-4">
+    <div className="card card-pad space-y-4">
       <h2 className="font-semibold">API tokens</h2>
       {fresh && (
-        <div className="rounded bg-green-50 p-3 text-sm">
-          Copy this token now; it won’t be shown again:
-          <code className="mt-1 block break-all rounded bg-white p-2">{fresh}</code>
+        <div className="rounded-xl bg-[#e3f4ec] p-3 text-sm text-[#15724a]">
+          Copy this token now — it won’t be shown again:
+          <code className="mt-1.5 block break-all rounded-lg bg-white p-2 font-mono text-xs">{fresh}</code>
         </div>
       )}
       <form onSubmit={create} className="flex gap-2">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Token name, e.g. laptop" className="flex-1 rounded border px-3 py-2 text-sm" />
-        <button disabled={!name.trim()} className="rounded bg-neutral-900 px-3 py-2 text-sm text-white disabled:opacity-40">Create</button>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Token name, e.g. laptop" className="input flex-1" />
+        <button disabled={!name.trim()} className="btn btn-primary">Create</button>
       </form>
-      <ul className="divide-y text-sm">
+      <ul className="divide-y divide-[var(--border)] text-sm">
         {tokens.map((t) => (
-          <li key={t.id} className="flex items-center justify-between py-2">
-            <span>{t.name} <code className="text-neutral-500">{t.prefix}…</code></span>
-            <button onClick={() => revoke(t.id)} className="text-red-700 hover:underline">Revoke</button>
+          <li key={t.id} className="flex items-center justify-between py-2.5">
+            <span>{t.name} <code className="faint ml-1 font-mono text-xs">{t.prefix}…</code></span>
+            <button onClick={() => revoke(t.id)} className="text-[var(--danger)] hover:underline">Revoke</button>
           </li>
         ))}
-        {tokens.length === 0 && <li className="py-2 text-neutral-500">No tokens yet.</li>}
+        {tokens.length === 0 && <li className="muted py-2.5">No tokens yet.</li>}
       </ul>
     </div>
   );

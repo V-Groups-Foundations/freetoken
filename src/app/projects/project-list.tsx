@@ -35,27 +35,18 @@ export function ProjectList({ initial }: { initial: Project[] }) {
   return (
     <div className="space-y-6">
       <form onSubmit={create} className="flex gap-2">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="New project name"
-          className="flex-1 rounded-lg border border-[#e3e6ee] bg-white px-3 py-2 text-sm focus:border-[#0f766e] focus:outline-none focus:ring-2 focus:ring-[#0f766e]/20"
-        />
-        <button disabled={busy || !name.trim()} className="rounded-lg bg-[#0f766e] px-4 py-2 text-sm font-medium text-white disabled:opacity-40">
-          Create
-        </button>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="New project name" className="input flex-1" />
+        <button disabled={busy || !name.trim()} className="btn btn-primary">Create</button>
       </form>
 
       {projects.length === 0 ? (
-        <p className="text-sm text-neutral-500">No projects yet. Create one to start a shared chat-and-terminal workspace.</p>
+        <p className="muted text-sm">No projects yet. Create one to start a shared chat-and-terminal workspace.</p>
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2">
           {projects.map((p) => (
-            <li key={p.id} className="flex items-center justify-between rounded-xl border border-[#e3e6ee] bg-white p-4">
-              <Link href={`/projects/${p.id}`} className="font-medium text-[#232a3b] hover:underline">
-                {p.name}
-              </Link>
-              <button onClick={() => remove(p.id)} className="text-sm text-red-700 hover:underline">Delete</button>
+            <li key={p.id} className="card flex items-center justify-between px-4 py-3.5">
+              <Link href={`/projects/${p.id}`} className="font-medium hover:text-[var(--brand)]">{p.name}</Link>
+              <button onClick={() => remove(p.id)} className="text-sm text-[var(--danger)] hover:underline">Delete</button>
             </li>
           ))}
         </ul>

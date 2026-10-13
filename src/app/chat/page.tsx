@@ -9,9 +9,13 @@ export default async function ChatPage() {
   const models = await listUserModels(getDb(), uid);
   if (models.length === 0) {
     return (
-      <p>
-        Connect at least one provider first. <Link href="/connect" className="text-blue-700 underline">Connect providers</Link>
-      </p>
+      <div className="card card-pad">
+        <h2 className="font-semibold">No providers connected</h2>
+        <p className="muted mt-1 text-sm">
+          Connect at least one provider to start chatting.{' '}
+          <Link href="/connect" className="font-medium text-[var(--brand)] hover:underline">Connect providers</Link>
+        </p>
+      </div>
     );
   }
   return <Chat models={models} />;

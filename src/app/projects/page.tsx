@@ -9,10 +9,10 @@ export default async function ProjectsPage() {
   return (
     <section className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Projects</h1>
-        <p className="text-neutral-600">
-          A project keeps one conversation that both the chat and the terminal share — pick up in
-          the terminal where you left off in chat, and the other way round.
+        <h1 className="h2">Projects</h1>
+        <p className="muted mt-1 max-w-2xl">
+          A project keeps one conversation that the chat, the web terminal, and your desktop terminal all
+          share — pick up anywhere you left off.
         </p>
       </div>
       <ProjectList initial={projects.map((p) => ({ id: p.id, name: p.name }))} />

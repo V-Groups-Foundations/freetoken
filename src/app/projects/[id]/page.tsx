@@ -17,8 +17,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   return (
     <section className="space-y-4">
       <div className="flex items-center gap-3">
-        <Link href="/projects" className="text-sm text-neutral-500 hover:text-neutral-900">← Projects</Link>
-        <h1 className="text-xl font-semibold">{project.name}</h1>
+        <Link href="/projects" className="muted text-sm hover:text-[var(--ink)]">← Projects</Link>
+        <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
       </div>
       <Workspace
         projectId={id}

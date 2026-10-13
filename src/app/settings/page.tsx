@@ -10,12 +10,12 @@ export default async function SettingsPage() {
   return (
     <section className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Your API</h1>
-        <p className="text-neutral-600">Use FreeToken from any OpenAI-compatible tool (Cline, Continue, scripts).</p>
+        <h1 className="h2">Your API</h1>
+        <p className="muted mt-1">Use FreeToken from any OpenAI-compatible tool — Cline, Continue, or your own scripts.</p>
       </div>
-      <div className="space-y-1 rounded-xl border bg-white p-4 text-sm">
-        <div>Base URL: <code className="rounded bg-neutral-100 px-1">{baseUrl}</code></div>
-        <div>Models: <code className="rounded bg-neutral-100 px-1">auto-smart</code>, <code className="rounded bg-neutral-100 px-1">auto-fast</code>, or any from <code className="rounded bg-neutral-100 px-1">/models</code></div>
+      <div className="card card-pad space-y-1.5 text-sm">
+        <div>Base URL <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">{baseUrl}</code></div>
+        <div>Models <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">auto-smart</code> <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">auto-fast</code> <span className="muted">or any from</span> <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">/models</code></div>
       </div>
       <Tokens />
     </section>

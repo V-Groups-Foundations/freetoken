@@ -46,13 +46,13 @@ function ModelRow({ m, now }: { m: ModelUsage; now: number }) {
 function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
   const cooling = p.coolingUntil && new Date(p.coolingUntil).getTime() > now;
   return (
-    <div className="space-y-2 rounded-xl border bg-white p-4">
+    <div className="card card-pad space-y-2">
       <div className="flex items-center justify-between">
         <h2 className="font-semibold">{p.name}</h2>
-        <div className="flex gap-2 text-xs">
-          {p.status !== 'valid' && <span className="rounded bg-red-100 px-2 py-0.5 text-red-800">key rejected</span>}
-          {p.excludedFromAuto && <span className="rounded bg-neutral-100 px-2 py-0.5 text-neutral-600">excluded from auto</span>}
-          {cooling && <span className="rounded bg-amber-100 px-2 py-0.5 text-amber-800">cooling down</span>}
+        <div className="flex gap-2">
+          {p.status !== 'valid' && <span className="badge badge-bad">key rejected</span>}
+          {p.excludedFromAuto && <span className="badge badge-off">excluded from auto</span>}
+          {cooling && <span className="badge badge-warn">cooling down</span>}
         </div>
       </div>
       {p.account && (
@@ -104,24 +104,24 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
   return (
     <section className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Usage</h1>
-        <button onClick={() => void refresh()} disabled={refreshing} className="rounded border px-3 py-1 text-sm disabled:opacity-40">
+        <h1 className="h2">Usage</h1>
+        <button onClick={() => void refresh()} disabled={refreshing} className="btn btn-secondary btn-sm">
           {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
       <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border bg-white p-4">
-          <div className="text-xs uppercase text-neutral-400">Requests today</div>
-          <div className="text-3xl font-semibold tabular-nums">{data.today.requests.toLocaleString()}</div>
+        <div className="card card-pad">
+          <div className="faint text-xs font-medium">Requests today</div>
+          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.requests.toLocaleString()}</div>
         </div>
-        <div className="rounded-xl border bg-white p-4">
-          <div className="text-xs uppercase text-neutral-400">Tokens today</div>
-          <div className="text-3xl font-semibold tabular-nums">{data.today.tokens.toLocaleString()}</div>
+        <div className="card card-pad">
+          <div className="faint text-xs font-medium">Tokens today</div>
+          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.tokens.toLocaleString()}</div>
         </div>
-        <div className="rounded-xl border bg-white p-4">
-          <div className="text-xs uppercase text-neutral-400">Free requests left</div>
-          <div className="text-3xl font-semibold tabular-nums">≈ {data.knownRemainingRequests.toLocaleString()}</div>
-          <div className="text-xs text-neutral-400">across models with known limits</div>
+        <div className="card card-pad">
+          <div className="faint text-xs font-medium">Free requests left</div>
+          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">≈ {data.knownRemainingRequests.toLocaleString()}</div>
+          <div className="faint text-xs">across models with known limits</div>
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
