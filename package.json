@@ -10,7 +10,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file=.env.local scripts/migrate.mts",
-    "db:seed": "tsx --env-file=.env.local scripts/seed.mts"
+    "db:seed": "tsx --env-file=.env.local scripts/seed.mts",
+    "cli": "node bin/freetoken.mjs"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.3",
@@ -37,5 +38,8 @@
     "tsx": "^4.23.15",
     "typescript": "^5",
     "vitest": "^5.0.4"
+  },
+  "bin": {
+    "freetoken": "bin/freetoken.mjs"
   }
 }
