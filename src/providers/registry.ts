@@ -20,7 +20,7 @@ export const PROVIDERS: ProviderDef[] = [
     keyUrl: 'https://aistudio.google.com/apikey',
     steps: ['Sign in to Google AI Studio.', 'Click "Create API key".', 'Copy the key and paste it here.'],
     note: 'On the free tier Google may use your prompts to improve its products. You can exclude Gemini from auto-routing.',
-    validateModel: 'gemini-2.5-flash-lite',
+    validateModel: 'gemini-3.5-flash-lite',
     baseUrl: () => 'https://generativelanguage.googleapis.com/v1beta/openai',
   },
   {
@@ -54,7 +54,7 @@ export const PROVIDERS: ProviderDef[] = [
     keyUrl: 'https://cloud.cerebras.ai',
     steps: ['Sign in to Cerebras Cloud.', 'Open "API Keys" and create a key.', 'Copy it and paste it here.'],
     note: 'Cerebras free-tier terms have changed several times; check your console for current limits.',
-    validateModel: 'llama3.1-8b',
+    validateModel: 'qwen-3.8-27b',
     baseUrl: () => 'https://api.cerebras.ai/v1',
   },
   {
