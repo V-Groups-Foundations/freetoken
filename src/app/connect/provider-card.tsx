@@ -6,7 +6,7 @@ import type { PublicProvider } from '@/providers/registry';
 
 type Connected = { last4: string; status: string; excludedFromAuto: boolean } | null;
 
-export function ProviderCard({ provider, connected }: { provider: PublicProvider; connected: Connected }) {
+export function ProviderCard({ provider, connected, oauth = false }: { provider: PublicProvider; connected: Connected; oauth?: boolean }) {
   const router = useRouter();
   const [key, setKey] = useState('');
   const [extra, setExtra] = useState('');
@@ -64,6 +64,14 @@ export function ProviderCard({ provider, connected }: { provider: PublicProvider
         Get your {provider.name} key ↗
       </a>
       {provider.note && <p className="rounded bg-amber-50 p-2 text-xs text-amber-900">{provider.note}</p>}
+      {oauth && (
+        <div className="space-y-1">
+          <a href="/api/connect/openrouter/start" className="inline-block rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white">
+            {connected ? 'Reconnect with OpenRouter' : 'Connect with OpenRouter (one click)'}
+          </a>
+          <p className="text-xs text-neutral-400">Approve on OpenRouter — no copy-paste. Or paste a key below.</p>
+        </div>
+      )}
       <form onSubmit={save} className="space-y-2">
         <input
           type="password"

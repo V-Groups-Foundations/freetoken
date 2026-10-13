@@ -8,6 +8,13 @@
       "when": 1791853866365,
       "tag": "0000_military_leopardon",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791856804381,
+      "tag": "0001_bent_scorpion",
+      "breakpoints": true
     }
   ]
 }

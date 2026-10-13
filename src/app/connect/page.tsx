@@ -4,9 +4,14 @@ import { requireUserId } from '@/lib/session';
 import { PROVIDERS, toPublicProvider } from '@/providers/registry';
 import { ProviderCard } from './provider-card';
 
-export default async function ConnectPage() {
+export default async function ConnectPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ connected?: string; error?: string }>;
+}) {
   const uid = await requireUserId();
   const keys = new Map((await listKeys(getDb(), uid)).map((k) => [k.provider, k]));
+  const { connected, error } = await searchParams;
   return (
     <section className="space-y-6">
       <div>
@@ -16,9 +21,13 @@ export default async function ConnectPage() {
           encrypted, only used for your requests, and you can remove them at any time.
         </p>
       </div>
+      {connected && (
+        <p className="rounded bg-green-50 p-3 text-sm text-green-800">Connected {connected} successfully.</p>
+      )}
+      {error && <p className="rounded bg-red-50 p-3 text-sm text-red-800">{error}</p>}
       <div className="grid gap-4 md:grid-cols-2">
         {PROVIDERS.map((p) => (
-          <ProviderCard key={p.id} provider={toPublicProvider(p)} connected={keys.get(p.id) ?? null} />
+          <ProviderCard key={p.id} provider={toPublicProvider(p)} connected={keys.get(p.id) ?? null} oauth={p.id === 'openrouter'} />
         ))}
       </div>
     </section>

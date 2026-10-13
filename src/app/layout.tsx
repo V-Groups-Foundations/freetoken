@@ -25,6 +25,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <>
                 <Link href="/connect">Connect</Link>
                 <Link href="/chat">Chat</Link>
+                <Link href="/dashboard">Usage</Link>
                 <Link href="/settings">API</Link>
                 <form className="ml-auto" action={async () => { 'use server'; await signOut({ redirectTo: '/' }); }}>
                   <button className="text-neutral-500 hover:text-neutral-900">Sign out</button>

@@ -78,6 +78,21 @@ export const models = pgTable('models', {
   enabled: boolean('enabled').notNull().default(true),
 }, (t) => [uniqueIndex('models_provider_model').on(t.provider, t.modelId)]);
 
+/** Latest rate-limit numbers a provider reported (via response headers) for this user's key. */
+export const providerLimits = pgTable('provider_limits', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  modelId: text('model_id').notNull(),
+  limitRequests: integer('limit_requests'),
+  remainingRequests: integer('remaining_requests'),
+  requestsResetAt: timestamp('requests_reset_at'),
+  limitTokens: integer('limit_tokens'),
+  remainingTokens: integer('remaining_tokens'),
+  tokensResetAt: timestamp('tokens_reset_at'),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [uniqueIndex('provider_limits_user_model').on(t.userId, t.provider, t.modelId)]);
+
 export const usageEvents = pgTable('usage_events', {
   id: serial('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

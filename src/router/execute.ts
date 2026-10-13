@@ -5,6 +5,7 @@ import { getProvider } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
 import { estimateTokens, recordUsage, usageToday } from '@/usage/ledger';
 import { tapSseUsage } from '@/usage/tap';
+import { parseRateHeaders, saveLimits } from '@/usage/limits';
 import { isAuto, parseModelRef, selectCandidates, type CatalogModel } from './select';
 
 export interface ChatInput {
@@ -98,6 +99,10 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     }
 
     await touchKey(deps.db, userId, m.provider);
+    const live = parseRateHeaders(r.response.headers, now());
+    if (live) {
+      await saveLimits(deps.db, userId, m.provider, m.modelId, live).catch((err) => console.error('limit save failed', err));
+    }
     const headers = {
       'content-type': r.response.headers.get('content-type') ?? (stream ? 'text/event-stream' : 'application/json'),
       'x-freetoken-provider': `${m.provider}/${m.modelId}`,
