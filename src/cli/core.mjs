@@ -44,6 +44,25 @@ export function parseArgs(argv) {
   return { command: 'chat', model, project, message: words.length ? words.join(' ') : null };
 }
 
+/** Make a string safe to use as a folder name across OSes. */
+export function sanitizeFolderName(name) {
+  const cleaned = String(name ?? '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/^[.\s-]+|[.\s-]+$/g, '')
+    .trim();
+  return cleaned || 'project';
+}
+
+/** Render a project's conversation as a Markdown transcript saved beside the project folder. */
+export function renderTranscript(projectName, messages) {
+  const lines = [`# ${projectName}`, '', '_FreeToken project transcript — shared with the web app._', ''];
+  for (const m of messages) {
+    const who = m.role === 'user' ? 'You' : (m.provider ?? 'assistant');
+    lines.push(`**${who}:** ${m.content}`, '');
+  }
+  return lines.join('\n');
+}
+
 /** Decide what a REPL input means. Returns a tagged action. */
 export function applyCommand(input) {
   const trimmed = input.trim();

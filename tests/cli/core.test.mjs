@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveConfig, deltaFromLine, parseArgs, applyCommand } from '../../src/cli/core.mjs';
+import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript } from '../../src/cli/core.mjs';
 
 describe('resolveConfig', () => {
   it('uses file values, with env overriding them', () => {
@@ -44,6 +44,35 @@ describe('parseArgs', () => {
   it('takes a project flag', () => {
     expect(parseArgs(['--project', 'abc123', 'hi'])).toMatchObject({ project: 'abc123', message: 'hi' });
     expect(parseArgs(['-p', 'abc123'])).toMatchObject({ project: 'abc123', message: null });
+  });
+});
+
+describe('sanitizeFolderName', () => {
+  it('keeps a clean name', () => {
+    expect(sanitizeFolderName('My App')).toBe('My App');
+  });
+  it('strips characters illegal in folder names', () => {
+    expect(sanitizeFolderName('a/b:c*?"<>|d')).toBe('a-b-c------d');
+    expect(sanitizeFolderName('  ..trim.. ')).toBe('trim');
+  });
+  it('falls back when empty', () => {
+    expect(sanitizeFolderName('')).toBe('project');
+    expect(sanitizeFolderName('///')).toBe('project');
+  });
+});
+
+describe('renderTranscript', () => {
+  it('writes a markdown transcript of the conversation', () => {
+    const md = renderTranscript('demo', [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello', provider: 'groq/x' },
+    ]);
+    expect(md).toContain('# demo');
+    expect(md).toContain('**You:** hi');
+    expect(md).toContain('**groq/x:** hello');
+  });
+  it('handles an empty conversation', () => {
+    expect(renderTranscript('demo', [])).toContain('# demo');
   });
 });
 

@@ -3,12 +3,54 @@
 // Run:  node bin/freetoken.mjs   (or, once linked, `freetoken`)
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { stdin, stdout, env, argv, exit } from 'node:process';
-import { resolveConfig, deltaFromLine, parseArgs, applyCommand } from '../src/cli/core.mjs';
+import { stdin, stdout, env, argv, exit, chdir, cwd } from 'node:process';
+import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript } from '../src/cli/core.mjs';
 
 const CONFIG_PATH = join(homedir(), '.freetoken', 'config.json');
+
+/** The user's Desktop, following OneDrive redirection when present. */
+function desktopDir() {
+  const candidates = [
+    env.USERPROFILE && join(env.USERPROFILE, 'Desktop'),
+    env.OneDrive && join(env.OneDrive, 'Desktop'),
+    join(homedir(), 'OneDrive', 'Desktop'),
+    join(homedir(), 'Desktop'),
+  ].filter(Boolean);
+  return candidates.find((p) => existsSync(p)) ?? join(homedir(), 'Desktop');
+}
+
+/** Create (if needed) and return Desktop/FreeToken/<project name>/, cd into it, drop a marker. */
+async function ensureProjectFolder(projectId, projectName) {
+  const dir = join(desktopDir(), 'FreeToken', sanitizeFolderName(projectName));
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, 'project.json'),
+    JSON.stringify({ id: projectId, name: projectName, baseUrl: null }, null, 2),
+  );
+  chdir(dir);
+  return dir;
+}
+
+async function writeTranscript(dir, projectName, messages) {
+  try {
+    await writeFile(join(dir, 'transcript.md'), renderTranscript(projectName, messages));
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/** If the current folder is a FreeToken project folder, read its id + name. */
+async function projectFromCwd() {
+  try {
+    const j = JSON.parse(await readFile(join(cwd(), 'project.json'), 'utf8'));
+    return j.id ? { id: j.id, name: j.name ?? j.id } : null;
+  } catch {
+    return null;
+  }
+}
 
 // Minimal ANSI styling; disabled when output is not a TTY or NO_COLOR is set.
 const useColor = stdout.isTTY && !env.NO_COLOR;
@@ -162,6 +204,27 @@ function printHelp() {
   );
 }
 
+/**
+ * Enter a project: load its saved conversation, create/open its Desktop folder, show it.
+ * Mutates `state` with the project id, name, folder dir and loaded messages.
+ */
+async function enterProject(cfg, state, projectId) {
+  const hist = await fetchProjectHistory(cfg, projectId);
+  const name = hist?.name ?? projectId;
+  state.project = projectId;
+  state.projectName = name;
+  state.messages = (hist?.messages ?? []).map((m) => ({ role: m.role, content: m.content, provider: m.provider }));
+  try {
+    state.dir = await ensureProjectFolder(projectId, name);
+    console.log(dim(`— ${name} · ${state.messages.length} saved message(s) · folder: ${state.dir} —`));
+    await writeTranscript(state.dir, name, state.messages);
+  } catch (e) {
+    state.dir = null;
+    console.log(dim(`— ${name} · ${state.messages.length} saved message(s) (could not create Desktop folder: ${e.message}) —`));
+  }
+  if (hist) printHistory(hist.messages);
+}
+
 async function runChat(parsed) {
   const cfg = resolveConfig(await loadConfigFile(), env);
   if (!cfg.token || !cfg.baseUrl) {
@@ -169,7 +232,12 @@ async function runChat(parsed) {
     exit(1);
   }
   const model = parsed.model ?? 'auto-smart';
-  const project = parsed.project ?? null;
+  // Explicit --project, else auto-detect from a project folder we're standing in.
+  let project = parsed.project ?? null;
+  if (!project) {
+    const fromCwd = await projectFromCwd();
+    if (fromCwd) project = fromCwd.id;
+  }
 
   // One-shot mode: freetoken "question"
   if (parsed.message) {
@@ -181,17 +249,9 @@ async function runChat(parsed) {
     return;
   }
 
-  const where = project ? `project ${project}` : `model: ${model}`;
-  console.log(bold(cyan('FreeToken')) + dim(`  ${cfg.baseUrl}  ·  ${where}  ·  /help for commands`));
-  const state = { model, messages: [], project };
-  if (project) {
-    const hist = await fetchProjectHistory(cfg, project);
-    if (hist) {
-      console.log(dim(`— ${hist.name}: ${hist.messages.length} saved message(s), shared with the web app —`));
-      printHistory(hist.messages);
-      state.messages = hist.messages.map((m) => ({ role: m.role, content: m.content }));
-    }
-  }
+  console.log(bold(cyan('FreeToken')) + dim(`  ${cfg.baseUrl}  ·  model: ${model}  ·  /help for commands`));
+  const state = { model, messages: [], project: null, projectName: null, dir: null };
+  if (project) await enterProject(cfg, state, project);
   const rl = createInterface({ input: stdin, output: stdout, prompt: cyan('› ') });
   rl.prompt();
 
@@ -203,8 +263,10 @@ async function runChat(parsed) {
         if (!action.text) break;
         state.messages.push({ role: 'user', content: action.text });
         const r = await streamChat(cfg, state.model, state.messages, state.project);
-        if (r.ok) state.messages.push({ role: 'assistant', content: r.text });
-        else {
+        if (r.ok) {
+          state.messages.push({ role: 'assistant', content: r.text, provider: r.provider });
+          if (state.dir) await writeTranscript(state.dir, state.projectName, state.messages);
+        } else {
           state.messages.pop();
           console.error(red(r.error));
         }
@@ -219,18 +281,13 @@ async function runChat(parsed) {
         console.log(dim(`Model set to ${action.model}.`));
         break;
       case 'project':
-        state.project = action.project;
-        state.messages = [];
         if (action.project) {
-          const hist = await fetchProjectHistory(cfg, action.project);
-          if (hist) {
-            console.log(dim(`— ${hist.name}: ${hist.messages.length} saved message(s), shared with the web app —`));
-            printHistory(hist.messages);
-            state.messages = hist.messages.map((m) => ({ role: m.role, content: m.content }));
-          } else {
-            console.log(dim(`Using project ${action.project}.`));
-          }
+          await enterProject(cfg, state, action.project);
         } else {
+          state.project = null;
+          state.projectName = null;
+          state.dir = null;
+          state.messages = [];
           console.log(dim('Left project mode.'));
         }
         break;
