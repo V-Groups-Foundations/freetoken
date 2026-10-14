@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript, toApiMessages } from '../../src/cli/core.mjs';
+import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript, toApiMessages, findMentions, expandMentions } from '../../src/cli/core.mjs';
 
 describe('resolveConfig', () => {
   it('uses file values, with env overriding them', () => {
@@ -78,6 +78,30 @@ describe('toApiMessages', () => {
     expect(out.reasoning_content).toBeUndefined(); // unsupported when echoed back
     expect(out.tool_calls[0].thought_signature).toBe('sig'); // nested data inside tool_calls is preserved
     expect(out).toEqual({ role: 'assistant', content: 'ok', tool_calls: [{ id: 't1', thought_signature: 'sig' }] });
+  });
+});
+
+describe('@file mentions', () => {
+  it('finds @path tokens', () => {
+    expect(findMentions('explain @src/a.ts and @b.js please')).toEqual(['src/a.ts', 'b.js']);
+    expect(findMentions('no mentions here')).toEqual([]);
+  });
+  it('inlines readable files and skips unreadable ones', () => {
+    const read = (p) => (p === 'a.txt' ? 'A CONTENT' : null);
+    const out = expandMentions('look at @a.txt and @missing.txt', read);
+    expect(out).toContain('--- @a.txt ---');
+    expect(out).toContain('A CONTENT');
+    expect(out).not.toContain('--- @missing.txt ---');
+  });
+  it('returns the text unchanged when there are no mentions', () => {
+    expect(expandMentions('plain', () => 'x')).toBe('plain');
+  });
+});
+
+describe('/plan command', () => {
+  it('parses a task', () => {
+    expect(applyCommand('/plan build a site')).toEqual({ type: 'plan', task: 'build a site' });
+    expect(applyCommand('/plan')).toMatchObject({ type: 'error' });
   });
 });
 

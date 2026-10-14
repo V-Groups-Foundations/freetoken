@@ -8,6 +8,7 @@ import { getDeps } from '@/server/deps';
 const bodySchema = z.object({
   prompt: z.string().trim().min(1).max(2000),
   engine: z.enum(['pollinations', 'gemini']).optional(),
+  model: z.string().max(40).optional(),
 });
 
 export async function POST(req: Request) {
@@ -27,8 +28,8 @@ export async function POST(req: Request) {
     return Response.json({ dataUrl: result.dataUrl });
   }
 
-  // Default engine: keyless Pollinations (free FLUX) — no provider needed.
-  const result = await generateImage({ prompt: parsed.data.prompt }, { fetchImpl: deps.fetchImpl });
+  // Default engine: keyless Pollinations (free FLUX/Turbo) — no provider needed.
+  const result = await generateImage({ prompt: parsed.data.prompt, model: parsed.data.model }, { fetchImpl: deps.fetchImpl });
   if (!result.ok) return Response.json({ error: { message: result.message } }, { status: result.status || 502 });
   return Response.json({ dataUrl: result.dataUrl });
 }

@@ -1,144 +1,149 @@
-# FreeToken
+<div align="center">
 
-Connect your own free-tier API keys from several AI providers, and use them through one
-chat UI, one OpenAI-compatible API endpoint, and a terminal client. Every request is routed
-to whichever of **your** providers still has free quota, with automatic fallback when one is
-rate-limited.
+<img src="public/logo.svg" width="96" height="96" alt="FreeToken logo" />
 
-> **What this is not.** FreeToken does not pool keys across users, log in to anyone's
-> consumer app, or scrape provider dashboards. Each person connects their own API keys, and
-> those keys only ever serve that person's own requests. Keys are encrypted at rest and never
-> sent back to the browser.
+<h1>FreeToken</h1>
 
-## How it works
+<a href="https://readme-typing-svg.demolab.com">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=24&pause=1000&color=2563EB&center=true&vCenter=true&width=620&lines=Pool+your+free+AI+tiers+into+one.;One+chat.+One+API.+One+terminal.;Bring+your+own+free+keys+%E2%80%94+pay+%240." alt="FreeToken" />
+</a>
 
-You paste your own free API keys (or connect OpenRouter in one click). For each request,
-the router builds the list of models you can use, skips any provider that's cooling down or
-over its known daily limit, calls the best one, and falls back to the next on a 429, 5xx, or
-timeout. Every answer tells you which provider and model served it.
+<p><strong>Connect the free tiers you already have — Gemini, Groq, OpenRouter, NVIDIA, Cohere and more —<br/>and use them as a single pool through one chat, one OpenAI-compatible API, and one agentic terminal.</strong></p>
+
+![Cost](https://img.shields.io/badge/cost-%240%20forever-2563eb)
+![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-222%20passing-22c55e)
+![PRs welcome](https://img.shields.io/badge/PRs-welcome-e08a1e)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+
+</div>
+
+---
+
+## ✨ Why FreeToken?
+
+Every AI provider hands out a free tier. On their own, each runs out fast. **FreeToken pools them.** You connect the free API keys you already have, and every request is routed to whichever provider still has quota — falling back automatically the moment one is rate-limited. Keys are encrypted and only ever used for *your* requests. No pooling with anyone else, no card, no cost.
 
 ```
-You ──► Chat UI  ┐
-     ─► /api/v1   ┼─► Router ─► provider (OpenAI-compatible) ─► provider API
-     ─► CLI      ┘      │
-                  key vault · usage ledger · cooldowns
+  Gemini ┐
+  Groq   ┤
+  NVIDIA ┼──►  FreeToken router  ──►  Chat · API · Terminal
+  Cohere ┤      (auto-failover)
+  GitHub ┘
 ```
 
-## Providers
+## 🧭 How it works
 
-All seven expose an OpenAI-compatible endpoint, so one generic client covers them. Free-tier
-terms change often — connect what works for you.
+```mermaid
+flowchart LR
+    U([You]) --> C[💬 Chat]
+    U --> A[/🔌 OpenAI-compatible API/]
+    U --> T[🖥️ Terminal agent]
+    C & A & T --> R{{Router<br/>auto-smart / auto-fast}}
+    R -->|has quota?| P1[Gemini]
+    R --> P2[Groq]
+    R --> P3[OpenRouter]
+    R --> P4[NVIDIA NIM]
+    R --> P5[Cohere]
+    R --> P6[GitHub Models]
+    R -.rate-limited? fall back.-> R
+```
 
-| Provider | Get a key |
+## 🚀 Features
+
+| | |
 |---|---|
-| Google Gemini | https://aistudio.google.com/apikey |
-| Groq | https://console.groq.com/keys |
-| OpenRouter | https://openrouter.ai/settings/keys (or one-click OAuth in the app) |
-| Mistral | https://console.mistral.ai/api-keys |
-| Cerebras | https://cloud.cerebras.ai |
-| GitHub Models | https://github.com/settings/personal-access-tokens/new |
-| Cloudflare Workers AI | https://dash.cloudflare.com/profile/api-tokens |
+| 🔀 **Smart routing** | Each request goes to a provider with free quota; instant fallback on rate-limits. |
+| 💬 **Unified chat** | Markdown, images, voice in/out, attachments — across all your providers. |
+| 🔌 **Your own API** | A personal OpenAI-compatible endpoint (`/api/v1`) — point any tool at your pool. |
+| 🖥️ **Agentic terminal** | A coding agent like Claude Code: runs commands, edits files, starts servers — you approve each step. |
+| 🎨 **Image studio** | Keyless image generation (Flux / Turbo) + optional Gemini engine. |
+| 📄 **Chat with docs** | Upload text, PDFs, or **images (OCR)** and ask questions with citations (RAG). |
+| 🌐 **Web search** | Keyless URL reader + Tavily search, usable in chat and the terminal. |
+| 🛠️ **Tools** | Extract · translate (DeepL-powered) · summarize · classify. |
+| 📊 **Usage dashboard** | See exactly how much free quota you have left, per provider. |
 
-Claude, ChatGPT and DeepSeek have no free API tier, so they aren't in the free pool.
-
-## Tech stack
-
-Next.js 16 (App Router, TypeScript) · Drizzle ORM · PGlite for local dev and tests, Postgres
-in production · Auth.js v5 (Google + a dev-only email login) · Tailwind CSS · Vitest. No
-provider SDKs and no build step for the CLI.
-
-## Getting started
-
-Requires Node 22+.
+## 🖥️ The terminal agent
 
 ```bash
+$ freetoken --project my-app
+
+  ◆ FreeToken Agent
+  I can run commands & edit files — you approve each.  /chat · /help
+
+› build me a landing page and run it
+
+⏺ Write(index.html)
+  ⎿  Created index.html (+24 -0)
+⏺ Serve(node server.js)
+  ⎿  Started on http://localhost:5173 (PORT=5173)
+  ↳ groq/openai/gpt-oss-120b · 1,189 tok
+```
+
+- **Real tools:** `run_command`, `read/write/edit_file`, `grep`, `glob`, `read_url`, `search_web`, `image_gen`, `start_server` (auto free-port).
+- **You stay in control:** read-only tools run automatically; anything that changes files or runs commands asks first — `[y]es · [a]lways · [e]dit · [n]o`.
+- **Feels right:** streaming answers, colored diffs before writes, syntax highlighting, a thinking spinner, `Ctrl-C` to interrupt, multi-line input, `@file` mentions, tab-completion, and `/plan` mode.
+
+## ⚡ Quickstart
+
+```bash
+# 1. Install
+git clone <your-fork-url> freetoken && cd freetoken
 npm install
+
+# 2. Configure
 cp .env.example .env.local
-# fill in VAULT_MASTER_KEY and AUTH_SECRET (commands below)
+#   then set AUTH_SECRET and VAULT_MASTER_KEY (see .env.example)
+
+# 3. Database (embedded Postgres — no server to run)
 npm run db:migrate
 npm run db:seed
+
+# 4. Go
 npm run dev        # http://localhost:3000
 ```
 
-Generate the two secrets:
+Then open **/connect**, add a free key or two, and start chatting.
+
+### Use the terminal agent
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"   # VAULT_MASTER_KEY
-npx auth secret                                                               # AUTH_SECRET
+npm link                 # exposes the `freetoken` command
+freetoken login          # paste an ft_ token from the web app's API page
+freetoken                # interactive agent in the current folder
+freetoken --yolo "..."   # one-shot, auto-approving every step
 ```
 
-### Environment variables
+## 🔑 What you can connect
 
-| Variable | Purpose |
+**Chat providers** — all free, most need no card:
+
+| Provider | Free tier |
 |---|---|
-| `DATABASE_URL` | `pglite:./.data/pglite` for local dev; a Postgres URL in production |
-| `VAULT_MASTER_KEY` | 32 random bytes (base64); encrypts stored provider keys |
-| `AUTH_SECRET` | Auth.js session secret |
-| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Google sign-in (optional in dev) |
-| `AUTH_DEV_LOGIN` | `true` enables a password-less email login (ignored in production) |
+| Google Gemini · Groq · NVIDIA NIM · Cohere · GitHub Models | free, no card |
+| OpenRouter | `:free` models |
 
-## Using it
+**Tools & services** (optional, each unlocks a capability):
 
-**Chat UI** — sign in, connect a provider on `/connect`, chat on `/chat`. Each answer is
-signed with the provider that produced it. `/dashboard` shows requests and tokens used today
-and how much free quota is left per model.
+| Service | Powers |
+|---|---|
+| Tavily | web search |
+| DeepL | higher-quality translation |
+| Jina | document embeddings |
+| OCR.space | reading scanned files |
+| ElevenLabs · Google Cloud TTS | premium read-aloud voices |
 
-**API** — create a token under `/settings`, then call it like the OpenAI API:
+## 🧱 Tech stack
 
-```bash
-curl https://your-host/api/v1/chat/completions \
-  -H "Authorization: Bearer ft_your_token" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"auto-smart","messages":[{"role":"user","content":"ping"}]}'
-```
+Next.js 16 (App Router) · React 19 · TypeScript · Drizzle ORM · PGlite (embedded Postgres) · Auth.js v5 · Tailwind v4 · Vitest.
 
-Models: `auto-smart`, `auto-fast`, or any id from `GET /api/v1/models`. Works with any
-OpenAI-compatible tool (Cline, Continue, scripts).
+## 🤝 Contributing
 
-**Terminal client**
+Issues and PRs welcome. Run `npm test` (222 tests), `npm run lint`, and `npx tsc --noEmit` before opening a PR.
 
-```bash
-node bin/freetoken.mjs login          # save your base URL + ft_ token
-node bin/freetoken.mjs                 # interactive chat
-node bin/freetoken.mjs "one question"  # one-shot
-```
+## 📄 License
 
-Slash commands in the REPL: `/model <id>`, `/models`, `/clear`, `/help`, `/exit`. Config
-lives in `~/.freetoken/config.json`; `FREETOKEN_TOKEN` and `FREETOKEN_BASE_URL` override it.
+MIT — see [LICENSE](LICENSE). Use it, fork it, share it.
 
-## Development
-
-```bash
-npm test          # Vitest (unit + integration, against in-memory PGlite)
-npm run lint
-npm run build
-```
-
-Project layout:
-
-```
-src/providers   provider registry + generic OpenAI-compatible client
-src/router      candidate selection (pure) and routeChat (fallback, cooldowns)
-src/keys        encrypted key storage and validation
-src/usage       usage ledger, rate-limit parsing, dashboard summary
-src/server      request handlers, API tokens, OpenRouter OAuth
-src/cli         terminal client core (bin/freetoken.mjs is the entry)
-src/app         Next.js pages and route handlers
-docs/superpowers  the design spec and implementation plan
-```
-
-## Roadmap
-
-Built: auth, connect keys, routing with fallback, chat UI, personal API, usage dashboard,
-OpenRouter one-click connect, terminal client.
-
-Next: our own rate limits (Upstash), an admin page for editing the model catalog, saved chat
-history, email magic-link login, a privacy policy and terms, and deployment. See
-`docs/superpowers/` for the spec and plan.
-
-## Security
-
-Provider keys are encrypted with AES-256-GCM before storage and decrypted only on the server
-at request time. API tokens are stored only as hashes. A user's keys are loaded only by that
-user's id, so they can never serve another user's request. Report security issues privately
-rather than opening a public issue.
+<div align="center"><sub>Built to make the free tier go further.</sub></div>

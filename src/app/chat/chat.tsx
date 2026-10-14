@@ -284,7 +284,9 @@ export function Chat({
           {msgs.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-6 px-6 text-center">
               <div className="space-y-2">
-                <div className="grad mx-auto flex h-12 w-12 items-center justify-center rounded-2xl text-xl font-bold text-white shadow-[var(--shadow-brand)]">ft</div>
+                {/* eslint-disable-next-line @next/next/no-img-element -- small static SVG logo */}
+                <img src="/logo.svg" alt="FreeToken" width={48} height={48} className="mx-auto h-12 w-12" />
+
                 <h1 className="text-2xl font-semibold tracking-tight">What can I help you with?</h1>
                 <p className="muted max-w-md">
                   Your message goes to whichever of your connected providers has free quota right now

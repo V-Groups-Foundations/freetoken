@@ -37,13 +37,14 @@ export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boo
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<GenImage[]>([]);
   const [engine, setEngine] = useState<Engine>('pollinations');
+  const [style, setStyle] = useState<'flux' | 'turbo'>('flux');
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   async function callEngine(prompt: string, which: Engine): Promise<{ dataUrl?: string; status: number; message?: string }> {
     const res = await fetch('/api/images', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, engine: which }),
+      body: JSON.stringify({ prompt, engine: which, model: which === 'pollinations' ? style : undefined }),
     });
     const data = await res.json().catch(() => null);
     return { dataUrl: data?.dataUrl, status: res.status, message: data?.error?.message };
@@ -127,6 +128,21 @@ export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boo
                 className="px-3 py-1.5 font-semibold text-[var(--muted)] transition data-[active=true]:bg-[var(--brand)] data-[active=true]:text-white"
               >
                 Gemini
+              </button>
+            </div>
+          </div>
+        )}
+        {engine === 'pollinations' && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="muted">Style</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-[var(--border)]">
+              <button type="button" onClick={() => setStyle('flux')} data-active={style === 'flux'}
+                className="px-3 py-1.5 font-semibold text-[var(--muted)] transition data-[active=true]:bg-[var(--brand)] data-[active=true]:text-white">
+                Flux · best
+              </button>
+              <button type="button" onClick={() => setStyle('turbo')} data-active={style === 'turbo'}
+                className="px-3 py-1.5 font-semibold text-[var(--muted)] transition data-[active=true]:bg-[var(--brand)] data-[active=true]:text-white">
+                Turbo · fast
               </button>
             </div>
           </div>

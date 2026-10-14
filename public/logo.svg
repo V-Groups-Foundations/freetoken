@@ -1,0 +1,16 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FreeToken">
+  <defs>
+    <linearGradient id="ftg" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="0.55" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#1e40af"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="42" height="42" rx="13" fill="url(#ftg)"/>
+  <g stroke="#ffffff" stroke-width="3.1" stroke-linecap="round" opacity="0.96">
+    <path d="M12 16 L27 23.3"/>
+    <path d="M12 24 H27"/>
+    <path d="M12 32 L27 24.7"/>
+  </g>
+  <circle cx="33.4" cy="24" r="4.9" fill="#ffffff"/>
+</svg>

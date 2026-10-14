@@ -15,12 +15,14 @@ const display = Bricolage_Grotesque({ variable: '--font-display', subsets: ['lat
 export const metadata: Metadata = {
   title: 'FreeToken',
   description: 'Pool your free AI API tiers into one chat, one API, and one terminal.',
+  icons: { icon: '/logo.svg' },
 };
 
 function Brand() {
   return (
     <Link href="/" className="flex items-center gap-2 px-1 py-1">
-      <span className="grad flex h-8 w-8 items-center justify-center rounded-xl text-[13px] font-bold text-white shadow-[0_4px_10px_-3px_rgba(6,165,215,0.5)]">ft</span>
+      {/* eslint-disable-next-line @next/next/no-img-element -- small static SVG logo, not an optimizable photo */}
+      <img src="/logo.svg" alt="FreeToken" width={32} height={32} className="h-8 w-8 shrink-0" />
       <span className="display hidden text-[16px] font-bold tracking-tight md:inline">FreeToken</span>
     </Link>
   );

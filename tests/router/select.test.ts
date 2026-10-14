@@ -51,8 +51,9 @@ describe('selectCandidates', () => {
     }));
     expect(ids(r)).toEqual(['openrouter/meta-llama/llama-3.3-70b-instruct:free']);
   });
-  it('filters by context window and tool support', () => {
-    expect(ids(selectCandidates(base({ needsTools: true })))).toEqual(['groq/llama-70b', 'gemini/flash']);
+  it('filters by context window and tool support, and excludes tool-incompatible providers (Gemini)', () => {
+    // Gemini supports tools but can't round-trip them across turns, so it's dropped when tools are needed.
+    expect(ids(selectCandidates(base({ needsTools: true })))).toEqual(['groq/llama-70b']);
     expect(selectCandidates(base({ promptTokens: 200_000 }))).toEqual([]);
   });
   it('puts an explicit model first, then same-tier fallbacks', () => {

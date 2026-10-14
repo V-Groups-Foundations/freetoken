@@ -9,19 +9,25 @@ export type GenerateResult =
   | { ok: true; dataUrl: string }
   | { ok: false; status: number; message: string };
 
+/** Keyless Pollinations models we expose. `flux` = best quality, `turbo` = fastest. */
+export const POLLINATIONS_MODELS = ['flux', 'turbo'] as const;
+export type PollinationsModel = (typeof POLLINATIONS_MODELS)[number];
+
 export interface GenerateInput {
   prompt: string;
   width?: number;
   height?: number;
   /** Fixed seed reproduces an image; omit for a fresh one each time. */
   seed?: number;
+  model?: string;
 }
 
 export function buildUrl(input: GenerateInput): string {
   const w = input.width ?? 1024;
   const h = input.height ?? 1024;
   const seed = input.seed ?? Math.floor(Math.random() * 1_000_000_000);
-  const params = new URLSearchParams({ width: String(w), height: String(h), seed: String(seed), nologo: 'true', model: 'flux' });
+  const model = (POLLINATIONS_MODELS as readonly string[]).includes(input.model ?? '') ? input.model! : 'flux';
+  const params = new URLSearchParams({ width: String(w), height: String(h), seed: String(seed), nologo: 'true', model });
   return `${POLLINATIONS}/${encodeURIComponent(input.prompt.trim())}?${params.toString()}`;
 }
 

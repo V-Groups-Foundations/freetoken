@@ -3,13 +3,16 @@
 // Run:  node bin/freetoken.mjs   (or, once linked, `freetoken`)
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { basename } from 'node:path';
 import { stdin, stdout, env, argv, exit, chdir, cwd } from 'node:process';
-import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript, toApiMessages } from '../src/cli/core.mjs';
-import { runAgentTurn, agentSystemPrompt, TOOLS } from '../src/cli/agent.mjs';
+import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript, toApiMessages, expandMentions } from '../src/cli/core.mjs';
+import { runAgentTurn, agentSystemPrompt, TOOLS, computeFileChange } from '../src/cli/agent.mjs';
 import { renderMarkdown } from '../src/cli/render.mjs';
+import { lineDiff, renderDiff } from '../src/cli/diff.mjs';
+import { parseSseLine, newStreamState, applyChunk, finalizeMessage } from '../src/cli/stream-parse.mjs';
 
 const CONFIG_PATH = join(homedir(), '.freetoken', 'config.json');
 
@@ -60,7 +63,7 @@ const c = (code, s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
 const dim = (s) => c('2', s);
 const bold = (s) => c('1', s);
 const cyan = (s) => c('36', s);
-const green = (s) => c('32', s);
+const azure = (s) => c('38;5;39', s); // a nicer blue accent (replaces green)
 const red = (s) => c('31', s);
 const yellow = (s) => c('33', s);
 
@@ -95,7 +98,7 @@ async function runLogin() {
     exit(1);
   }
   await saveConfigFile({ baseUrl: baseUrl.replace(/\/+$/, ''), token });
-  console.log(green(`Saved to ${CONFIG_PATH}`));
+  console.log(cyan(`Saved to ${CONFIG_PATH}`));
 }
 
 async function fetchModels(cfg) {
@@ -198,31 +201,43 @@ function printHelp() {
       bold('Commands'),
       '  /agent        agent mode — the model can run commands & edit files (you approve each)',
       '  /chat         plain chat mode (no tools)',
+      '  /plan <task>  propose a plan first, then run it on approval',
       '  /model <id>   switch model (e.g. auto-smart, auto-fast, groq/…)',
       '  /project <id> use a project (shared memory with the web app); blank to leave',
       '  /models       list your available models',
+      '  /last         reprint the full output of the last tool',
       '  /clear        start a new conversation',
       '  /help         show this help',
       '  /exit         quit',
       '',
-      dim('In agent mode: y = run once · a = always allow this tool · n = skip. Start with --yolo to auto-approve.'),
+      dim('In agent mode: y = run once · a = always allow this tool · e = edit the command · n = skip.'),
+      dim('Ctrl-C interrupts the current turn. End a line with \\ for multi-line input. Use @path to attach a file. Tab completes.'),
     ].join('\n'),
   );
 }
 
-// ---- Agent mode: tool-call loop against /chat/completions (non-streaming) ----
+// ---- Agent mode: tool-call loop against /chat/completions ----
 
-/** One non-streaming completion with tools, for the agent loop. */
+// The in-flight model request, so Ctrl-C can abort just the request (not the whole CLI).
+let activeController = null;
+
+/** One non-streaming completion with tools, for the agent loop / planning. */
 async function agentComplete(cfg, model, messages) {
   let res;
+  const controller = new AbortController();
+  activeController = controller;
   try {
     res = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` },
       body: JSON.stringify({ model, messages: toApiMessages(messages), tools: TOOLS, stream: false }),
+      signal: controller.signal,
     });
   } catch (e) {
+    if (e.name === 'AbortError') return { ok: false, aborted: true, error: 'interrupted' };
     return { ok: false, error: `Could not reach ${cfg.baseUrl} (${e.message}).` };
+  } finally {
+    activeController = null;
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
@@ -235,27 +250,100 @@ async function agentComplete(cfg, model, messages) {
   return { ok: true, message: choice.message ?? {}, provider: res.headers.get('x-freetoken-provider') };
 }
 
-/** agentComplete wrapped with a thinking spinner, for the agent loop. */
-function withSpinner(cfg) {
+/** Stream one completion (content + tool-call deltas), printing text live. Falls back to non-stream. */
+async function streamingComplete(cfg, model, messages, { onStart, onDelta }) {
+  let res;
+  const controller = new AbortController();
+  activeController = controller;
+  try {
+    res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` },
+      body: JSON.stringify({ model, messages: toApiMessages(messages), tools: TOOLS, stream: true, stream_options: { include_usage: true } }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    activeController = null;
+    if (e.name === 'AbortError') return { ok: false, aborted: true, error: 'interrupted' };
+    return { ok: false, error: `Could not reach ${cfg.baseUrl} (${e.message}).` };
+  }
+  if (!res.ok || !res.body) {
+    activeController = null;
+    let msg = `HTTP ${res.status}`;
+    try { msg = (await res.json())?.error?.message ?? msg; } catch { /* keep status */ }
+    return { ok: false, error: msg };
+  }
+
+  const provider = res.headers.get('x-freetoken-provider');
+  const state = newStreamState();
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let started = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const parsed = parseSseLine(line);
+        if (!parsed || parsed === 'done') continue;
+        const delta = applyChunk(state, parsed);
+        if (delta) { if (!started) { onStart?.(); started = true; } onDelta?.(delta); }
+      }
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') return { ok: false, aborted: true, error: 'interrupted' };
+    return { ok: false, error: `Stream error: ${e.message}` };
+  } finally {
+    activeController = null;
+  }
+  return { ok: true, message: finalizeMessage(state), provider, usage: state.usage, streamed: true, started };
+}
+
+/** The complete() the agent loop uses: spinner → live stream → footer, with non-stream fallback. */
+function makeComplete(cfg) {
   return async (model, messages) => {
     const stop = startSpinner('thinking…');
-    try {
-      return await agentComplete(cfg, model, messages);
-    } finally {
-      stop();
+    const res = await streamingComplete(cfg, model, messages, {
+      onStart: () => { stop(); stdout.write('\n'); },
+      onDelta: (d) => stdout.write(d),
+    });
+    stop();
+    if (!res.ok) {
+      if (res.aborted) return res; // user interrupted — don't retry
+      return agentComplete(cfg, model, messages); // provider didn't stream — fall back
     }
+    if (res.started) {
+      stdout.write('\n');
+      const tok = res.usage?.total_tokens ?? res.usage?.completion_tokens;
+      if (typeof tok === 'number') sessionTokens += tok;
+      const meta = [res.provider, typeof tok === 'number' ? `${tok} tok` : null].filter(Boolean).join(' · ');
+      if (meta) stdout.write(dim(`  ↳ ${meta}\n`));
+    }
+    return res;
   };
 }
 
-const VERB = { run_command: 'Run', write_file: 'Write', read_file: 'Read', list_dir: 'List' };
+const VERB = {
+  run_command: 'Run', write_file: 'Write', read_file: 'Read', list_dir: 'List', edit_file: 'Edit',
+  grep: 'Grep', glob: 'Glob', read_url: 'Fetch', search_web: 'Search', image_gen: 'Image', start_server: 'Serve',
+};
 
 function toolDetail(call) {
   const a = call.args ?? {};
-  if (call.name === 'run_command') return a.command ?? '';
-  if (call.name === 'write_file') return a.path ?? '';
-  if (call.name === 'read_file') return a.path ?? '';
-  if (call.name === 'list_dir') return a.path ?? '.';
-  return '';
+  switch (call.name) {
+    case 'run_command': return a.command ?? '';
+    case 'write_file': case 'read_file': case 'edit_file': case 'image_gen': return a.path ?? '';
+    case 'list_dir': return a.path ?? '.';
+    case 'grep': case 'glob': return a.pattern ?? '';
+    case 'read_url': return a.url ?? '';
+    case 'search_web': return a.query ?? '';
+    case 'start_server': return a.command ?? '';
+    default: return '';
+  }
 }
 
 /** A braille spinner shown while the model thinks (TTY only). Returns a stop() function. */
@@ -267,31 +355,113 @@ function startSpinner(label) {
   return () => { clearInterval(timer); stdout.write('\r\x1b[K'); };
 }
 
+let lastToolOutput = '';
+let sessionTokens = 0;
+
 const agentPrinter = {
-  assistant: (text, provider) => {
+  assistant: (text, provider, usage) => {
     stdout.write('\n' + renderMarkdown(text.trimEnd(), { color: useColor }) + '\n');
-    if (provider) stdout.write(dim(`  ↳ ${provider}\n`));
+    const tok = usage?.total_tokens ?? usage?.completion_tokens;
+    if (typeof tok === 'number') sessionTokens += tok;
+    const meta = [provider, typeof tok === 'number' ? `${tok} tok` : null].filter(Boolean).join(' · ');
+    if (meta) stdout.write(dim(`  ↳ ${meta}\n`));
   },
   tool: (call, allowed) => {
-    const dot = allowed ? green('⏺') : red('⊘');
+    const dot = allowed ? azure('⏺') : red('⊘');
     stdout.write(`${dot} ${bold(VERB[call.name] ?? call.name)}${dim('(' + toolDetail(call) + ')')}\n`);
   },
-  toolResult: (call, result, allowed) => {
+  toolResult: (call, result, allowed, ms) => {
     if (!allowed) { stdout.write(dim('  ⎿  skipped\n')); return; }
-    const lines = String(result).split('\n');
+    lastToolOutput = String(result);
+    const lines = lastToolOutput.split('\n');
     const shown = lines.slice(0, 8);
-    stdout.write(dim('  ⎿  ' + shown.join('\n     ')) + '\n');
-    if (lines.length > shown.length) stdout.write(dim(`     … +${lines.length - shown.length} more lines\n`));
+    const time = ms ? dim(` (${(ms / 1000).toFixed(1)}s)`) : '';
+    stdout.write(dim('  ⎿  ' + shown.join('\n     ')) + time + '\n');
+    if (lines.length > shown.length) stdout.write(dim(`     … +${lines.length - shown.length} more lines — /last to see all\n`));
   },
 };
 
-/** Ask the user to approve a mutating tool call. Returns 'y' | 'n' | 'a'. */
-async function confirmTool(rl, call, danger) {
+/** Read a file for an @mention, relative to the project folder; null if unreadable. */
+function readMention(p) {
+  try { return readFileSync(join(cwd(), p), 'utf8').slice(0, 20000); } catch { return null; }
+}
+
+/** Run a full agent exchange (one user turn, with auto-continue at the step cap). */
+async function agentExchange(cfg, rl, state, firstText) {
+  let userText = firstText;
+  for (;;) {
+    const convo = [{ role: 'system', content: agentSystemPrompt(cwd()) }, ...state.messages, { role: 'user', content: userText }];
+    const result = await runAgentTurn({
+      model: state.model, messages: convo, cwd: cwd(), approvals: state.approvals, print: agentPrinter,
+      complete: makeComplete(cfg),
+      confirm: (call, danger) => confirmTool(rl, call, danger, cwd()),
+      toolDeps: { cfg, servers: state.servers },
+    });
+    if (!result.ok) {
+      const tip = /\btool|capable\b/i.test(result.error) ? dim('\n  Tip: connect a tool-capable provider (Groq, NVIDIA, Cohere, or GitHub) at /connect.') : '';
+      console.error(red(result.error) + tip);
+      break;
+    }
+    state.messages = result.messages.filter((m) => m.role !== 'system');
+    if (state.dir) await writeTranscript(state.dir, state.projectName ?? 'session', state.messages);
+    if (result.truncated) {
+      const go = (await ask(rl, yellow('Hit the step limit. Continue? ') + dim('[y/N]: '))).toLowerCase();
+      if (go.startsWith('y')) { userText = 'continue'; continue; }
+    }
+    break;
+  }
+  printStatus(state);
+}
+
+const SLASH_COMMANDS = ['/agent', '/chat', '/mode', '/model', '/project', '/models', '/last', '/plan', '/clear', '/help', '/exit'];
+
+/** Tab completion for slash commands and @file paths. */
+function completer(line) {
+  if (line.startsWith('/')) {
+    const hits = SLASH_COMMANDS.filter((c) => c.startsWith(line));
+    return [hits.length ? hits : SLASH_COMMANDS, line];
+  }
+  const at = line.lastIndexOf('@');
+  if (at >= 0 && !/\s/.test(line.slice(at + 1))) {
+    const frag = line.slice(at + 1);
+    const slash = frag.lastIndexOf('/');
+    const dir = slash >= 0 ? frag.slice(0, slash + 1) : '';
+    const base = frag.slice(dir.length);
+    try {
+      const hits = readdirSync(join(cwd(), dir), { withFileTypes: true })
+        .filter((e) => e.name.startsWith(base))
+        .map((e) => line.slice(0, at + 1) + dir + e.name + (e.isDirectory() ? '/' : ''));
+      return [hits, line];
+    } catch { return [[], line]; }
+  }
+  return [[], line];
+}
+
+/** A compact status footer after each agent turn. */
+function printStatus(state) {
+  const bits = [basename(cwd()), state.model, state.mode, sessionTokens ? `${sessionTokens} tok` : null].filter(Boolean);
+  stdout.write(dim(`  ${bits.join('  ·  ')}\n`));
+}
+
+/** Ask the user to approve a mutating tool call. Returns 'y' | 'n' | 'a' | { decision, command }. */
+async function confirmTool(rl, call, danger, cwd) {
+  // Show a colored diff preview for file-mutating tools before asking.
+  if (call.name === 'write_file' || call.name === 'edit_file') {
+    const change = await computeFileChange(call.name, call.args, cwd);
+    if (change && change.before !== change.after) {
+      stdout.write(renderDiff(lineDiff(change.before, change.after), { color: useColor }) + '\n');
+    }
+  }
   const label = `${VERB[call.name] ?? call.name}(${toolDetail(call)})`;
   const warn = danger ? red('⚠ looks destructive — ') : '';
-  const ans = (await ask(rl, '  ' + warn + yellow(`${bold(label)} `) + dim('[y]es · [a]lways · [n]o: '))).toLowerCase();
+  const opts = call.name === 'run_command' ? '[y]es · [a]lways · [e]dit · [n]o: ' : '[y]es · [a]lways · [n]o: ';
+  const ans = (await ask(rl, '  ' + warn + yellow(`${bold(label)} `) + dim(opts))).toLowerCase();
   if (ans.startsWith('a')) return 'a';
   if (ans.startsWith('n')) return 'n';
+  if (ans.startsWith('e') && call.name === 'run_command') {
+    const edited = await ask(rl, dim('  new command: '));
+    return { decision: 'y', command: edited.trim() || call.args.command };
+  }
   if (danger && ans !== 'y' && ans !== 'yes') return 'n'; // destructive needs an explicit yes
   return 'y'; // Enter defaults to yes for ordinary actions
 }
@@ -338,11 +508,13 @@ async function runChat(parsed) {
   if (parsed.message) {
     // With --yolo, run it as an unattended agent task; otherwise a plain one-shot answer.
     if (parsed.auto) {
+      const servers = new Map();
       const convo = [{ role: 'system', content: agentSystemPrompt(cwd()) }, { role: 'user', content: parsed.message }];
       const result = await runAgentTurn({
         model, messages: convo, cwd: cwd(), approvals, print: agentPrinter,
-        complete: withSpinner(cfg),
+        complete: makeComplete(cfg),
         confirm: async () => 'a',
+        toolDeps: { cfg, servers },
       });
       if (!result.ok) { console.error(red(result.error)); exit(1); }
       return;
@@ -360,37 +532,30 @@ async function runChat(parsed) {
   console.log(dim(`  ${cfg.baseUrl}  ·  ${model}  ·  agent mode`));
   console.log(dim('  I can run commands & edit files — you approve each.  /chat · /help'));
   console.log(rule);
-  const state = { model, mode: 'agent', approvals, messages: [], project: null, projectName: null, dir: null };
+  const state = { model, mode: 'agent', approvals, servers: new Map(), messages: [], project: null, projectName: null, dir: null, pending: null };
   if (project) await enterProject(cfg, state, project);
-  const rl = createInterface({ input: stdin, output: stdout, prompt: cyan('› ') });
+  const rl = createInterface({ input: stdin, output: stdout, prompt: cyan('› '), completer });
   rl.prompt();
 
-  rl.on('line', async (line) => {
+  rl.on('line', async (rawLine) => {
+    // Multi-line input: a trailing backslash continues onto the next line.
+    let line = rawLine;
+    if (state.pending != null) {
+      if (line.endsWith('\\')) { state.pending += line.slice(0, -1) + '\n'; rl.setPrompt(dim('… ')); rl.prompt(); return; }
+      line = state.pending + line; state.pending = null; rl.setPrompt(cyan('› '));
+    } else if (line.endsWith('\\')) {
+      state.pending = line.slice(0, -1) + '\n'; rl.setPrompt(dim('… ')); rl.prompt(); return;
+    }
     rl.pause(); // hold further input until this turn finishes, so replies can't overlap
     const action = applyCommand(line);
     switch (action.type) {
       case 'message': {
         if (!action.text) break;
+        const text = expandMentions(action.text, readMention); // inline any @file contents
         if (state.mode === 'agent') {
-          const convo = [
-            { role: 'system', content: agentSystemPrompt(cwd()) },
-            ...state.messages,
-            { role: 'user', content: action.text },
-          ];
-          const result = await runAgentTurn({
-            model: state.model, messages: convo, cwd: cwd(), approvals: state.approvals, print: agentPrinter,
-            complete: withSpinner(cfg),
-            confirm: (call, danger) => confirmTool(rl, call, danger),
-          });
-          if (result.ok) {
-            state.messages = result.messages.filter((m) => m.role !== 'system');
-            if (result.truncated) console.log(dim('[Stopped after the step limit — ask me to continue if needed.]'));
-            if (state.dir) await writeTranscript(state.dir, state.projectName ?? 'session', state.messages);
-          } else {
-            console.error(red(result.error));
-          }
+          await agentExchange(cfg, rl, state, text);
         } else {
-          state.messages.push({ role: 'user', content: action.text });
+          state.messages.push({ role: 'user', content: text });
           const r = await streamChat(cfg, state.model, state.messages, state.project);
           if (r.ok) {
             state.messages.push({ role: 'assistant', content: r.text, provider: r.provider });
@@ -400,6 +565,22 @@ async function runChat(parsed) {
             console.error(red(r.error));
           }
         }
+        break;
+      }
+      case 'plan': {
+        if (state.mode !== 'agent') { console.log(dim('Plan mode works in agent mode. Use /agent first.')); break; }
+        const task = expandMentions(action.task, readMention);
+        const stop = startSpinner('planning…');
+        const planRes = await agentComplete(cfg, state.model, [
+          { role: 'system', content: 'You are a senior engineer. Produce a short numbered plan (3–7 steps) to accomplish the task. Do NOT write code or call tools yet — just the plan.' },
+          ...state.messages,
+          { role: 'user', content: task },
+        ]);
+        stop();
+        if (!planRes.ok) { console.error(red(planRes.error)); break; }
+        stdout.write('\n' + renderMarkdown(planRes.message.content ?? '', { color: useColor }) + '\n');
+        const go = (await ask(rl, yellow('Proceed with this plan? ') + dim('[y/N]: '))).toLowerCase();
+        if (go.startsWith('y')) await agentExchange(cfg, rl, state, task);
         break;
       }
       case 'clear':
@@ -427,6 +608,9 @@ async function runChat(parsed) {
           ? 'Agent mode — I can run commands & edit files (you approve each).'
           : 'Plain chat mode — no tools.'));
         break;
+      case 'last':
+        console.log(lastToolOutput || dim('No tool output yet.'));
+        break;
       case 'models': {
         const models = await fetchModels(cfg);
         console.log(models.length ? models.map((m) => '  ' + m).join('\n') : dim('No models (connect a provider on the website).'));
@@ -446,7 +630,19 @@ async function runChat(parsed) {
     rl.prompt();
   });
 
+  let lastSigint = 0;
+  rl.on('SIGINT', () => {
+    if (activeController) { activeController.abort(); return; } // interrupt the model request only
+    if (Date.now() - lastSigint < 1500) { rl.close(); return; } // double Ctrl-C exits
+    lastSigint = Date.now();
+    state.pending = null;
+    stdout.write(dim('\n(^C again to exit)\n'));
+    rl.setPrompt(cyan('› '));
+    rl.prompt();
+  });
+
   rl.on('close', () => {
+    for (const s of state.servers.values()) { try { s.child.kill(); } catch { /* already gone */ } }
     console.log(dim('\nBye.'));
     exit(0);
   });

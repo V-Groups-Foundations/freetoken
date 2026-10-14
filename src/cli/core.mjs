@@ -70,6 +70,27 @@ export function toApiMessages(messages) {
   });
 }
 
+/** Find @path mentions in a message (used to inline file contents). */
+export function findMentions(text) {
+  const out = [];
+  const re = /(?:^|\s)@([^\s@]+)/g;
+  let m;
+  while ((m = re.exec(String(text ?? '')))) out.push(m[1]);
+  return out;
+}
+
+/** Append the contents of any @path mentions. `read(path)` returns a string or null. */
+export function expandMentions(text, read) {
+  const mentions = findMentions(text);
+  if (!mentions.length) return text;
+  let extra = '';
+  for (const p of mentions) {
+    const content = read(p);
+    if (content != null) extra += `\n\n--- @${p} ---\n${content}\n--- end ${p} ---`;
+  }
+  return text + extra;
+}
+
 /** Make a string safe to use as a folder name across OSes. */
 export function sanitizeFolderName(name) {
   const cleaned = String(name ?? '')
@@ -104,6 +125,8 @@ export function applyCommand(input) {
       return { type: 'help' };
     case '/models':
       return { type: 'models' };
+    case '/last':
+      return { type: 'last' };
     case '/model':
       return rest.length ? { type: 'model', model: rest.join(' ') } : { type: 'error', message: 'Usage: /model <id>' };
     case '/project':
@@ -117,6 +140,8 @@ export function applyCommand(input) {
       if (m === 'agent' || m === 'chat') return { type: 'mode', mode: m };
       return { type: 'error', message: 'Usage: /mode <agent|chat>' };
     }
+    case '/plan':
+      return rest.length ? { type: 'plan', task: rest.join(' ') } : { type: 'error', message: 'Usage: /plan <task>' };
     default:
       return { type: 'error', message: `Unknown command ${cmd}. Try /help.` };
   }

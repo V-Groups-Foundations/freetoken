@@ -13,6 +13,10 @@ describe('buildUrl', () => {
     expect(url).toContain('seed=42');
     expect(url).toContain('width=512');
   });
+  it('honors a known model and ignores an unknown one', () => {
+    expect(buildUrl({ prompt: 'x', model: 'turbo' })).toContain('model=turbo');
+    expect(buildUrl({ prompt: 'x', model: 'bogus' })).toContain('model=flux');
+  });
 });
 
 describe('generateImage', () => {

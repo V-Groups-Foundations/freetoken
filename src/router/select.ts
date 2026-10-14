@@ -25,6 +25,11 @@ export interface SelectInput {
 
 const AUTO_TIERS = { 'auto-smart': 'smart', 'auto-fast': 'fast' } as const;
 
+// Providers whose OpenAI-compatible tool-calling can't round-trip across turns: Gemini requires
+// a `thought_signature` on each prior function call that the compat layer doesn't expose, so a
+// multi-step agent task stalls on it. Excluded whenever a request carries tools.
+export const TOOL_INCOMPATIBLE_PROVIDERS = new Set<string>(['gemini']);
+
 export function isAuto(ref: string): ref is keyof typeof AUTO_TIERS {
   return ref in AUTO_TIERS;
 }
@@ -51,7 +56,7 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
     connected.has(m.provider) &&
     !input.cooling.has(m.provider) &&
     m.contextWindow >= input.promptTokens + 1024 &&
-    (!input.needsTools || m.supportsTools) &&
+    (!input.needsTools || (m.supportsTools && !TOOL_INCOMPATIBLE_PROVIDERS.has(m.provider))) &&
     (!input.needsVision || (input.canSee?.(m.provider, m.modelId) ?? false)) &&
     !overLimit(m);
 
