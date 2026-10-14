@@ -1,5 +1,5 @@
 export type ProviderId =
-  | 'gemini' | 'groq' | 'openrouter' | 'mistral' | 'cerebras' | 'github' | 'cloudflare';
+  | 'gemini' | 'groq' | 'openrouter' | 'github' | 'nvidia' | 'sambanova' | 'cohere';
 
 export interface ProviderDef {
   id: ProviderId;
@@ -7,7 +7,7 @@ export interface ProviderDef {
   keyUrl: string;
   steps: string[];
   note?: string;
-  extraField?: { name: 'accountId'; label: string };
+  extraField?: { name: 'accountId'; label: string; pattern?: string; hint?: string };
   /** Cheap model used for the connect-time "Test" call. */
   validateModel: string;
   baseUrl(extra?: string | null): string;
@@ -41,23 +41,6 @@ export const PROVIDERS: ProviderDef[] = [
     baseUrl: () => 'https://openrouter.ai/api/v1',
   },
   {
-    id: 'mistral',
-    name: 'Mistral',
-    keyUrl: 'https://console.mistral.ai/api-keys',
-    steps: ['Sign in to La Plateforme and choose the free "Experiment" plan.', 'Create a new API key.', 'Copy it and paste it here.'],
-    validateModel: 'mistral-small-latest',
-    baseUrl: () => 'https://api.mistral.ai/v1',
-  },
-  {
-    id: 'cerebras',
-    name: 'Cerebras',
-    keyUrl: 'https://cloud.cerebras.ai',
-    steps: ['Sign in to Cerebras Cloud.', 'Open "API Keys" and create a key.', 'Copy it and paste it here.'],
-    note: 'Cerebras free-tier terms have changed several times; check your console for current limits.',
-    validateModel: 'qwen-3.8-27b',
-    baseUrl: () => 'https://api.cerebras.ai/v1',
-  },
-  {
     id: 'github',
     name: 'GitHub Models',
     keyUrl: 'https://github.com/settings/personal-access-tokens/new',
@@ -66,13 +49,43 @@ export const PROVIDERS: ProviderDef[] = [
     baseUrl: () => 'https://models.github.ai/inference',
   },
   {
-    id: 'cloudflare',
-    name: 'Cloudflare Workers AI',
-    keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
-    steps: ['Create an API token using the "Workers AI" template.', 'Copy the token and paste it here.', 'Copy your Account ID from the dashboard sidebar.'],
-    extraField: { name: 'accountId', label: 'Account ID' },
-    validateModel: '@cf/meta/llama-3.1-8b-instruct',
-    baseUrl: (accountId) => `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`,
+    id: 'nvidia',
+    name: 'NVIDIA NIM',
+    keyUrl: 'https://build.nvidia.com',
+    steps: [
+      'Sign in at build.nvidia.com and join the free NVIDIA Developer Program (email only, no card).',
+      'Open any model and click "Get API Key" — it starts with nvapi-.',
+      'Copy the key and paste it here.',
+    ],
+    note: 'Free, no credit card — 100+ models with a per-minute rate limit.',
+    validateModel: 'openai/gpt-oss-20b',
+    baseUrl: () => 'https://integrate.api.nvidia.com/v1',
+  },
+  {
+    id: 'sambanova',
+    name: 'SambaNova',
+    keyUrl: 'https://cloud.sambanova.ai/apis',
+    steps: [
+      'Sign in at cloud.sambanova.ai (no card needed).',
+      'Open "API Keys" and generate a key.',
+      'Copy it immediately (shown once) and paste it here.',
+    ],
+    note: 'Free tier needs no card, but SambaNova has used trial credits before — check your dashboard for current limits.',
+    validateModel: 'Meta-Llama-3.1-8B-Instruct',
+    baseUrl: () => 'https://api.sambanova.ai/v1',
+  },
+  {
+    id: 'cohere',
+    name: 'Cohere',
+    keyUrl: 'https://dashboard.cohere.com/api-keys',
+    steps: [
+      'Sign in at dashboard.cohere.com (no card needed).',
+      'Open "API Keys" and copy your Trial key.',
+      'Paste it here.',
+    ],
+    note: 'Free Trial keys allow ~1,000 requests/month at 20/min, for non-commercial use. Uses Cohere\'s OpenAI-compatible endpoint.',
+    validateModel: 'command-r7b-12-2024',
+    baseUrl: () => 'https://api.cohere.ai/compatibility/v1',
   },
 ];
 

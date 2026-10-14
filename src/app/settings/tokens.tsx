@@ -38,7 +38,7 @@ export function Tokens() {
     <div className="card card-pad space-y-4">
       <h2 className="font-semibold">API tokens</h2>
       {fresh && (
-        <div className="rounded-xl bg-[#e3f4ec] p-3 text-sm text-[#15724a]">
+        <div className="rounded-xl bg-[var(--brand-tint)] p-3 text-sm text-[var(--brand-ink)]">
           Copy this token now — it won’t be shown again:
           <code className="mt-1.5 block break-all rounded-lg bg-white p-2 font-mono text-xs">{fresh}</code>
         </div>

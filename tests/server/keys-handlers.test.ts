@@ -37,7 +37,5 @@ describe('handleSaveKey', () => {
     expect((await handleSaveKey(userId, { provider: 'nope', key: 'k'.repeat(10) }, deps())).status).toBe(400);
     expect((await handleSaveKey(userId, { provider: 'groq', key: 'short' }, deps())).status).toBe(400);
     expect((await handleSaveKey(userId, null, deps())).status).toBe(400);
-    const cf = await handleSaveKey(userId, { provider: 'cloudflare', key: 'cf-token-1234' }, deps());
-    expect(cf).toEqual({ status: 400, body: { error: 'Account ID is required.' } });
   });
 });

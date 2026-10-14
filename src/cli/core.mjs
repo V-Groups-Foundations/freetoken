@@ -26,22 +26,48 @@ export function deltaFromLine(line) {
   }
 }
 
-/** Parse argv (without node/script) into { command, model, project, message }. */
+/** Parse argv (without node/script) into { command, model, project, message, auto }. */
 export function parseArgs(argv) {
-  if (argv[0] === 'login') return { command: 'login', model: null, project: null, message: null };
+  if (argv[0] === 'login') return { command: 'login', model: null, project: null, message: null, auto: false };
   let model = null;
   let project = null;
+  let auto = false;
   const words = [];
   for (let i = 0; i < argv.length; i++) {
     if ((argv[i] === '--model' || argv[i] === '-m') && argv[i + 1]) {
       model = argv[++i];
     } else if ((argv[i] === '--project' || argv[i] === '-p') && argv[i + 1]) {
       project = argv[++i];
+    } else if (argv[i] === '--yolo' || argv[i] === '--auto') {
+      auto = true;
     } else {
       words.push(argv[i]);
     }
   }
-  return { command: 'chat', model, project, message: words.length ? words.join(' ') : null };
+  return { command: 'chat', model, project, message: words.length ? words.join(' ') : null, auto };
+}
+
+/**
+ * Strip internal bookkeeping (e.g. `provider`) so only OpenAI-standard fields reach the API.
+ * Providers reject unknown properties on message objects, so every request body must be sanitized.
+ */
+export function toApiMessages(messages) {
+  return messages.map((m) => {
+    if (m.role === 'assistant') {
+      // Whitelist standard fields only. Providers reject unknown properties when a message is
+      // echoed back — our `provider`, NVIDIA's `reasoning_content`, etc. `tool_calls` is kept
+      // wholesale so anything a provider nests inside a call (e.g. Gemini's signature) survives.
+      const out = { role: 'assistant' };
+      if (Array.isArray(m.tool_calls) && m.tool_calls.length) out.tool_calls = m.tool_calls;
+      if (typeof m.content === 'string' && m.content) out.content = m.content;
+      if (!('content' in out) && !('tool_calls' in out)) out.content = '';
+      return out;
+    }
+    if (m.role === 'tool') {
+      return { role: 'tool', tool_call_id: m.tool_call_id, content: String(m.content ?? '') };
+    }
+    return { role: m.role, content: String(m.content ?? '') };
+  });
 }
 
 /** Make a string safe to use as a folder name across OSes. */
@@ -82,6 +108,15 @@ export function applyCommand(input) {
       return rest.length ? { type: 'model', model: rest.join(' ') } : { type: 'error', message: 'Usage: /model <id>' };
     case '/project':
       return { type: 'project', project: rest.length ? rest.join(' ') : null };
+    case '/agent':
+      return { type: 'mode', mode: 'agent' };
+    case '/chat':
+      return { type: 'mode', mode: 'chat' };
+    case '/mode': {
+      const m = rest[0];
+      if (m === 'agent' || m === 'chat') return { type: 'mode', mode: m };
+      return { type: 'error', message: 'Usage: /mode <agent|chat>' };
+    }
     default:
       return { type: 'error', message: `Unknown command ${cmd}. Try /help.` };
   }

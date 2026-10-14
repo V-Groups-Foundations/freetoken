@@ -7,6 +7,7 @@ import { estimateTokens, recordUsage, usageToday } from '@/usage/ledger';
 import { tapSseUsage } from '@/usage/tap';
 import { parseRateHeaders, saveLimits } from '@/usage/limits';
 import { isAuto, parseModelRef, selectCandidates, type CatalogModel } from './select';
+import { hasImageContent, supportsVision } from './vision';
 
 export interface ChatInput {
   userId: string;
@@ -50,6 +51,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     }
   }
 
+  const needsVision = hasImageContent(body.messages);
   const promptEstimate = estimateTokens(body.messages);
   const selectInput = {
     requested,
@@ -59,10 +61,16 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     usageToday: await usageToday(deps.db, userId, new Date(now())),
     promptTokens: promptEstimate,
     needsTools: Array.isArray(body.tools) && body.tools.length > 0,
+    needsVision,
+    canSee: supportsVision,
   };
   const candidates = selectCandidates(selectInput);
   // Empty even with quota ignored: no connected model can serve this request at all.
   if (candidates.length === 0 && selectCandidates({ ...selectInput, cooling: new Set(), usageToday: new Map() }).length === 0) {
+    if (needsVision) {
+      return fail(400, 'no_vision_model',
+        'None of your connected models can see images. Connect Gemini (or a GitHub GPT-4.1 key) at /connect to send pictures.');
+    }
     return fail(400, 'no_capable_model',
       'None of your connected models can handle this request (it may need tool support or a longer context window, ' +
       'or every provider is excluded from auto-routing). Connect more providers at /connect.');

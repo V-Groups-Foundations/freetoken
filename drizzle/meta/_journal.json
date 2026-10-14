@@ -22,6 +22,20 @@
       "when": 1791859344882,
       "tag": "0002_thin_crystal",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791871751576,
+      "tag": "0003_slippery_franklin_storm",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791939731634,
+      "tag": "0004_cute_pixie",
+      "breakpoints": true
     }
   ]
 }

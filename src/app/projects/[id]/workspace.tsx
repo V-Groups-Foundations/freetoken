@@ -1,15 +1,16 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { toast } from '../../fx';
 
 type Msg = { role: 'user' | 'assistant'; content: string; provider?: string };
 type Model = { id: string; name: string };
 
 const PROVIDER_COLOR: Record<string, string> = {
   groq: '#f55036', gemini: '#1a73e8', openrouter: '#6467f2',
-  cloudflare: '#f38020', cerebras: '#d97706', mistral: '#fa520f', github: '#2b3137',
+  nvidia: '#76b900', sambanova: '#ee7624', github: '#2b3137',
 };
-const AUTO_COLOR = '#0f766e';
+const AUTO_COLOR = 'var(--brand)';
 function provider(id: string | undefined) {
   if (!id) return { name: 'auto', model: '', color: AUTO_COLOR };
   const i = id.indexOf('/');
@@ -94,23 +95,23 @@ export function Workspace({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border border-[#e3e6ee] bg-white p-0.5 text-sm">
+        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5 text-sm">
           {(['chat', 'terminal'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`rounded-md px-3 py-1.5 capitalize ${tab === t ? 'bg-[#0f766e] text-white' : 'text-[#697086] hover:text-[#232a3b]'}`}
+              className={`rounded-md px-3 py-1.5 capitalize ${tab === t ? 'bg-[var(--brand)] text-white' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
             >
               {t}
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-sm text-[#697086]">
+        <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
           <span>Model</span>
           <select
             value={model}
             onChange={(e) => changeModel(e.target.value)}
-            className="rounded-lg border border-[#e3e6ee] bg-white px-2.5 py-1.5 text-sm text-[#232a3b] focus:border-[#0f766e] focus:outline-none"
+            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-sm text-[var(--ink)] focus:border-[var(--brand)] focus:outline-none"
           >
             <optgroup label="Automatic">
               <option value="auto-smart">Auto · best</option>
@@ -130,7 +131,7 @@ export function Workspace({
         : <TerminalPane projectId={projectId} msgs={msgs} busy={busy} model={model} onSend={send} />}
 
       {error && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-[#f3c9c2] bg-[#fdf1ef] px-4 py-3 text-sm text-[#9a2b1a]">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--accent-tint)] px-4 py-3 text-sm text-[var(--danger)]">
           <span>{error}</span>
           <button onClick={() => send(msgs.at(-1)?.content ?? '')} className="shrink-0 font-medium underline">Try again</button>
         </div>
@@ -143,7 +144,7 @@ function Composer({ busy, onSend, placeholder }: { busy: boolean; onSend: (t: st
   const [input, setInput] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
   return (
-    <div className="mt-3 flex items-end gap-2 rounded-2xl border border-[#e3e6ee] bg-white p-2 shadow-sm focus-within:border-[#0f766e] focus-within:ring-2 focus-within:ring-[#0f766e]/15">
+    <div className="mt-3 flex items-end gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--brand)] focus-within:ring-2 focus-within:ring-[var(--brand)]/15">
       <textarea
         ref={ref}
         value={input}
@@ -162,12 +163,12 @@ function Composer({ busy, onSend, placeholder }: { busy: boolean; onSend: (t: st
           }
         }}
         placeholder={placeholder}
-        className="max-h-[180px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] text-[#232a3b] placeholder:text-[#9aa0b2] focus:outline-none"
+        className="max-h-[180px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] text-[var(--ink)] placeholder:text-[var(--faint)] focus:outline-none"
       />
       <button
         onClick={() => { onSend(input); setInput(''); if (ref.current) ref.current.style.height = 'auto'; }}
         disabled={busy || !input.trim()}
-        className="shrink-0 rounded-xl bg-[#0f766e] px-4 py-2 text-sm font-medium text-white hover:bg-[#0c5f58] disabled:opacity-40"
+        className="shrink-0 rounded-xl bg-[var(--brand)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--brand-ink)] disabled:opacity-40"
       >
         {busy ? 'Sending' : 'Send'}
       </button>
@@ -182,9 +183,9 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
   }, [msgs]);
   return (
     <div className="flex h-[calc(100vh-15rem)] flex-col">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl border border-[#e3e6ee] bg-white">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
         {msgs.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-[#697086]">
+          <div className="flex h-full items-center justify-center px-6 text-center text-[var(--muted)]">
             Start the conversation. Whatever you say here is also visible in the Terminal tab.
           </div>
         ) : (
@@ -194,7 +195,7 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
               if (m.role === 'user') {
                 return (
                   <div key={i} className="flex justify-end">
-                    <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[#24324a] px-4 py-2.5 text-[15px] leading-relaxed text-white">{m.content}</div>
+                    <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[var(--brand)] px-4 py-2.5 text-[15px] leading-relaxed text-white">{m.content}</div>
                   </div>
                 );
               }
@@ -205,10 +206,10 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
                     <span className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold text-white" style={{ backgroundColor: p.color }} aria-hidden>
                       {p.name.charAt(0).toUpperCase()}
                     </span>
-                    <span className="text-sm font-medium capitalize text-[#232a3b]">{p.name}</span>
-                    {p.model && <span className="font-mono text-xs text-[#9aa0b2]">{p.model}</span>}
+                    <span className="text-sm font-medium capitalize text-[var(--ink)]">{p.name}</span>
+                    {p.model && <span className="font-mono text-xs text-[var(--faint)]">{p.model}</span>}
                   </div>
-                  <div className={`whitespace-pre-wrap pl-8 text-[15px] leading-relaxed text-[#2c3242] ${streaming && !m.content ? 'ft-caret' : ''}`}>
+                  <div className={`whitespace-pre-wrap pl-8 text-[15px] leading-relaxed text-[var(--ink)] ${streaming && !m.content ? 'ft-caret' : ''}`}>
                     {m.content}{streaming && m.content ? <span className="ft-caret" /> : null}
                   </div>
                 </div>
@@ -234,6 +235,7 @@ function TerminalPane({ projectId, msgs, busy, model, onSend }: { projectId: str
     try {
       await navigator.clipboard.writeText(command);
       setCopied(true);
+      toast('Command copied');
       setTimeout(() => setCopied(false), 2000);
     } catch {
       setCopied(false);
@@ -242,19 +244,19 @@ function TerminalPane({ projectId, msgs, busy, model, onSend }: { projectId: str
 
   return (
     <div className="flex h-[calc(100vh-15rem)] flex-col">
-      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[#e3e6ee] bg-white px-3 py-2 text-sm">
-        <span className="text-[#697086]">Open this project in your own terminal:</span>
+      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
+        <span className="text-[var(--muted)]">Open this project in your own terminal:</span>
         <code className="rounded bg-[#0f1320] px-2 py-1 font-mono text-xs text-[#cdd3e0]">{command}</code>
-        <button onClick={copyCommand} className="rounded-md bg-[#0f766e] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#0c5f58]">
+        <button onClick={copyCommand} className="rounded-md bg-[var(--brand)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--brand-ink)]">
           {copied ? 'Copied' : 'Copy'}
         </button>
-        <span className="text-xs text-[#9aa0b2]">same saved conversation as here</span>
+        <span className="text-xs text-[var(--faint)]">same saved conversation as here</span>
       </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl bg-[#0f1320] p-4 font-mono text-[13px] leading-relaxed text-[#cdd3e0]">
         <div className="text-[#5b647e]">freetoken · {model} · shares memory with the Chat tab</div>
         {msgs.map((m, i) => {
           if (m.role === 'user') {
-            return <div key={i} className="mt-3"><span className="text-[#4fd1c5]">› </span><span className="text-[#e6e9f0]">{m.content}</span></div>;
+            return <div key={i} className="mt-3"><span className="text-[#67e8f9]">› </span><span className="text-[#e6e9f0]">{m.content}</span></div>;
           }
           const p = provider(m.provider);
           const streaming = busy && i === msgs.length - 1;

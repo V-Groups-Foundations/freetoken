@@ -40,7 +40,14 @@ export function ProjectList({ initial }: { initial: Project[] }) {
       </form>
 
       {projects.length === 0 ? (
-        <p className="muted text-sm">No projects yet. Create one to start a shared chat-and-terminal workspace.</p>
+        <div className="card card-pad flex flex-col items-center gap-2 py-12 text-center">
+          <div className="grad flex h-12 w-12 items-center justify-center rounded-2xl text-xl text-white shadow-[var(--shadow-brand)]">✦</div>
+          <h3 className="font-semibold">Start your first project</h3>
+          <p className="muted max-w-sm text-sm">
+            A project gives you one conversation shared across its chat, web terminal, and a folder on your
+            desktop. Name it above to begin.
+          </p>
+        </div>
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2">
           {projects.map((p) => (

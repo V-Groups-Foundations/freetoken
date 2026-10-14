@@ -19,6 +19,8 @@ export interface SelectInput {
   usageToday: Map<string, { requests: number; tokens: number }>;
   promptTokens: number;
   needsTools: boolean;
+  needsVision?: boolean;
+  canSee?: (provider: string, modelId: string) => boolean;
 }
 
 const AUTO_TIERS = { 'auto-smart': 'smart', 'auto-fast': 'fast' } as const;
@@ -50,6 +52,7 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
     !input.cooling.has(m.provider) &&
     m.contextWindow >= input.promptTokens + 1024 &&
     (!input.needsTools || m.supportsTools) &&
+    (!input.needsVision || (input.canSee?.(m.provider, m.modelId) ?? false)) &&
     !overLimit(m);
 
   let tier: string;

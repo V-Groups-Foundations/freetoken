@@ -67,8 +67,10 @@ describe('validateKey', () => {
     const r = await validateKey(groq, creds, fakeFetch(() => new Response('{}', { status: 401 })).fn);
     expect(r).toEqual({ ok: false, message: 'The provider rejected this key.' });
   });
-  it('reports other failures', async () => {
-    const r = await validateKey(groq, creds, fakeFetch(() => new Response('<html>down</html>', { status: 503 })).fn);
-    expect(r).toMatchObject({ ok: false, message: expect.stringContaining('down') });
+  it('saves with a note when the provider is slow or hiccuping (timeout / 5xx)', async () => {
+    const serverErr = await validateKey(groq, creds, fakeFetch(() => new Response('<html>down</html>', { status: 503 })).fn);
+    expect(serverErr).toMatchObject({ ok: true, note: expect.stringContaining('slow') });
+    const timedOut = await validateKey(groq, creds, fakeFetch(() => { throw new Error('aborted'); }).fn);
+    expect(timedOut).toMatchObject({ ok: true, note: expect.stringContaining('slow') });
   });
 });

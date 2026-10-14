@@ -16,6 +16,9 @@ export async function handleSaveKey(userId: string, raw: unknown, deps: Deps) {
   if (!def) return { status: 400, body: { error: 'Unknown provider.' } };
   const extra = parsed.data.extra || null;
   if (def.extraField && !extra) return { status: 400, body: { error: `${def.extraField.label} is required.` } };
+  if (def.extraField?.pattern && extra && !new RegExp(def.extraField.pattern).test(extra)) {
+    return { status: 400, body: { error: def.extraField.hint ?? `That doesn't look like a valid ${def.extraField.label}.` } };
+  }
 
   const check = await validateKey(def, { key: parsed.data.key, extra }, deps.fetchImpl);
   if (!check.ok) return { status: 400, body: { error: check.message } };

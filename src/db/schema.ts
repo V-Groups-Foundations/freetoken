@@ -98,6 +98,26 @@ export const projectMessages = pgTable('project_messages', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('project_messages_project').on(t.projectId, t.id)]);
 
+/** A standalone chat thread (no desktop folder, unlike a project). Each keeps its own memory. */
+export const chats = pgTable('chats', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  title: text('title').notNull().default('New chat'),
+  model: text('model').notNull().default('auto-smart'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [index('chats_user').on(t.userId, t.updatedAt)]);
+
+/** One row per turn in a chat thread — the chat's persistent memory. */
+export const chatMessages = pgTable('chat_messages', {
+  id: serial('id').primaryKey(),
+  chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),
+  role: text('role').notNull(), // user | assistant
+  content: text('content').notNull(),
+  provider: text('provider'), // which provider/model answered (assistant rows)
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('chat_messages_chat').on(t.chatId, t.id)]);
+
 /** Latest rate-limit numbers a provider reported (via response headers) for this user's key. */
 export const providerLimits = pgTable('provider_limits', {
   id: serial('id').primaryKey(),
@@ -112,6 +132,27 @@ export const providerLimits = pgTable('provider_limits', {
   tokensResetAt: timestamp('tokens_reset_at'),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (t) => [uniqueIndex('provider_limits_user_model').on(t.userId, t.provider, t.modelId)]);
+
+/** A document the user uploaded for retrieval ("chat with your documents"). */
+export const documents = pgTable('documents', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  chars: integer('chars').notNull().default(0),
+  chunkCount: integer('chunk_count').notNull().default(0),
+  embedProvider: text('embed_provider').notNull(),
+  embedModel: text('embed_model').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('documents_user').on(t.userId, t.createdAt)]);
+
+/** One retrievable chunk of a document; its embedding is stored as a JSON number array. */
+export const docChunks = pgTable('doc_chunks', {
+  id: serial('id').primaryKey(),
+  documentId: text('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  chunkIndex: integer('chunk_index').notNull(),
+  content: text('content').notNull(),
+  embedding: text('embedding').notNull(), // JSON-encoded number[]
+}, (t) => [index('doc_chunks_document').on(t.documentId)]);
 
 export const usageEvents = pgTable('usage_events', {
   id: serial('id').primaryKey(),

@@ -71,7 +71,7 @@ export async function validateKey(
     def,
     creds,
     { model: def.validateModel, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 },
-    { fetchImpl, timeoutMs: 15_000 },
+    { fetchImpl, timeoutMs: 30_000 },
   );
   if (r.ok) {
     await r.response.body?.cancel();
@@ -79,6 +79,10 @@ export async function validateKey(
   }
   if (r.error.kind === 'rate_limit') return { ok: true, note: 'Key works but is currently rate-limited.' };
   if (r.error.kind === 'auth') return { ok: false, message: 'The provider rejected this key.' };
-  if (r.error.status === 404) return { ok: true, note: 'Key saved, but the test model is unavailable, so the key could not be fully verified.' };
+  if (r.error.kind === 'not_found' || r.error.status === 404) return { ok: true, note: 'Key saved, but the test model is unavailable, so the key could not be fully verified.' };
+  // A slow or hiccuping provider (timeout / 5xx) is not a bad key — save it rather than block it.
+  if (r.error.kind === 'timeout' || r.error.kind === 'server') {
+    return { ok: true, note: 'Key saved, but the provider was slow to respond, so it could not be fully verified. It should still work.' };
+  }
   return { ok: false, message: `Could not verify the key: ${r.error.message}` };
 }

@@ -4,9 +4,8 @@ const PROVIDERS = [
   { name: 'Gemini', color: '#1a73e8' },
   { name: 'Groq', color: '#f55036' },
   { name: 'OpenRouter', color: '#6467f2' },
-  { name: 'Cloudflare', color: '#f38020' },
-  { name: 'Cerebras', color: '#d97706' },
-  { name: 'Mistral', color: '#fa520f' },
+  { name: 'NVIDIA NIM', color: '#76b900' },
+  { name: 'SambaNova', color: '#ee7624' },
   { name: 'GitHub', color: '#2b3137' },
 ];
 
@@ -16,7 +15,7 @@ export default function Home() {
       <section className="grid items-center gap-12 md:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
           <span className="badge badge-ok">Bring your own free API keys</span>
-          <h1 className="h1">All your free AI quotas, pooled into one.</h1>
+          <h1 className="h1">All your free AI quotas,<br /><span className="grad-text">pooled into one.</span></h1>
           <p className="lead max-w-xl">
             Connect the free tiers you already have — Gemini, Groq, OpenRouter and more. FreeToken sends
             each request to whichever of your providers still has quota, and gives you one chat, one
@@ -29,6 +28,8 @@ export default function Home() {
           <p className="faint text-sm">Keys are encrypted and only ever used for your own requests.</p>
         </div>
 
+        <div className="relative">
+          <div className="pointer-events-none absolute -inset-6 -z-10 rounded-[32px] opacity-60 blur-2xl" style={{ background: 'radial-gradient(55% 55% at 72% 15%, color-mix(in srgb, var(--brand) 34%, transparent), transparent), radial-gradient(50% 50% at 18% 92%, color-mix(in srgb, var(--accent) 24%, transparent), transparent)' }} />
         <div className="card card-pad">
           <div className="text-sm font-medium muted">Your providers</div>
           <div className="mt-4 space-y-2.5">
@@ -46,6 +47,7 @@ export default function Home() {
             <span className="text-sm font-medium text-[var(--brand-ink)]">Routed as one pool</span>
             <span className="font-mono text-xs text-[var(--brand-ink)]">auto‑smart</span>
           </div>
+        </div>
         </div>
       </section>
 

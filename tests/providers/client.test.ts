@@ -16,6 +16,8 @@ describe('normalizeError', () => {
     expect(normalizeError(413, h(), '').kind).toBe('rate_limit');
     expect(normalizeError(503, h(), '').kind).toBe('server');
     expect(normalizeError(404, h(), '').kind).toBe('not_found');
+    expect(normalizeError(410, h(), '').kind).toBe('not_found'); // EOL model
+
     expect(normalizeError(400, h(), '{"error":"bad"}')).toMatchObject({ kind: 'bad_request', message: 'bad' });
   });
   it('survives non-JSON (HTML) bodies', () => {
@@ -36,10 +38,11 @@ describe('callChat', () => {
     expect(f.calls[0].url).toBe('https://api.groq.com/openai/v1/chat/completions');
     expect(f.calls[0].auth).toBe('Bearer gsk_1');
   });
-  it('uses the Cloudflare account id', async () => {
+  it('posts to the NVIDIA NIM OpenAI-compatible endpoint', async () => {
     const f = fakeFetch(() => okJson());
-    await callChat(getProvider('cloudflare')!, { key: 't', extra: 'acc' }, {}, { fetchImpl: f.fn });
-    expect(f.calls[0].url).toBe('https://api.cloudflare.com/client/v4/accounts/acc/ai/v1/chat/completions');
+    await callChat(getProvider('nvidia')!, { key: 'nvapi-x', extra: null }, { model: 'm', messages: [] }, { fetchImpl: f.fn });
+    expect(f.calls[0].url).toBe('https://integrate.api.nvidia.com/v1/chat/completions');
+    expect(f.calls[0].auth).toBe('Bearer nvapi-x');
   });
   it('returns normalized errors and treats network failures as timeout', async () => {
     const r1 = await callChat(getProvider('groq')!, { key: 'k', extra: null }, {}, {

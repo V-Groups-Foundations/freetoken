@@ -2,11 +2,13 @@ import Link from 'next/link';
 import { getDb } from '@/db';
 import { requireUserId } from '@/lib/session';
 import { listUserModels } from '@/router/models';
+import { listChats, listChatMessages } from '@/chat/service';
 import { Chat } from './chat';
 
 export default async function ChatPage() {
   const uid = await requireUserId();
-  const models = await listUserModels(getDb(), uid);
+  const db = getDb();
+  const [models, chatList] = await Promise.all([listUserModels(db, uid), listChats(db, uid)]);
   if (models.length === 0) {
     return (
       <div className="card card-pad">
@@ -18,5 +20,14 @@ export default async function ChatPage() {
       </div>
     );
   }
-  return <Chat models={models} />;
+  const activeId = chatList[0]?.id ?? null;
+  const initialMessages = activeId ? await listChatMessages(db, activeId) : [];
+  return (
+    <Chat
+      models={models}
+      initialChats={chatList.map((c) => ({ id: c.id, title: c.title }))}
+      activeId={activeId}
+      initialMessages={initialMessages.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content, provider: m.provider ?? undefined }))}
+    />
+  );
 }

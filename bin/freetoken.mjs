@@ -7,7 +7,9 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { stdin, stdout, env, argv, exit, chdir, cwd } from 'node:process';
-import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript } from '../src/cli/core.mjs';
+import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript, toApiMessages } from '../src/cli/core.mjs';
+import { runAgentTurn, agentSystemPrompt, TOOLS } from '../src/cli/agent.mjs';
+import { renderMarkdown } from '../src/cli/render.mjs';
 
 const CONFIG_PATH = join(homedir(), '.freetoken', 'config.json');
 
@@ -145,7 +147,7 @@ async function streamChat(cfg, model, messages, project) {
     : `${cfg.baseUrl}/chat/completions`;
   const payload = project
     ? { content: messages[messages.length - 1].content }
-    : { model, messages, stream: true };
+    : { model, messages: toApiMessages(messages), stream: true };
   let res;
   try {
     res = await fetch(url, {
@@ -194,14 +196,104 @@ function printHelp() {
   console.log(
     [
       bold('Commands'),
+      '  /agent        agent mode — the model can run commands & edit files (you approve each)',
+      '  /chat         plain chat mode (no tools)',
       '  /model <id>   switch model (e.g. auto-smart, auto-fast, groq/…)',
       '  /project <id> use a project (shared memory with the web app); blank to leave',
       '  /models       list your available models',
       '  /clear        start a new conversation',
       '  /help         show this help',
       '  /exit         quit',
+      '',
+      dim('In agent mode: y = run once · a = always allow this tool · n = skip. Start with --yolo to auto-approve.'),
     ].join('\n'),
   );
+}
+
+// ---- Agent mode: tool-call loop against /chat/completions (non-streaming) ----
+
+/** One non-streaming completion with tools, for the agent loop. */
+async function agentComplete(cfg, model, messages) {
+  let res;
+  try {
+    res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` },
+      body: JSON.stringify({ model, messages: toApiMessages(messages), tools: TOOLS, stream: false }),
+    });
+  } catch (e) {
+    return { ok: false, error: `Could not reach ${cfg.baseUrl} (${e.message}).` };
+  }
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { msg = (await res.json())?.error?.message ?? msg; } catch { /* keep status */ }
+    return { ok: false, error: msg };
+  }
+  const json = await res.json().catch(() => null);
+  const choice = json?.choices?.[0];
+  if (!choice) return { ok: false, error: 'The model returned an empty response.' };
+  return { ok: true, message: choice.message ?? {}, provider: res.headers.get('x-freetoken-provider') };
+}
+
+/** agentComplete wrapped with a thinking spinner, for the agent loop. */
+function withSpinner(cfg) {
+  return async (model, messages) => {
+    const stop = startSpinner('thinking…');
+    try {
+      return await agentComplete(cfg, model, messages);
+    } finally {
+      stop();
+    }
+  };
+}
+
+const VERB = { run_command: 'Run', write_file: 'Write', read_file: 'Read', list_dir: 'List' };
+
+function toolDetail(call) {
+  const a = call.args ?? {};
+  if (call.name === 'run_command') return a.command ?? '';
+  if (call.name === 'write_file') return a.path ?? '';
+  if (call.name === 'read_file') return a.path ?? '';
+  if (call.name === 'list_dir') return a.path ?? '.';
+  return '';
+}
+
+/** A braille spinner shown while the model thinks (TTY only). Returns a stop() function. */
+function startSpinner(label) {
+  if (!stdout.isTTY) return () => {};
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let i = 0;
+  const timer = setInterval(() => stdout.write('\r' + cyan(frames[i++ % frames.length]) + dim(' ' + label)), 80);
+  return () => { clearInterval(timer); stdout.write('\r\x1b[K'); };
+}
+
+const agentPrinter = {
+  assistant: (text, provider) => {
+    stdout.write('\n' + renderMarkdown(text.trimEnd(), { color: useColor }) + '\n');
+    if (provider) stdout.write(dim(`  ↳ ${provider}\n`));
+  },
+  tool: (call, allowed) => {
+    const dot = allowed ? green('⏺') : red('⊘');
+    stdout.write(`${dot} ${bold(VERB[call.name] ?? call.name)}${dim('(' + toolDetail(call) + ')')}\n`);
+  },
+  toolResult: (call, result, allowed) => {
+    if (!allowed) { stdout.write(dim('  ⎿  skipped\n')); return; }
+    const lines = String(result).split('\n');
+    const shown = lines.slice(0, 8);
+    stdout.write(dim('  ⎿  ' + shown.join('\n     ')) + '\n');
+    if (lines.length > shown.length) stdout.write(dim(`     … +${lines.length - shown.length} more lines\n`));
+  },
+};
+
+/** Ask the user to approve a mutating tool call. Returns 'y' | 'n' | 'a'. */
+async function confirmTool(rl, call, danger) {
+  const label = `${VERB[call.name] ?? call.name}(${toolDetail(call)})`;
+  const warn = danger ? red('⚠ looks destructive — ') : '';
+  const ans = (await ask(rl, '  ' + warn + yellow(`${bold(label)} `) + dim('[y]es · [a]lways · [n]o: '))).toLowerCase();
+  if (ans.startsWith('a')) return 'a';
+  if (ans.startsWith('n')) return 'n';
+  if (danger && ans !== 'y' && ans !== 'yes') return 'n'; // destructive needs an explicit yes
+  return 'y'; // Enter defaults to yes for ordinary actions
 }
 
 /**
@@ -239,8 +331,22 @@ async function runChat(parsed) {
     if (fromCwd) project = fromCwd.id;
   }
 
+  const approvals = { all: new Set() };
+  if (parsed.auto) { approvals.all.add('run_command'); approvals.all.add('write_file'); }
+
   // One-shot mode: freetoken "question"
   if (parsed.message) {
+    // With --yolo, run it as an unattended agent task; otherwise a plain one-shot answer.
+    if (parsed.auto) {
+      const convo = [{ role: 'system', content: agentSystemPrompt(cwd()) }, { role: 'user', content: parsed.message }];
+      const result = await runAgentTurn({
+        model, messages: convo, cwd: cwd(), approvals, print: agentPrinter,
+        complete: withSpinner(cfg),
+        confirm: async () => 'a',
+      });
+      if (!result.ok) { console.error(red(result.error)); exit(1); }
+      return;
+    }
     const r = await streamChat(cfg, model, [{ role: 'user', content: parsed.message }], project);
     if (!r.ok) {
       console.error(red(r.error));
@@ -249,8 +355,12 @@ async function runChat(parsed) {
     return;
   }
 
-  console.log(bold(cyan('FreeToken')) + dim(`  ${cfg.baseUrl}  ·  model: ${model}  ·  /help for commands`));
-  const state = { model, messages: [], project: null, projectName: null, dir: null };
+  const rule = dim('─'.repeat(Math.min(stdout.columns || 64, 64)));
+  console.log('\n' + bold(cyan('  ◆ FreeToken Agent')));
+  console.log(dim(`  ${cfg.baseUrl}  ·  ${model}  ·  agent mode`));
+  console.log(dim('  I can run commands & edit files — you approve each.  /chat · /help'));
+  console.log(rule);
+  const state = { model, mode: 'agent', approvals, messages: [], project: null, projectName: null, dir: null };
   if (project) await enterProject(cfg, state, project);
   const rl = createInterface({ input: stdin, output: stdout, prompt: cyan('› ') });
   rl.prompt();
@@ -261,14 +371,34 @@ async function runChat(parsed) {
     switch (action.type) {
       case 'message': {
         if (!action.text) break;
-        state.messages.push({ role: 'user', content: action.text });
-        const r = await streamChat(cfg, state.model, state.messages, state.project);
-        if (r.ok) {
-          state.messages.push({ role: 'assistant', content: r.text, provider: r.provider });
-          if (state.dir) await writeTranscript(state.dir, state.projectName, state.messages);
+        if (state.mode === 'agent') {
+          const convo = [
+            { role: 'system', content: agentSystemPrompt(cwd()) },
+            ...state.messages,
+            { role: 'user', content: action.text },
+          ];
+          const result = await runAgentTurn({
+            model: state.model, messages: convo, cwd: cwd(), approvals: state.approvals, print: agentPrinter,
+            complete: withSpinner(cfg),
+            confirm: (call, danger) => confirmTool(rl, call, danger),
+          });
+          if (result.ok) {
+            state.messages = result.messages.filter((m) => m.role !== 'system');
+            if (result.truncated) console.log(dim('[Stopped after the step limit — ask me to continue if needed.]'));
+            if (state.dir) await writeTranscript(state.dir, state.projectName ?? 'session', state.messages);
+          } else {
+            console.error(red(result.error));
+          }
         } else {
-          state.messages.pop();
-          console.error(red(r.error));
+          state.messages.push({ role: 'user', content: action.text });
+          const r = await streamChat(cfg, state.model, state.messages, state.project);
+          if (r.ok) {
+            state.messages.push({ role: 'assistant', content: r.text, provider: r.provider });
+            if (state.dir) await writeTranscript(state.dir, state.projectName, state.messages);
+          } else {
+            state.messages.pop();
+            console.error(red(r.error));
+          }
         }
         break;
       }
@@ -290,6 +420,12 @@ async function runChat(parsed) {
           state.messages = [];
           console.log(dim('Left project mode.'));
         }
+        break;
+      case 'mode':
+        state.mode = action.mode;
+        console.log(dim(action.mode === 'agent'
+          ? 'Agent mode — I can run commands & edit files (you approve each).'
+          : 'Plain chat mode — no tools.'));
         break;
       case 'models': {
         const models = await fetchModels(cfg);
@@ -322,8 +458,9 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
     bold('freetoken') + dim(' — terminal client for your FreeToken app\n') +
       '\nUsage:\n' +
       '  freetoken login                     save your base URL + ft_ token\n' +
-      '  freetoken                           interactive chat\n' +
-      '  freetoken "your question"           one-shot answer\n' +
+      '  freetoken                           interactive agent (runs commands & edits files, you approve)\n' +
+      '  freetoken "your question"           one-shot answer (plain chat)\n' +
+      '  freetoken --yolo "build me X"       one-shot agent task, auto-approving every tool\n' +
       '  freetoken --project <id>            use a saved project (shared with the web app)\n' +
       '  freetoken -m <model> "question"     pick a model (auto-smart, auto-fast, provider/model)\n',
   );

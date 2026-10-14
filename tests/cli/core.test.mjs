@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript } from '../../src/cli/core.mjs';
+import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript, toApiMessages } from '../../src/cli/core.mjs';
 
 describe('resolveConfig', () => {
   it('uses file values, with env overriding them', () => {
@@ -31,19 +31,53 @@ describe('deltaFromLine', () => {
 
 describe('parseArgs', () => {
   it('defaults to the chat command', () => {
-    expect(parseArgs([])).toEqual({ command: 'chat', model: null, project: null, message: null });
+    expect(parseArgs([])).toEqual({ command: 'chat', model: null, project: null, message: null, auto: false });
+  });
+  it('parses the --yolo auto-approve flag', () => {
+    expect(parseArgs(['--yolo', 'build it'])).toMatchObject({ auto: true, message: 'build it' });
+    expect(parseArgs(['hi'])).toMatchObject({ auto: false });
   });
   it('parses login', () => {
     expect(parseArgs(['login'])).toMatchObject({ command: 'login' });
   });
   it('takes a one-shot message and a model flag', () => {
     expect(parseArgs(['--model', 'auto-fast', 'hello', 'there']))
-      .toEqual({ command: 'chat', model: 'auto-fast', project: null, message: 'hello there' });
+      .toEqual({ command: 'chat', model: 'auto-fast', project: null, message: 'hello there', auto: false });
     expect(parseArgs(['-m', 'groq/llama', 'hi'])).toMatchObject({ model: 'groq/llama', message: 'hi' });
   });
   it('takes a project flag', () => {
     expect(parseArgs(['--project', 'abc123', 'hi'])).toMatchObject({ project: 'abc123', message: 'hi' });
     expect(parseArgs(['-p', 'abc123'])).toMatchObject({ project: 'abc123', message: null });
+  });
+});
+
+describe('toApiMessages', () => {
+  it('strips the internal provider field from user/assistant messages', () => {
+    const out = toApiMessages([
+      { role: 'user', content: 'hi', provider: null },
+      { role: 'assistant', content: 'hello', provider: 'groq/x' },
+    ]);
+    expect(out).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ]);
+  });
+  it('keeps tool_calls on assistant and shapes tool messages', () => {
+    const out = toApiMessages([
+      { role: 'assistant', content: null, tool_calls: [{ id: 't1' }], provider: 'x' },
+      { role: 'tool', tool_call_id: 't1', content: 'result', foo: 'bar' },
+    ]);
+    expect(out[0]).toEqual({ role: 'assistant', tool_calls: [{ id: 't1' }] });
+    expect(out[1]).toEqual({ role: 'tool', tool_call_id: 't1', content: 'result' });
+  });
+  it('strips provider-specific extras (reasoning_content, provider) but keeps nested tool-call data', () => {
+    const [out] = toApiMessages([
+      { role: 'assistant', content: 'ok', tool_calls: [{ id: 't1', thought_signature: 'sig' }], reasoning_content: 'why', provider: 'nvidia/x' },
+    ]);
+    expect(out.provider).toBeUndefined();
+    expect(out.reasoning_content).toBeUndefined(); // unsupported when echoed back
+    expect(out.tool_calls[0].thought_signature).toBe('sig'); // nested data inside tool_calls is preserved
+    expect(out).toEqual({ role: 'assistant', content: 'ok', tool_calls: [{ id: 't1', thought_signature: 'sig' }] });
   });
 });
 
