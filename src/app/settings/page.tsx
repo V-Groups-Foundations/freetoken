@@ -3,6 +3,7 @@ import { requireUserId } from '@/lib/session';
 import { PageHeader } from '../page-header';
 import { Tokens } from './tokens';
 import { GUIDES, setupText } from '@/cli/integrations.mjs';
+import { ToolConnect } from './tool-connect';
 
 export default async function SettingsPage() {
   await requireUserId();
@@ -25,8 +26,9 @@ export default async function SettingsPage() {
         <div>
           <span className="eyebrow">use it everywhere</span>
           <h2 className="h2 mt-2">Run your favourite AI tools on your free models</h2>
-          <p className="muted mt-1 text-sm">Create a token above, then pick your tool. From a terminal, <code className="font-mono text-xs">freetoken run &lt;tool&gt;</code> sets everything up for that run; <code className="font-mono text-xs">freetoken setup &lt;tool&gt;</code> prints this.</p>
+          <p className="muted mt-1 text-sm">One click and FreeToken sets the tool up for you on this computer — no keys to copy. Each tool gets its own key, listed above, so you can revoke it any time.</p>
         </div>
+        <ToolConnect manual={
         <div className="grid items-start gap-3 md:grid-cols-2">
           {Object.entries(GUIDES).map(([id, g]) => (
             <details key={id} className="tile p-4" open={id === 'claude-code'}>
@@ -35,6 +37,7 @@ export default async function SettingsPage() {
             </details>
           ))}
         </div>
+        } />
       </div>
     </section>
   );

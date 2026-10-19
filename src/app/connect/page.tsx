@@ -69,7 +69,7 @@ export default async function ConnectPage({
           <h2 className="h2">Claude Code, Cursor &amp; Cline — on your free pool</h2>
           <p className="muted text-sm">
             FreeToken speaks the OpenAI and the Anthropic API, so your AI coding tools run on the keys you connect here.
-            In the FreeToken folder, <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">npm run claude</code> starts Claude Code on free models.
+            Connect one with a single click — FreeToken sets it up for you; for Claude Code you then just type <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">claude-free</code>.
           </p>
           <div className="flex flex-wrap gap-1.5 pt-1">
             {['Claude Code', 'Cursor', 'Cline', 'Continue', 'Aider', 'Codex', 'OpenCode'].map((t) => (
@@ -77,7 +77,7 @@ export default async function ConnectPage({
             ))}
           </div>
         </div>
-        <Link href="/settings#tools" className="btn btn-primary">Set up a tool →</Link>
+        <Link href="/settings#tools" className="btn btn-primary">Connect a tool — 1 click →</Link>
       </div>
 
       {/* Provider grid */}

@@ -130,9 +130,9 @@ export function toolStatus(env: ToolEnv): ToolStatus[] {
     { id: 'freetoken', name: 'freetoken command', kind: 'auto', installed: true, connected: env.installed('freetoken') || hasShim(env, 'freetoken'), command: 'freetoken run <tool>',
       note: 'Lets you run any AI tool on FreeToken from any folder: freetoken run <tool>.' },
     { id: 'cursor', name: 'Cursor', kind: 'assist', installed: null, connected: false, openUrl: 'cursor://',
-      note: 'Cursor keeps its settings where other programs can\'t safely edit them: get a key, then paste two values in Cursor → Settings → Models.' },
+      note: 'Cursor keeps its settings where other programs can\'t safely edit them: get a key, then paste the values in Cursor → Settings → Models. Cursor calls models from its own servers, so it needs FreeToken on a public address (not localhost).' },
     { id: 'cline', name: 'Cline / Roo Code', kind: 'assist', installed: null, connected: false, openUrl: 'vscode:extension/saoudrizwan.claude-dev',
-      note: 'Cline keeps its settings in VS Code: get a key, then choose "OpenAI Compatible" and paste the values.' },
+      note: 'Cline keeps its settings in VS Code: get a key, then choose "OpenAI Compatible" and paste the three values.' },
   ];
 }
 
