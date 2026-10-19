@@ -2,7 +2,31 @@
   "name": "free_token",
   "version": "0.1.0",
   "private": true,
+  "description": "FreeToken by V Groups: pool every free AI API tier (Gemini, Groq, OpenRouter, NVIDIA, Cohere, GitHub Models) into one chat, one OpenAI-compatible API and V-Run, a desktop AI coding agent. Free, self-hosted.",
+  "keywords": [
+    "free-ai",
+    "free-tokens",
+    "free-llm-api",
+    "openai-compatible",
+    "llm-router",
+    "ai-gateway",
+    "gemini",
+    "groq",
+    "openrouter",
+    "ai-coding-agent",
+    "cursor-alternative",
+    "claude-code-alternative",
+    "self-hosted",
+    "v-groups"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/varunkar2003/freetoken#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/varunkar2003/freetoken.git"
+  },
   "scripts": {
+    "setup": "node scripts/setup.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -11,7 +35,10 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file=.env.local scripts/migrate.mts",
     "db:seed": "tsx --env-file=.env.local scripts/seed.mts",
-    "cli": "node bin/freetoken.mjs"
+    "cli": "node bin/freetoken.mjs",
+    "desktop": "node scripts/desktop.mjs",
+    "dev:all": "node scripts/desktop.mjs --with-server",
+    "test:desktop": "npm --prefix desktop run test:all"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.3",

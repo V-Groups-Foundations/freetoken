@@ -3,7 +3,7 @@ import { models, providerKeys, providerLimits } from '@/db/schema';
 import { getProvider } from '@/providers/registry';
 import type { Credentials, FetchFn } from '@/providers/client';
 import { loadCredentials } from '@/keys/service';
-import { usageToday } from '@/usage/ledger';
+import { dayStart, monthStart, usageSince } from '@/usage/ledger';
 import { usageKey } from '@/router/select';
 import type { Deps } from '@/server/deps';
 
@@ -16,7 +16,10 @@ export interface ModelUsage {
   limitRequests: number | null;
   remainingRequests: number | null;
   resetAt: string | null;
-  source: 'provider' | 'estimate' | 'unknown';
+  /** provider = from the provider's rate-limit headers; shared = counts toward the provider's account-wide limit */
+  source: 'provider' | 'estimate' | 'shared' | 'unknown';
+  /** when the provider's numbers were last seen (live rows only) */
+  asOf: string | null;
 }
 
 export interface AccountUsage {
@@ -24,6 +27,9 @@ export interface AccountUsage {
   used: number;
   limit: number;
   remaining: number;
+  period: 'day' | 'month';
+  source: 'provider' | 'estimate';
+  note: string;
 }
 
 export interface ProviderUsage {
@@ -38,12 +44,29 @@ export interface ProviderUsage {
 
 export interface UsageSummary {
   today: { requests: number; tokens: number };
+  /** when "today" began (00:00 UTC), so the UI can show it in local time */
+  dayStartedAt: string;
   knownRemainingRequests: number;
   providers: ProviderUsage[];
 }
 
+/**
+ * Free tiers that cap the whole account rather than each model. Showing (and summing) the cap per
+ * model would count the same allowance once per model.
+ */
+const SHARED_POOLS: Record<string, { label: string; limit: number; period: 'day' | 'month'; note: string }> = {
+  openrouter: {
+    label: 'Free-model requests today', limit: 50, period: 'day',
+    note: 'One daily allowance shared by every :free model (1,000/day once the account has bought $10+ of credits). Resets 00:00 UTC.',
+  },
+  cohere: {
+    label: 'Trial calls this month', limit: 1000, period: 'month',
+    note: 'Trial keys get 1,000 calls a month shared by all models. Production keys are not capped this way.',
+  },
+};
+
 /** OpenRouter reports free-model daily request usage on GET /key. */
-async function openRouterAccount(creds: Credentials, fetchImpl: FetchFn): Promise<AccountUsage | null> {
+async function openRouterAccount(creds: Credentials, fetchImpl: FetchFn): Promise<Pick<AccountUsage, 'used' | 'limit' | 'remaining'> | null> {
   try {
     const res = await fetchImpl('https://openrouter.ai/api/v1/key', {
       headers: { authorization: `Bearer ${creds.key}` },
@@ -51,11 +74,14 @@ async function openRouterAccount(creds: Credentials, fetchImpl: FetchFn): Promis
     if (!res.ok) return null;
     const free = (await res.json())?.data?.free_model_daily_requests;
     if (!free || typeof free.remaining !== 'number') return null;
-    return { label: 'Free-model requests today', used: free.used ?? 0, limit: free.limit ?? 0, remaining: free.remaining };
+    return { used: free.used ?? 0, limit: free.limit ?? 0, remaining: free.remaining };
   } catch {
     return null;
   }
 }
+
+const keyRowsUse = (rows: { provider: string }[], period: 'day' | 'month') =>
+  rows.some((r) => SHARED_POOLS[r.provider]?.period === period);
 
 export async function getUsageSummary(userId: string, deps: Deps): Promise<UsageSummary> {
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -67,7 +93,10 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
     .where(eq(providerKeys.userId, userId));
 
   const catalog = await deps.db.select().from(models).where(eq(models.enabled, true));
-  const used = await usageToday(deps.db, userId, new Date((deps.now ?? Date.now)()));
+  const nowMs = (deps.now ?? Date.now)();
+  const started = dayStart(new Date(nowMs));
+  const used = await usageSince(deps.db, userId, started);
+  const usedMonth = keyRowsUse(keyRows, 'month') ? await usageSince(deps.db, userId, monthStart(new Date(nowMs))) : used;
   const limitRows = await deps.db.select().from(providerLimits).where(eq(providerLimits.userId, userId));
   const liveLimits = new Map(limitRows.map((r) => [usageKey(r.provider, r.modelId), r]));
 
@@ -86,10 +115,22 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
     const cd = await deps.kv.get(`cd:${userId}:${key.provider}`);
     const coolingUntil = cd ? new Date(Number(cd)) : null;
 
-    const account =
+    const pool = SHARED_POOLS[key.provider];
+    const liveAccount =
       key.provider === 'openrouter' && creds.get('openrouter')
         ? await openRouterAccount(creds.get('openrouter')!.creds, fetchImpl)
         : null;
+    let account: AccountUsage | null = null;
+    if (pool) {
+      const ledger = pool.period === 'month' ? usedMonth : used;
+      const counted = catalog
+        .filter((m) => m.provider === key.provider)
+        .reduce((n, m) => n + (ledger.get(usageKey(m.provider, m.modelId))?.requests ?? 0), 0);
+      account = liveAccount
+        ? { label: pool.label, ...liveAccount, period: pool.period, source: 'provider', note: pool.note }
+        : { label: pool.label, used: counted, limit: pool.limit, remaining: Math.max(0, pool.limit - counted), period: pool.period, source: 'estimate', note: pool.note };
+      knownRemainingRequests += account.remaining;
+    }
 
     const modelUsages: ModelUsage[] = catalog
       .filter((m) => m.provider === key.provider)
@@ -100,11 +141,19 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
         let limitRequests: number | null = null;
         let remainingRequests: number | null = null;
         let resetAt: string | null = null;
+        let asOf: string | null = null;
         let source: ModelUsage['source'] = 'unknown';
-        if (live && live.remainingRequests != null) {
+        if (pool) {
+          source = 'shared';
+        } else if (live && live.remainingRequests != null) {
           limitRequests = live.limitRequests;
           remainingRequests = live.remainingRequests;
-          resetAt = live.requestsResetAt ? live.requestsResetAt.toISOString() : null;
+          asOf = live.updatedAt.toISOString();
+          const reset = live.requestsResetAt?.getTime();
+          // The snapshot is from the last response. Once its reset time has passed the window has
+          // refilled, so the old "remaining" would understate what's left.
+          if (reset != null && reset <= nowMs && live.limitRequests != null) remainingRequests = live.limitRequests;
+          else resetAt = reset != null ? new Date(reset).toISOString() : null;
           source = 'provider';
         } else if (m.rpd != null) {
           limitRequests = m.rpd;
@@ -122,6 +171,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           remainingRequests,
           resetAt,
           source,
+          asOf,
         };
       });
 
@@ -136,5 +186,5 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
     });
   }
 
-  return { today, knownRemainingRequests, providers };
+  return { today, dayStartedAt: started.toISOString(), knownRemainingRequests, providers };
 }

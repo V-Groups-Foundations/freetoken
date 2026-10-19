@@ -4,7 +4,7 @@ import { sse } from '../helpers/fake-fetch';
 import type { DB } from '@/db';
 import {
   createProject, listProjects, getProject, deleteProject, setProjectModel,
-  listMessages, addMessage,
+  listMessages, addMessage, appendMessages,
 } from '@/projects/service';
 import { persistAssistant } from '@/projects/stream';
 
@@ -74,5 +74,18 @@ describe('persistAssistant', () => {
     await new Response(persistAssistant(broken, db, p.id, 'groq/x')).text().catch(() => {});
     await new Promise((r) => setTimeout(r, 30));
     expect(await listMessages(db, p.id)).toEqual([]);
+  });
+
+  it('appendMessages writes V-Run turns into the shared conversation, only for the owner', async () => {
+    const p = await createProject(db, userId, 'Desk');
+    await addMessage(db, p.id, { role: 'user', content: 'start on the web' });
+    const added = await appendMessages(db, userId, p.id, [
+      { role: 'user', content: 'continue on desktop' },
+      { role: 'assistant', content: 'done in V-Run', provider: 'v-run' },
+    ]);
+    expect(added).toHaveLength(2);
+    expect((await listMessages(db, p.id)).map((m) => m.content)).toEqual(['start on the web', 'continue on desktop', 'done in V-Run']);
+    const other = (await createUser(db)).id;
+    expect(await appendMessages(db, other, p.id, [{ role: 'user', content: 'x' }])).toBeNull();
   });
 });

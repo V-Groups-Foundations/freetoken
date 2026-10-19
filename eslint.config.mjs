@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // the V-Run desktop app has its own toolchain (see desktop/package.json)
+    "desktop/**",
   ]),
 ]);
 

@@ -1,0 +1,15 @@
+name: 🐞 Bug report
+description: Something in FreeToken or V-Run doesn't work
+labels: [bug]
+body:
+  - type: dropdown
+    id: app
+    attributes: { label: Where, options: [FreeToken (web), V-Run (desktop), API, Setup] }
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: What you did, what you expected, what you saw. Screenshots help. }
+    validations: { required: true }
+  - type: input
+    id: env
+    attributes: { label: Environment, placeholder: "Windows 11 · Node 22 · provider: Groq" }

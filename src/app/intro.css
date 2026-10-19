@@ -1,0 +1,43 @@
+/* "V Groups presents FreeToken" title card (intro.tsx), about 7.5 s:
+     0.0–3.6  V Groups banner: fades up out of black, slow push-in, light sweep; "presents" settles by 2.6
+     3.6–4.6  crossfade to FreeToken
+     4.2–5.8  mark, name and tagline arrive one after another, then hold
+     7.1–7.8  fade into the page (intro.tsx starts it; keep DURATION in step with these times)
+   V-Run's quicker launch intro has its own copy in desktop/src/renderer/styles.css. */
+.vg-seen .vg-intro { display: none; }
+.vg-intro { --ease: cubic-bezier(.22, .61, .36, 1); position: fixed; inset: 0; z-index: 9999; background: #04060c; overflow: hidden; cursor: pointer; }
+.vg-intro.vg-leave { animation: vg-out .7s ease-in-out forwards; pointer-events: none; }
+.vg-stage { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+/* act 1: V Groups */
+.vg-group { animation: vg-stage1 4.6s var(--ease) both; }
+.vg-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation: vg-zoom 4.6s var(--ease) both; }
+.vg-sweep { position: absolute; inset: 0; background: linear-gradient(105deg, transparent 35%, rgba(140, 220, 255, .16) 50%, transparent 65%); background-size: 250% 100%; mix-blend-mode: screen; animation: vg-sweep 2.4s ease-in-out .9s both; }
+.vg-presents { position: absolute; bottom: 20%; left: 0; right: 0; padding-left: .8em; text-align: center; font: 500 clamp(14px, 1.6vw, 22px)/1 var(--font-display, "Segoe UI"), system-ui, sans-serif; letter-spacing: .8em; color: #bfe9ff; text-shadow: 0 0 18px #3ac8ff99; animation: vg-word 1.4s var(--ease) 1.2s both; }
+
+/* act 2: FreeToken */
+.vg-product { opacity: 0; gap: 16px; animation: vg-stage2 1.4s var(--ease) 3.6s both; }
+.vg-glow { position: absolute; width: 64vmin; height: 64vmin; border-radius: 50%; background: radial-gradient(circle, #3ad1ff38, #7c4dff20 45%, transparent 70%); filter: blur(12px); animation: vg-pulse 3s var(--ease) 3.8s both, vg-breathe 3.2s ease-in-out 6.8s infinite; }
+.vg-mark { position: relative; width: clamp(110px, 18vmin, 180px); height: auto; border-radius: 22%; box-shadow: 0 0 60px #3ad1ff55, 0 20px 60px #000c; animation: vg-pop 1.5s cubic-bezier(.2, .8, .25, 1.08) 4.2s both; }
+.vg-name { position: relative; font: 700 clamp(34px, 6vw, 68px)/1 var(--font-display, "Segoe UI"), system-ui, sans-serif; letter-spacing: -.02em; background: linear-gradient(90deg, #7ef0ff, #a78bfa 55%, #7ef0ff); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 0 24px #3ad1ff66); animation: vg-word 1.5s var(--ease) 4.9s both, vg-shine 3.5s linear 4.9s infinite; }
+.vg-tag { position: relative; color: #9fb3c8; letter-spacing: .3em; text-transform: uppercase; font-size: clamp(10px, 1.1vw, 13px); animation: vg-word 1.4s var(--ease) 5.6s both; }
+.vg-banner { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation: vg-zoom 2.2s ease-out 2.2s both; }
+
+.vg-skip { position: absolute; right: 20px; bottom: 18px; background: #ffffff10; color: #cfe7ff; border: 1px solid #ffffff22; border-radius: 999px; padding: 6px 14px; font-size: 12px; cursor: pointer; backdrop-filter: blur(6px); opacity: 0; animation: vg-fade .8s ease 1s forwards; }
+.vg-skip:hover { background: #ffffff22; }
+
+@keyframes vg-out { to { opacity: 0; transform: scale(1.02); filter: blur(3px); } }
+@keyframes vg-fade { to { opacity: 1; } }
+@keyframes vg-zoom { 0% { transform: scale(1.14); filter: brightness(0) blur(4px); } 25% { filter: brightness(.7) blur(1px); } 100% { transform: scale(1.02); filter: none; } }
+@keyframes vg-sweep { from { background-position: 120% 0; } to { background-position: -60% 0; } }
+@keyframes vg-word { from { opacity: 0; transform: translateY(12px); filter: blur(8px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes vg-stage1 { 0%, 78% { opacity: 1; transform: none; } 100% { opacity: 0; transform: scale(1.05); } }
+@keyframes vg-stage2 { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vg-pop { from { opacity: 0; transform: scale(.7) rotate(-5deg); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes vg-pulse { from { opacity: 0; transform: scale(.5); } 60% { opacity: 1; } to { opacity: .85; transform: scale(1); } }
+@keyframes vg-breathe { 50% { opacity: .6; transform: scale(1.06); } }
+@keyframes vg-shine { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .vg-group { display: none; }
+  .vg-product, .vg-mark, .vg-name, .vg-tag, .vg-glow, .vg-banner, .vg-skip { animation: none; opacity: 1; }
+}

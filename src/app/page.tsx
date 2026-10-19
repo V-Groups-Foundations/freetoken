@@ -23,7 +23,7 @@ export default function Home() {
           </p>
           <div className="flex flex-wrap gap-3">
             <Link href="/connect" className="btn btn-primary">Connect your providers</Link>
-            <Link href="/projects" className="btn btn-secondary">Open a project</Link>
+            <Link href="/v-run" className="btn btn-secondary">Open a project</Link>
           </div>
           <p className="faint text-sm">Keys are encrypted and only ever used for your own requests.</p>
         </div>
@@ -55,7 +55,7 @@ export default function Home() {
         {[
           { t: 'Automatic routing', d: 'Each request goes to a provider with free quota left, and falls back the moment one is rate-limited.' },
           { t: 'One API & terminal', d: 'A personal OpenAI-compatible endpoint plus a terminal client — point any tool at your pool.' },
-          { t: 'Projects that remember', d: 'A project keeps one conversation that the chat, the web terminal, and your desktop all share.' },
+          { t: 'Projects that remember', d: 'Start a project here, then continue it in V-Run, the desktop coding app — in its own folder, with the whole conversation.' },
         ].map((f) => (
           <div key={f.t} className="card card-pad">
             <h3 className="font-semibold">{f.t}</h3>
@@ -63,6 +63,11 @@ export default function Home() {
           </div>
         ))}
       </section>
+      <footer className="flex items-center justify-center gap-2 pb-2 pt-4 text-xs text-[var(--faint)]">
+        {/* eslint-disable-next-line @next/next/no-img-element -- brand art */}
+        <img src="/brand/vgroups.jpg" alt="" width={44} height={24} className="h-6 w-11 rounded object-cover opacity-80" />
+        FreeToken and V-Run are V Groups products
+      </footer>
     </div>
   );
 }

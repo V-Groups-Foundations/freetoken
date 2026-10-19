@@ -18,8 +18,17 @@ export async function recordUsage(db: DB, e: UsageEvent) {
   await db.insert(usageEvents).values(e);
 }
 
-export async function usageToday(db: DB, userId: string, now = new Date()) {
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+/** Start of the current usage day (00:00 UTC). */
+export const dayStart = (now: Date) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+/** Start of the current calendar month (UTC). */
+export const monthStart = (now: Date) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+
+export function usageToday(db: DB, userId: string, now = new Date()) {
+  return usageSince(db, userId, dayStart(now));
+}
+
+/** Successful requests and tokens per provider/model since `start`. */
+export async function usageSince(db: DB, userId: string, start: Date) {
   const rows = await db
     .select({
       provider: usageEvents.provider,

@@ -52,6 +52,39 @@ describe('service registry', () => {
     expect(bad).toEqual({ ok: false, message: 'The service rejected this key.' });
   });
 
+  describe('ElevenLabs key validation', () => {
+    const eleven = () => getService('elevenlabs')!;
+
+    it('rejects a value that is not an sk_ secret key (the key ID mistake)', async () => {
+      const r = await eleven().validate('abcd-1234-not-a-key', mock(ok));
+      expect(r).toMatchObject({ ok: false });
+      if (!r.ok) expect(r.message).toMatch(/sk_/);
+    });
+
+    it('accepts a working sk_ key', async () => {
+      const r = await eleven().validate('sk_good', mock(() => new Response('{}', { status: 200 })));
+      expect(r.ok).toBe(true);
+    });
+
+    it('rejects only when ElevenLabs says the key is invalid', async () => {
+      const r = await eleven().validate('sk_bad', mock(() => new Response(JSON.stringify({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }), { status: 401 })));
+      expect(r).toMatchObject({ ok: false });
+      if (!r.ok) expect(r.message).toMatch(/rejected this key/);
+    });
+
+    it('saves-with-note when a scoped key lacks the models permission', async () => {
+      const r = await eleven().validate('sk_scoped', mock(() => new Response(JSON.stringify({ detail: { status: 'missing_permissions', message: 'Missing permissions' } }), { status: 401 })));
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.note).toMatch(/could not be fully verified/i);
+    });
+
+    it('saves-with-note when ElevenLabs is unreachable', async () => {
+      const r = await eleven().validate('sk_x', mock(() => { throw new Error('offline'); }));
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.note).toMatch(/unreachable/i);
+    });
+  });
+
   it('rejects an OCR.space key only on an explicit key error', async () => {
     const good = await getService('ocrspace')!.validate('k', mock(() => new Response(JSON.stringify({ IsErroredOnProcessing: false, ParsedResults: [] }), { status: 200 })));
     expect(good.ok).toBe(true);

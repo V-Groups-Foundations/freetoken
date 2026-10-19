@@ -48,3 +48,21 @@ export async function addMessage(
   const [row] = await db.insert(projectMessages).values({ projectId, role: m.role, content: m.content, provider: m.provider ?? null }).returning();
   return row;
 }
+
+/**
+ * Append finished turns from another client (V-Run continues a project on the desktop and writes its
+ * turns back so the web chat shows them). Returns null when the project isn't the user's.
+ */
+export async function appendMessages(
+  db: DB,
+  userId: string,
+  projectId: string,
+  msgs: { role: 'user' | 'assistant'; content: string; provider?: string | null }[],
+) {
+  const project = await getProject(db, userId, projectId);
+  if (!project) return null;
+  const rows = [];
+  for (const m of msgs) rows.push(await addMessage(db, projectId, m));
+  await touchProject(db, projectId);
+  return rows;
+}

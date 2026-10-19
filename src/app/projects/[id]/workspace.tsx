@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { toast } from '../../fx';
+import { ContinueInVRun, useInVRun } from '../../v-run/launch';
 
 type Msg = { role: 'user' | 'assistant'; content: string; provider?: string };
 type Model = { id: string; name: string };
@@ -19,17 +19,18 @@ function provider(id: string | undefined) {
 }
 
 export function Workspace({
-  projectId, initialModel, models, initialMessages,
+  projectId, projectName, initialModel, models, initialMessages,
 }: {
   projectId: string;
+  projectName: string;
   initialModel: string;
   models: Model[];
   initialMessages: Msg[];
 }) {
-  const [tab, setTab] = useState<'chat' | 'terminal'>('chat');
   const [model, setModel] = useState(initialModel);
   const [msgs, setMsgs] = useState<Msg[]>(initialMessages);
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState<'chat' | 'v-run'>('chat');
   const [error, setError] = useState<string | null>(null);
 
   async function changeModel(next: string) {
@@ -95,14 +96,11 @@ export function Workspace({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5 text-sm">
-          {(['chat', 'terminal'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`rounded-md px-3 py-1.5 capitalize ${tab === t ? 'bg-[var(--brand)] text-white' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
-            >
-              {t}
+        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5 text-sm" role="tablist" aria-label="Project view">
+          {([['chat', 'Chat'], ['v-run', '▶ V-Run']] as const).map(([v, label]) => (
+            <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}
+              className={`rounded-md px-3 py-1.5 ${view === v ? 'bg-[var(--brand)] text-white' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}>
+              {label}
             </button>
           ))}
         </div>
@@ -126,9 +124,9 @@ export function Workspace({
         </label>
       </div>
 
-      {tab === 'chat'
+      {view === 'chat'
         ? <ChatPane msgs={msgs} busy={busy} onSend={send} />
-        : <TerminalPane projectId={projectId} msgs={msgs} busy={busy} model={model} onSend={send} />}
+        : <VRunPane projectId={projectId} projectName={projectName} msgs={msgs} busy={busy} onChat={() => setView('chat')} />}
 
       {error && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--accent-tint)] px-4 py-3 text-sm text-[var(--danger)]">
@@ -186,7 +184,7 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
       <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
         {msgs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-[var(--muted)]">
-            Start the conversation. Whatever you say here is also visible in the Terminal tab.
+            Start the conversation here, then continue it in V-Run — it picks up the whole thread.
           </div>
         ) : (
           <div className="flex flex-col gap-6 p-5">
@@ -223,52 +221,35 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
   );
 }
 
-function TerminalPane({ projectId, msgs, busy, model, onSend }: { projectId: string; msgs: Msg[]; busy: boolean; model: string; onSend: (t: string) => void }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
-  const command = `freetoken --project ${projectId}`;
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [msgs]);
-
-  async function copyCommand() {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      toast('Command copied');
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  }
-
+/**
+ * The project's V-Run side: what the desktop app gets (folder + this conversation) and the button that
+ * hands it over. V-Run writes its turns back, so they show up in Chat afterwards.
+ */
+function VRunPane({ projectId, projectName, msgs, busy, onChat }: { projectId: string; projectName: string; msgs: Msg[]; busy: boolean; onChat: () => void }) {
+  const inVRun = useInVRun();
+  const fromVRun = msgs.filter((m) => m.provider === 'v-run').length;
+  const folder = `Desktop/FreeToken/${projectName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/^[.\s-]+|[.\s-]+$/g, '').trim() || 'project'}`;
   return (
-    <div className="flex h-[calc(100vh-15rem)] flex-col">
-      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
-        <span className="text-[var(--muted)]">Open this project in your own terminal:</span>
-        <code className="rounded bg-[#0f1320] px-2 py-1 font-mono text-xs text-[#cdd3e0]">{command}</code>
-        <button onClick={copyCommand} className="rounded-md bg-[var(--brand)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--brand-ink)]">
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-        <span className="text-xs text-[var(--faint)]">same saved conversation as here</span>
+    <div className="flex h-[calc(100vh-15rem)] flex-col items-center justify-center gap-6 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 text-center">
+      {/* eslint-disable-next-line @next/next/no-img-element -- brand art */}
+      <img src="/brand/vrun.jpg" alt="V-Run" width={360} height={196} className="w-[min(360px,80%)] rounded-2xl shadow-[0_10px_40px_#0008]" />
+      <div className="max-w-lg space-y-2">
+        <h2 className="text-lg font-semibold">Build <span className="text-[var(--brand)]">{projectName}</span> in V-Run</h2>
+        <p className="muted text-sm">
+          V-Run opens the project folder and its agent picks up this conversation — it can then write the code,
+          run your app and fix what it sees. Everything you do there is saved back to Chat here.
+        </p>
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl bg-[#0f1320] p-4 font-mono text-[13px] leading-relaxed text-[#cdd3e0]">
-        <div className="text-[#5b647e]">freetoken · {model} · shares memory with the Chat tab</div>
-        {msgs.map((m, i) => {
-          if (m.role === 'user') {
-            return <div key={i} className="mt-3"><span className="text-[#67e8f9]">› </span><span className="text-[#e6e9f0]">{m.content}</span></div>;
-          }
-          const p = provider(m.provider);
-          const streaming = busy && i === msgs.length - 1;
-          return (
-            <div key={i} className="mt-1">
-              <span className="text-[#5b647e]">  ({p.name}{p.model ? '/' + p.model : ''})</span>
-              <div className={`whitespace-pre-wrap text-[#cdd3e0] ${streaming && !m.content ? 'ft-caret' : ''}`}>{m.content}{streaming && m.content ? <span className="ft-caret" /> : null}</div>
-            </div>
-          );
-        })}
-      </div>
-      <Composer busy={busy} onSend={onSend} placeholder="Type a command or message, then Enter…" />
+      <ul className="grid w-full max-w-lg gap-2 text-left text-sm sm:grid-cols-3">
+        <li className="card card-pad"><div className="muted text-xs">Conversation</div><div className="font-medium">{msgs.length} message{msgs.length === 1 ? '' : 's'}</div></li>
+        <li className="card card-pad"><div className="muted text-xs">Folder</div><div className="truncate font-mono text-xs" title={folder}>{folder}</div></li>
+        <li className="card card-pad"><div className="muted text-xs">From V-Run so far</div><div className="font-medium">{fromVRun} repl{fromVRun === 1 ? 'y' : 'ies'}</div></li>
+      </ul>
+      <ContinueInVRun projectId={projectId} projectName={projectName} disabled={busy} big />
+      <p className="text-xs text-[var(--faint)]">
+        {inVRun ? 'You are in V-Run: the project opens right here.' : 'Opens the V-Run desktop app (start it once with npm run desktop so your browser knows it).'}
+        {' '}<button onClick={onChat} className="underline">Back to chat</button>
+      </p>
     </div>
   );
 }

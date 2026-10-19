@@ -4,7 +4,10 @@ import { sessionUserId } from '@/lib/session';
 import { getDeps } from '@/server/deps';
 import { synthesizeTTS, TTS_SERVICES } from '@/tts/synthesize';
 
-const bodySchema = z.object({ text: z.string().trim().min(1).max(5000) });
+const bodySchema = z.object({
+  text: z.string().trim().min(1).max(5000),
+  voiceId: z.string().trim().min(1).max(200).optional(),
+});
 
 export async function POST(req: Request) {
   const uid = await sessionUserId();
@@ -21,7 +24,7 @@ export async function POST(req: Request) {
     return Response.json({ error: { message: 'No text-to-speech service connected.', code: 'no_tts' } }, { status: 400 });
   }
 
-  const result = await synthesizeTTS(serviceId, creds.get(serviceId)!.creds.key, parsed.data.text, deps.fetchImpl);
+  const result = await synthesizeTTS(serviceId, creds.get(serviceId)!.creds.key, parsed.data.text, deps.fetchImpl, parsed.data.voiceId);
   if (!result.ok) return Response.json({ error: { message: result.message } }, { status: result.status || 502 });
   return Response.json({ dataUrl: result.dataUrl, service: serviceId });
 }

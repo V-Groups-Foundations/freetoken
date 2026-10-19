@@ -7,10 +7,24 @@ import { PageHeader } from '../page-header';
 function relReset(iso: string | null, now: number): string {
   if (!iso) return '';
   const ms = new Date(iso).getTime() - now;
-  if (ms <= 0) return 'resetting';
+  if (ms <= 0) return '';
   const m = Math.round(ms / 60000);
   if (m < 60) return `resets in ${m}m`;
   return `resets in ${Math.round(m / 60)}h`;
+}
+
+/** Clock time in the viewer's zone; empty until mounted so server and client markup match. */
+function clock(iso: string | null, now: number): string {
+  return iso && now ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+}
+
+function sourceNote(m: ModelUsage, now: number): string {
+  if (m.source === 'estimate') return ' · estimated';
+  if (m.source === 'shared') return ' · counts toward the shared limit';
+  if (m.source !== 'provider') return '';
+  // a live number goes stale between requests; say when it was read
+  const age = m.asOf && now ? now - new Date(m.asOf).getTime() : 0;
+  return age > 5 * 60_000 ? ` · live, as of ${clock(m.asOf, now)}` : ' · live';
 }
 
 function Bar({ used, limit }: { used: number; limit: number }) {
@@ -38,7 +52,7 @@ function ModelRow({ m, now }: { m: ModelUsage; now: number }) {
       </div>
       {known && <Bar used={m.limitRequests! - m.remainingRequests!} limit={m.limitRequests!} />}
       <div className="flex justify-between text-xs text-[var(--faint)]">
-        <span>{m.tokens.toLocaleString()} tokens today{m.source === 'estimate' ? ' · estimated' : m.source === 'provider' ? ' · live' : ''}</span>
+        <span>{m.tokens.toLocaleString()} tokens today{sourceNote(m, now)}</span>
         <span>{relReset(m.resetAt, now)}</span>
       </div>
     </div>
@@ -63,10 +77,11 @@ function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
       {p.account && (
         <div className="space-y-1 rounded bg-[var(--surface-2)] p-2 text-sm">
           <div className="flex justify-between">
-            <span>{p.account.label}</span>
+            <span>{p.account.label}{p.account.source === 'estimate' && <span className="text-xs text-[var(--faint)]"> · estimated</span>}</span>
             <span className="tabular-nums">{p.account.remaining.toLocaleString()} / {p.account.limit.toLocaleString()} left</span>
           </div>
           <Bar used={p.account.used} limit={p.account.limit} />
+          <div className="text-xs text-[var(--faint)]">{p.account.note}</div>
         </div>
       )}
       <div className="divide-y divide-[var(--border)]">
@@ -121,15 +136,17 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
         <div className="card card-pad">
           <div className="faint text-xs font-medium">Requests today</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.requests.toLocaleString()}</div>
+          <div className="faint text-xs">successful, since {clock(data.dayStartedAt, now) || 'midnight UTC'}</div>
         </div>
         <div className="card card-pad">
           <div className="faint text-xs font-medium">Tokens today</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.tokens.toLocaleString()}</div>
+          <div className="faint text-xs">prompt + completion</div>
         </div>
         <div className="card card-pad">
           <div className="faint text-xs font-medium">Free requests left</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">≈ {data.knownRemainingRequests.toLocaleString()}</div>
-          <div className="faint text-xs">across models with known limits</div>
+          <div className="faint text-xs">shared account limits counted once · providers without a published limit not included</div>
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">

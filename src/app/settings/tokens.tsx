@@ -40,7 +40,7 @@ export function Tokens() {
       {fresh && (
         <div className="rounded-xl bg-[var(--brand-tint)] p-3 text-sm text-[var(--brand-ink)]">
           Copy this token now — it won’t be shown again:
-          <code className="mt-1.5 block break-all rounded-lg bg-white p-2 font-mono text-xs">{fresh}</code>
+          <code className="mt-1.5 block break-all rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] p-2 font-mono text-xs">{fresh}</code>
         </div>
       )}
       <form onSubmit={create} className="flex gap-2">

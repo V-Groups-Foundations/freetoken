@@ -1,0 +1,130 @@
+// V-Run ⇄ FreeToken: deep links, continuing a project (folder, transcript, seeded agent), writing turns
+// back, plus the runner/agent fixes for quiet servers. Uses the fake FreeToken server; no Electron.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { startFakeOpenAI } from "./fake-openai";
+
+async function main() {
+  const fake = await startFakeOpenAI("ft_test");
+  const link = await import("../src/main/freetoken-link");
+  const ai = await import("../src/main/ai");
+  const ftAi = await import("../src/main/ai-freetoken");
+  const runner = await import("../src/main/runner");
+  const ws = await import("../src/main/workspace");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-link-"));
+
+  let failures = 0;
+  async function check(name: string, fn: () => unknown | Promise<unknown>) {
+    try { const r = await fn(); if (r === false) throw new Error("returned false"); console.log(`PASS  ${name}`); }
+    catch (e) { failures++; console.log(`FAIL  ${name}\n      ${(e as Error).message}`); }
+  }
+
+  await check("vrun:// links: only project/<id> with a safe id is accepted", () =>
+    link.parseDeepLink("vrun://open")?.kind === "open" && link.parseDeepLink("vrun://open/x") === null
+    && (link.parseDeepLink("vrun://project/abc-123") as { id: string })?.id === "abc-123"
+    && (link.parseDeepLink("vrun://project/abc-123/") as { id: string })?.id === "abc-123"
+    && link.parseDeepLink("vrun://project/../etc") === null
+    && link.parseDeepLink("vrun://evil/abc") === null
+    && link.parseDeepLink("https://project/abc") === null);
+
+  await check("folder names match the FreeToken CLI", () =>
+    link.sanitizeFolderName('My: "App"?') === "My- -App" && link.sanitizeFolderName("...") === "project");
+
+  fake.projects.set("p1", { name: "Todo app", model: "auto-smart", messages: [
+    { role: "user", content: "Plan a todo app" }, { role: "assistant", content: "Use React + a JSON file.", provider: "groq/llama" },
+    { role: "user", content: "Also add dark mode" },
+  ] });
+
+  let project: Awaited<ReturnType<typeof link.loadProject>>;
+  await check("loadProject fetches the conversation and sets up Desktop/FreeToken/<name>", async () => {
+    project = await link.loadProject(fake.url, "ft_test", "p1", { root: tmp });
+    const meta = JSON.parse(fs.readFileSync(path.join(project.dir, "project.json"), "utf8"));
+    const transcript = fs.readFileSync(path.join(project.dir, "transcript.md"), "utf8");
+    return project.dir === path.join(tmp, "Todo app") && meta.id === "p1" && project.messages.length === 3
+      && transcript.includes("**You:** Plan a todo app") && transcript.includes("**groq/llama:** Use React");
+  });
+
+  await check("bad token and unknown project give clear errors", async () => {
+    const bad = await link.loadProject(fake.url, "ft_wrong", "p1", { root: tmp }).catch((e: Error) => e.message);
+    const missing = await link.loadProject(fake.url, "ft_test", "nope", { root: tmp }).catch((e: Error) => e.message);
+    const none = await link.loadProject(fake.url, "", "p1", { root: tmp }).catch((e: Error) => e.message);
+    return String(bad).includes("didn't accept") && String(missing).includes("doesn't exist") && String(none).includes("Connect V-Run");
+  });
+
+  await check("seeded session: strictly alternating, starts with the intro, ends on the assistant", () => {
+    const turns = ai.seedSession("seed", project.messages, "[from FreeToken]");
+    ftAi.seedFreeToken("seed", turns);
+    const roles = turns.map((t) => t.role).join(",");
+    return roles === "user,assistant,user,assistant" && turns[0].content.startsWith("[from FreeToken]\n\nPlan a todo app")
+      && turns[3].content === "(no reply yet)" && ai.getSession("seed").messages.length === 4;
+  });
+
+  await check("the next FreeToken request carries the whole project conversation", async () => {
+    ws.setRoot(project.dir);
+    ftAi.configureFreeToken({ url: () => fake.url, token: () => "ft_test", model: () => "auto-smart" });
+    const done = new Promise<void>((r) => ftAi.chatFreeToken({ sessionId: "seed", mode: "ask", text: "what did we decide?" }, (e) => e.type === "done" && r()));
+    await done;
+    const sent = JSON.stringify(fake.requests.at(-1).messages);
+    return sent.includes("Use React + a JSON file.") && sent.includes("Also add dark mode") && sent.includes("what did we decide?");
+  });
+
+  await check("syncTurn appends the V-Run turn to the project", async () => {
+    await link.syncTurn(fake.url, "ft_test", "p1", "add dark mode now", "Added a theme toggle.");
+    const m = fake.projects.get("p1")!.messages.slice(-2);
+    return m[0].content === "add dark mode now" && m[1].role === "assistant" && m[1].provider === "v-run";
+  });
+
+  await check("V.md memory: project + personal files, dedup, Memory section, CRLF kept, in the system prompt", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-home-"));
+    process.env.VRUN_HOME = home;
+    const mem = await import("../src/main/memory");
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-mem-"));
+    fs.writeFileSync(path.join(proj, "V.md"), "# Notes\r\n\r\n## Commands\r\n- npm test\r\n");
+    ws.setRoot(proj);
+    const a = await mem.remember("Use pnpm, never npm", "project");
+    const dup = await mem.remember("- use pnpm, never npm", "project");
+    await mem.remember("I like short answers", "user");
+    const doc = fs.readFileSync(path.join(proj, "V.md"), "utf8");
+    const status = await mem.memoryStatus();
+    const prompt = await ai.systemPrompt("agent");
+    const s = ai.getSession("mem");
+    const events: any[] = [];
+    const t = await ai.execTool(s, "remember", { fact: "Tests live in test/" }, (e) => events.push(e), "m1");
+    delete process.env.VRUN_HOME;
+    return a.added && !dup.added && doc.includes("\r\n## Memory\r\n- Use pnpm, never npm") && doc.includes("## Commands\r\n- npm test")
+      && fs.readFileSync(path.join(home, "V.md"), "utf8").includes("- I like short answers")
+      && status.project.entries === 2 && status.user.entries === 1
+      && prompt.includes("Use pnpm, never npm") && prompt.includes("I like short answers")
+      && t.summary === "Saved to V.md" && events.some((e) => e.type === "memory" && e.added)
+      && ai.READ_ONLY.has("remember");
+  });
+
+  await check("runner finds a server address printed without http:// (\"started on 0.0.0.0:8501\")", async () => {
+    ws.setRoot(tmp);
+    const urls: string[] = [];
+    runner.onRunEvent((e) => e.type === "url" && urls.push(e.url));
+    runner.startApp(`node -e "console.log('connecting to db at localhost:5432'); console.log('Server started on 0.0.0.0:8501'); setTimeout(() => {}, 4000)"`);
+    await runner.settle(6000);
+    runner.stopApp();
+    return urls[0] === "http://localhost:8501";
+  });
+
+  await check("app_output: quiet app gets advice, then polling is refused after 3 empty polls", async () => {
+    runner.startApp(`node -e "console.log('hi'); setTimeout(() => {}, 30000)"`);
+    for (let i = 0; i < 100 && !runner.appStatus().output.includes("hi"); i++) await new Promise((r) => setTimeout(r, 100));
+    const s = ai.getSession("poll");
+    const out = await ai.execTool(s, "app_output", {}, () => {}, "a1"); // has "hi"
+    const q1 = await ai.execTool(s, "app_output", { wait_seconds: 0.2 }, () => {}, "a2");
+    const q2 = await ai.execTool(s, "app_output", { wait_seconds: 0.2 }, () => {}, "a3");
+    const q3 = await ai.execTool(s, "app_output", { wait_seconds: 0.2 }, () => {}, "a4").then(() => "no error", (e: Error) => e.message);
+    runner.stopApp();
+    return out.content.includes("hi") && q1.summary === "No new output" && q2.content.includes("Polling again won't change that")
+      && q3.startsWith("Not polling again");
+  });
+
+  fake.close();
+  console.log(failures ? `\n${failures} failed` : "\nall V-Run ⇄ FreeToken checks passed");
+  process.exit(failures ? 1 : 0);
+}
+main();

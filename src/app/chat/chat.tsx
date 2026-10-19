@@ -284,8 +284,8 @@ export function Chat({
           {msgs.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-6 px-6 text-center">
               <div className="space-y-2">
-                {/* eslint-disable-next-line @next/next/no-img-element -- small static SVG logo */}
-                <img src="/logo.svg" alt="FreeToken" width={48} height={48} className="mx-auto h-12 w-12" />
+                {/* eslint-disable-next-line @next/next/no-img-element -- small static brand mark */}
+                <img src="/brand/freetoken.png" alt="FreeToken" width={48} height={48} className="mx-auto h-12 w-12 rounded-xl" />
 
                 <h1 className="text-2xl font-semibold tracking-tight">What can I help you with?</h1>
                 <p className="muted max-w-md">

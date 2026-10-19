@@ -44,8 +44,8 @@ export function ProjectList({ initial }: { initial: Project[] }) {
           <div className="grad flex h-12 w-12 items-center justify-center rounded-2xl text-xl text-white shadow-[var(--shadow-brand)]">✦</div>
           <h3 className="font-semibold">Start your first project</h3>
           <p className="muted max-w-sm text-sm">
-            A project gives you one conversation shared across its chat, web terminal, and a folder on your
-            desktop. Name it above to begin.
+            A project is one conversation you can start here and continue in V-Run, the desktop coding app,
+            inside its own folder. Name it above to begin.
           </p>
         </div>
       ) : (

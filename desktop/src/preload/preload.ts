@@ -1,0 +1,85 @@
+import { contextBridge, ipcRenderer } from "electron";
+
+type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+async function call<T = any>(ch: string, ...args: unknown[]): Promise<T> {
+  const r = (await ipcRenderer.invoke(ch, ...args)) as Result<T>;
+  if (!r.ok) throw new Error(r.error);
+  return r.value;
+}
+const on = (ch: string) => (fn: (payload: any) => void) => {
+  const h = (_e: unknown, p: unknown) => fn(p);
+  ipcRenderer.on(ch, h);
+  return () => { ipcRenderer.removeListener(ch, h); };
+};
+
+const api = {
+  pickFolder: () => call<string | null>("folder:pick"),
+  openFolder: (dir: string) => call<string>("folder:open", dir),
+  getFolder: () => call<{ root: string | null; recent: string[] }>("folder:get"),
+  list: (rel: string) => call("fs:list", rel),
+  read: (rel: string) => call<string>("fs:read", rel),
+  write: (rel: string, text: string) => call("fs:write", rel, text),
+  remove: (rel: string) => call("fs:delete", rel),
+  mkdir: (rel: string) => call("fs:mkdir", rel),
+  searchFiles: (q: string) => call<string[]>("search:files", q),
+  grep: (pattern: string, opts: object) => call("search:grep", pattern, opts),
+  reindex: () => call("index:run"),
+  indexStats: () => call("index:stats"),
+  indexStatus: () => call("index:status"),
+  chat: (req: object) => call("ai:chat", req),
+  approve: (sid: string, toolId: string, ok: boolean) => call("ai:approve", sid, toolId, ok),
+  stop: (sid: string) => call("ai:stop", sid),
+  resetChat: (sid: string) => call("ai:reset", sid),
+  pending: (sid: string) => call<string[]>("ai:pending", sid),
+  rewind: (sid: string, index: number) => call<string[]>("ai:rewind", sid, index),
+  accept: (sid: string, rel: string) => call("ai:accept", sid, rel),
+  reject: (sid: string, rel: string) => call("ai:reject", sid, rel),
+  original: (sid: string, rel: string) => call<string | null | undefined>("ai:original", sid, rel),
+  cmdK: (req: object) => call<{ replacement: string; original: string }>("ai:cmdk", req),
+  models: () => call<string[]>("ai:models"),
+  complete: (id: string, req: object) => call<string>("ai:complete", id, req),
+  getSettings: () => call("settings:get"),
+  setSettings: (patch: object) => call("settings:set", patch),
+  termRun: (id: string, command: string) => call("term:run", id, command),
+  termKill: (id: string) => call("term:kill", id),
+  appStart: (command: string) => call("app:start", command),
+  appStop: () => call("app:stop"),
+  appInput: (text: string) => call("app:input", text),
+  appStatus: () => call("app:status"),
+  previewOpen: (url: string) => call("preview:open", url),
+  previewReload: () => call("preview:reload"),
+  previewExternal: () => call("preview:external"),
+  previewBounds: (r: object | null) => call("preview:bounds", r),
+  ftOpen: (route?: string) => call("ft:open", route),
+  memoryStatus: () => call("memory:status"),
+  remember: (fact: string, scope: string) => call("memory:remember", fact, scope),
+  openMemory: (scope: string) => call("memory:open", scope),
+  ftHub: () => call("ft:hub"),
+  ftStartServer: () => call("ft:start-server"),
+  ftCreateProject: (name: string) => call("ft:create-project", name),
+  ftUseModel: (model: string) => call("ft:use-model", model),
+  ftWebsite: (route?: string) => call("ft:website", route),
+  ftOpenProject: (id: string) => call("ft:open-project", id),
+  ftNav: (what: string) => call("ft:nav", what),
+  ftBounds: (r: object | null) => call("ft:bounds", r),
+  ftTakeProject: () => call("ft:take-project"),
+  ftContinue: (sid: string, projectId: string) => call("ft:continue", sid, projectId),
+  onAgentEvent: on("agent-event"),
+  onFsChanged: on("fs-changed"),
+  onIndexStatus: on("index-status"),
+  onFolderOpened: on("folder-opened"),
+  onTermData: on("term-data"),
+  onTermExit: on("term-exit"),
+  onAppEvent: on("app-event"),
+  onPreviewOpen: on("preview-open"),
+  onPreviewState: on("preview-state"),
+  onFtViewOpen: on("ft-view-open"),
+  onFtViewClose: on("ft-view-close"),
+  onFtViewState: on("ft-view-state"),
+  onFtViewError: on("ft-view-error"),
+  onFtProject: on("ft-project"),
+  onFtServer: on("ft-server"),
+  onSettingsChanged: on("settings-changed"),
+};
+contextBridge.exposeInMainWorld("api", api);
+export type Api = typeof api;

@@ -1,0 +1,8 @@
+name: ✨ Feature or provider request
+description: An idea, or a free AI provider you'd like supported
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes: { label: What would you like?, description: For a provider, link its free tier. }
+    validations: { required: true }

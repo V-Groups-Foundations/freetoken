@@ -51,6 +51,49 @@ async function checkWith(run: () => Promise<Response>): Promise<ServiceCheck> {
   return { ok: true, note: `Key saved, but the service returned ${res.status}, so it could not be fully verified.` };
 }
 
+/**
+ * ElevenLabs keys are scoped: a key created only for "Text to Speech" legitimately gets a 401 on
+ * /v1/models, so a blanket 401-rejection would wrongly reject a working key. Instead we reject only
+ * when ElevenLabs says the key value itself is invalid (or it isn't an sk_ secret key), and otherwise
+ * save it with a note — the key may still work for speech, and a real problem surfaces at playback.
+ */
+async function validateElevenLabs(key: string, fetchImpl: FetchFn): Promise<ServiceCheck> {
+  const trimmed = key.trim();
+  if (!trimmed.startsWith('sk_')) {
+    return {
+      ok: false,
+      message:
+        'That looks like an API key ID, not the key itself. Paste the secret key that starts with "sk_" — it’s shown once when you create or rotate the key.',
+    };
+  }
+  let res: Response;
+  try {
+    res = await timedFetch('https://api.elevenlabs.io/v1/models', { method: 'GET', headers: { 'xi-api-key': trimmed } }, fetchImpl);
+  } catch {
+    return { ok: true, note: 'Key saved, but ElevenLabs was unreachable, so it could not be fully verified. It should still work.' };
+  }
+  if (res.ok) {
+    await res.body?.cancel();
+    return { ok: true };
+  }
+  if (res.status === 429) {
+    await res.body?.cancel();
+    return { ok: true, note: 'Key works but is currently rate-limited.' };
+  }
+  // Read ElevenLabs' reason to tell a genuinely bad key from a merely under-scoped one.
+  const data = (await res.json().catch(() => null)) as { detail?: { status?: string; message?: string } } | null;
+  const status = data?.detail?.status ?? '';
+  const message = data?.detail?.message ?? '';
+  if (status === 'invalid_api_key' || /invalid api key/i.test(message)) {
+    return { ok: false, message: 'ElevenLabs rejected this key. Create a new key and paste the secret value that starts with "sk_".' };
+  }
+  const reason = message || status || `HTTP ${res.status}`;
+  return {
+    ok: true,
+    note: `Key saved, but it could not be fully verified (${reason}). If playback fails, recreate the key with the "Text to Speech" and "Voices" permissions enabled.`,
+  };
+}
+
 export const SERVICES: ServiceDef[] = [
   {
     id: 'tavily',
@@ -172,11 +215,7 @@ export const SERVICES: ServiceDef[] = [
     ],
     freeTier: '10,000 credits / month',
     note: 'When connected, "Listen" uses ElevenLabs’ premium voices instead of your browser’s.',
-    // /v1/models works for any valid key; /v1/user needs a "User" permission many scoped keys omit.
-    validate: (key, fetchImpl = fetch) =>
-      checkWith(() =>
-        timedFetch('https://api.elevenlabs.io/v1/models', { method: 'GET', headers: { 'xi-api-key': key } }, fetchImpl),
-      ),
+    validate: (key, fetchImpl = fetch) => validateElevenLabs(key, fetchImpl),
   },
   {
     id: 'googletts',

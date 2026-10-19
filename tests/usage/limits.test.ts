@@ -94,8 +94,58 @@ describe('getUsageSummary', () => {
     const s = await getUsageSummary(userId, { ...deps(f.fn), kv });
     const or = s.providers.find((p) => p.provider === 'openrouter')!;
     expect(or.coolingUntil).toBeInstanceOf(Date);
-    expect(or.account).toEqual({ label: 'Free-model requests today', used: 12, limit: 50, remaining: 38 });
+    expect(or.account).toMatchObject({ label: 'Free-model requests today', used: 12, limit: 50, remaining: 38, period: 'day', source: 'provider' });
+    expect(s.knownRemainingRequests).toBe(38);
     expect(f.calls[0].auth).toBe('Bearer sk-or-mine');
+  });
+
+  it('counts a shared account pool once, not once per model', async () => {
+    const { models, usageEvents } = await import('@/db/schema');
+    await db.insert(models).values([
+      { provider: 'openrouter', modelId: 'a:free', displayName: 'A', tier: 'smart', priority: 1, contextWindow: 1000, supportsTools: false, rpd: 50 },
+      { provider: 'openrouter', modelId: 'b:free', displayName: 'B', tier: 'smart', priority: 2, contextWindow: 1000, supportsTools: false, rpd: 50 },
+      { provider: 'openrouter', modelId: 'c:free', displayName: 'C', tier: 'fast', priority: 3, contextWindow: 1000, supportsTools: false, rpd: 50 },
+      { provider: 'cohere', modelId: 'cmd-a', displayName: 'Command A', tier: 'smart', priority: 1, contextWindow: 1000, supportsTools: true, rpd: 1000 },
+      { provider: 'cohere', modelId: 'cmd-r', displayName: 'Command R', tier: 'fast', priority: 2, contextWindow: 1000, supportsTools: true, rpd: 1000 },
+    ]);
+    await saveKey(db, userId, 'openrouter', 'sk-or-mine', null, TEST_VAULT_KEY);
+    await saveKey(db, userId, 'cohere', 'co-mine', null, TEST_VAULT_KEY);
+    const ev = { userId, source: 'api' as const, promptTokens: 1, completionTokens: 1, latencyMs: 1, status: 'ok' as const };
+    await recordUsage(db, { ...ev, provider: 'openrouter', modelId: 'a:free' });
+    await recordUsage(db, { ...ev, provider: 'openrouter', modelId: 'b:free' });
+    await recordUsage(db, { ...ev, provider: 'cohere', modelId: 'cmd-a' });
+    // cohere trial calls earlier this month still count against the monthly pool, but not "today"
+    const now = new Date();
+    const earlier = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 30));
+    const thisMonthNotToday = earlier < new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    await db.insert(usageEvents).values({ ...ev, provider: 'cohere', modelId: 'cmd-r', createdAt: earlier });
+
+    const s = await getUsageSummary(userId, deps()); // OpenRouter's /key fails → estimate from the ledger
+    const or = s.providers.find((p) => p.provider === 'openrouter')!;
+    expect(or.account).toMatchObject({ used: 2, limit: 50, remaining: 48, period: 'day', source: 'estimate' });
+    expect(or.models.every((m) => m.source === 'shared' && m.remainingRequests == null)).toBe(true);
+    const co = s.providers.find((p) => p.provider === 'cohere')!;
+    expect(co.account).toMatchObject({ used: 2, limit: 1000, remaining: 998, period: 'month' });
+    expect(s.knownRemainingRequests).toBe(48 + 998); // not 3×50 + 2×1000
+    expect(s.today.requests).toBe(thisMonthNotToday ? 3 : 4);
+  });
+
+  it('treats a live snapshot whose reset time has passed as refilled', async () => {
+    await saveKey(db, userId, 'groq', 'gsk_mine', null, TEST_VAULT_KEY);
+    const base = { limitTokens: null, remainingTokens: null, tokensResetAt: null };
+    await saveLimits(db, userId, 'groq', 'llama-70b', { ...base, limitRequests: 1000, remainingRequests: 983, requestsResetAt: new Date(Date.now() - 60_000) });
+    await saveLimits(db, userId, 'groq', 'llama-8b', { ...base, limitRequests: 1000, remainingRequests: 990, requestsResetAt: new Date(Date.now() + 60_000) });
+    const s = await getUsageSummary(userId, deps());
+    const groq = s.providers.find((p) => p.provider === 'groq')!;
+    const stale = groq.models.find((m) => m.modelId === 'llama-70b')!;
+    const fresh = groq.models.find((m) => m.modelId === 'llama-8b')!;
+    expect(stale).toMatchObject({ remainingRequests: 1000, resetAt: null, source: 'provider' });
+    expect(stale.asOf).not.toBeNull();
+    expect(fresh.remainingRequests).toBe(990);
+    expect(fresh.resetAt).not.toBeNull();
+    expect(s.knownRemainingRequests).toBe(1990);
+    const d = new Date(s.dayStartedAt);
+    expect(d.getUTCHours() + d.getUTCMinutes() + d.getUTCSeconds()).toBe(0);
   });
 
   it('only reports the signed-in user', async () => {
