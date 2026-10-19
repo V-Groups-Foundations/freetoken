@@ -40,6 +40,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="min-h-screen">
         <Intro />
         <div className="app-aurora" aria-hidden />
+        <div className="app-circuit" aria-hidden />
         <div className="flex min-h-screen">
           <aside className="sticky top-0 z-20 flex h-screen w-[4.5rem] shrink-0 flex-col gap-4 overflow-y-auto border-r border-[color-mix(in_srgb,var(--border-strong)_55%,transparent)] bg-[color-mix(in_srgb,var(--surface)_55%,transparent)] p-2 backdrop-blur-xl md:w-56 md:p-4">
             <Brand />

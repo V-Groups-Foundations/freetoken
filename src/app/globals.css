@@ -6,58 +6,58 @@
 }
 
 /* ========================================================================
-   AURORA GLASS — dark by default. A deep-slate canvas with a soft teal→blue
-   ambient field, frosted-glass panels floating above it with real depth and
-   a hairline top highlight. Motion is restrained and ambient, never bouncy.
-   Light is an opt-in variant (:root[data-theme="light"]).
+   V GROUPS NEON — the look of the FreeToken / V-Run / V Groups marks: a deep
+   navy canvas, neon cyan → violet signal (the logo strokes), soft glows and a
+   faint circuit-trace field. Frosted-glass panels float above it. Dark by
+   default; light is an opt-in variant (:root[data-theme="light"]).
    ======================================================================== */
 
 :root {
-  /* canvas */
-  --bg: #0b1016;
-  --bg-deep: #070b11;
-  --surface: #0e1623;
-  --surface-2: #131d2d;
-  --border: #1e2a3c;
-  --border-strong: #2d3f57;
+  /* canvas — deep navy, almost black */
+  --bg: #05070e;
+  --bg-deep: #030409;
+  --surface: #0a0f1d;
+  --surface-2: #10172b;
+  --border: #18223a;
+  --border-strong: #27365a;
 
   /* ink */
-  --ink: #e6eef8;
-  --muted: #93a4be;
-  --faint: #5d6e86;
+  --ink: #e8f1ff;
+  --muted: #94a3c4;
+  --faint: #5f6e8f;
 
-  /* brand — teal → blue signal (no purple) */
-  --teal: #2dd4bf;
-  --blue: #3b82f6;
-  --brand: #38bdf8;
-  --brand-ink: #7dd3fc;
-  --brand-tint: color-mix(in srgb, var(--brand) 16%, transparent);
+  /* brand — neon cyan → violet, like the logo strokes */
+  --teal: #22d3ee;   /* cyan  */
+  --blue: #8b5cf6;   /* violet */
+  --brand: #38d6ff;
+  --brand-ink: #8be9ff;
+  --brand-tint: color-mix(in srgb, var(--brand) 15%, transparent);
 
-  /* accent kept warm only for highlights, never the primary voice */
-  --accent: #5eead4;
-  --accent-ink: #99f6e4;
-  --accent-tint: color-mix(in srgb, var(--teal) 15%, transparent);
+  --accent: #a78bfa;
+  --accent-ink: #c4b5fd;
+  --accent-tint: color-mix(in srgb, var(--accent) 16%, transparent);
   --amber: #fbbf24;
 
   --danger: #fb7185;
   --danger-tint: color-mix(in srgb, #fb7185 16%, transparent);
   --ok: #34d399;
 
-  --grad: linear-gradient(120deg, #2dd4bf 0%, #38bdf8 50%, #3b82f6 100%);
+  --grad: linear-gradient(120deg, #22d3ee 0%, #60a5fa 48%, #a78bfa 100%);
+  --neon: 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent), 0 0 24px -4px color-mix(in srgb, var(--brand) 45%, transparent), 0 0 42px -10px color-mix(in srgb, var(--accent) 55%, transparent);
 
   --radius: 16px;
   --radius-sm: 11px;
 
   /* glass */
-  --glass: color-mix(in srgb, var(--surface) 64%, transparent);
-  --glass-2: color-mix(in srgb, var(--surface-2) 70%, transparent);
-  --glass-blur: blur(18px) saturate(1.35);
-  --glass-edge: inset 0 1px 0 color-mix(in srgb, #ffffff 10%, transparent);
+  --glass: color-mix(in srgb, var(--surface) 66%, transparent);
+  --glass-2: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  --glass-blur: blur(18px) saturate(1.4);
+  --glass-edge: inset 0 1px 0 color-mix(in srgb, #9be7ff 12%, transparent);
 
-  /* depth shadows — soft, far, dark */
-  --shadow-sm: 0 2px 8px -2px rgba(0, 0, 0, 0.5);
-  --shadow-md: 0 24px 60px -24px rgba(0, 0, 0, 0.72), 0 4px 14px -6px rgba(0, 0, 0, 0.5);
-  --shadow-brand: 0 10px 34px -12px color-mix(in srgb, var(--brand) 55%, transparent);
+  /* depth shadows — soft and far, with a neon tint on brand surfaces */
+  --shadow-sm: 0 2px 8px -2px rgba(0, 0, 0, 0.55);
+  --shadow-md: 0 24px 60px -24px rgba(0, 0, 0, 0.8), 0 4px 14px -6px rgba(0, 0, 0, 0.55);
+  --shadow-brand: 0 10px 34px -12px color-mix(in srgb, var(--brand) 60%, transparent), 0 0 26px -8px color-mix(in srgb, var(--accent) 55%, transparent);
 
   color-scheme: dark;
 }
@@ -75,18 +75,21 @@
   --muted: #566274;
   --faint: #8b98ac;
 
-  --brand: #2563eb;
-  --brand-ink: #1d4ed8;
+  --teal: #0891b2;
+  --blue: #7c3aed;
+  --brand: #0e7fb3;
+  --brand-ink: #0b5f86;
   --brand-tint: color-mix(in srgb, var(--brand) 12%, transparent);
-  --accent: #0d9488;
-  --accent-ink: #0f766e;
-  --accent-tint: color-mix(in srgb, #0d9488 12%, transparent);
+  --accent: #7c3aed;
+  --accent-ink: #6d28d9;
+  --accent-tint: color-mix(in srgb, #7c3aed 12%, transparent);
   --amber: #d97706;
   --danger: #dc2626;
   --danger-tint: color-mix(in srgb, #dc2626 10%, transparent);
   --ok: #059669;
 
-  --grad: linear-gradient(120deg, #0d9488 0%, #2563eb 55%, #1e40af 100%);
+  --grad: linear-gradient(120deg, #0891b2 0%, #4f46e5 55%, #7c3aed 100%);
+  --neon: 0 0 0 1px color-mix(in srgb, var(--brand) 25%, transparent), 0 8px 24px -10px color-mix(in srgb, var(--accent) 40%, transparent);
 
   --glass: color-mix(in srgb, #ffffff 70%, transparent);
   --glass-2: color-mix(in srgb, var(--surface-2) 78%, transparent);
@@ -116,9 +119,9 @@ body {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(48% 42% at 14% 2%, color-mix(in srgb, var(--teal) 26%, transparent), transparent 62%),
-    radial-gradient(44% 40% at 86% 8%, color-mix(in srgb, var(--blue) 24%, transparent), transparent 64%),
-    radial-gradient(60% 55% at 50% 108%, color-mix(in srgb, var(--brand) 16%, transparent), transparent 70%);
+    radial-gradient(48% 42% at 12% 0%, color-mix(in srgb, var(--teal) 24%, transparent), transparent 62%),
+    radial-gradient(44% 40% at 88% 6%, color-mix(in srgb, var(--blue) 26%, transparent), transparent 64%),
+    radial-gradient(60% 55% at 50% 110%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%);
   filter: blur(64px);
   opacity: 0.7;
 }
@@ -130,6 +133,16 @@ body {
   from { transform: translate3d(-1.5%, 0, 0) scale(1); }
   to { transform: translate3d(1.5%, 1.2%, 0) scale(1.06); }
 }
+
+/* Circuit traces — a faint field of lines and nodes, like the V Groups mark. */
+.app-circuit {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.55;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' fill='none' stroke='%2338d6ff' stroke-opacity='0.11' stroke-width='1'%3E%3Cpath d='M0 40h48l16 16h40l12-12h44M40 160v-36l16-16v-28l-14-14V0M120 0v30l-12 12v38l20 20v60M0 120h30l14-14h34l12 12h70'/%3E%3Cg fill='%2338d6ff' fill-opacity='0.22' stroke='none'%3E%3Ccircle cx='64' cy='56' r='2.2'/%3E%3Ccircle cx='116' cy='44' r='2.2'/%3E%3Ccircle cx='56' cy='108' r='2.2'/%3E%3Ccircle cx='108' cy='80' r='2.2'/%3E%3Ccircle cx='44' cy='106' r='2.2'/%3E%3Ccircle cx='90' cy='118' r='2.2'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  -webkit-mask-image: radial-gradient(120% 80% at 50% 0%, black 0%, transparent 75%);
+  mask-image: radial-gradient(120% 80% at 50% 0%, black 0%, transparent 75%);
+}
+:root[data-theme="light"] .app-circuit { opacity: 0.35; }
 
 /* Typography ------------------------------------------------------------- */
 .display { font-family: var(--font-display), var(--font-geist-sans), system-ui, sans-serif; }
@@ -153,8 +166,8 @@ body {
   letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
 }
 .eyebrow::before {
-  content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--brand);
-  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--brand) 80%, transparent);
+  content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--grad);
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--brand) 80%, transparent), 0 0 14px 2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 /* Accents ---------------------------------------------------------------- */
@@ -162,7 +175,22 @@ body {
 .grad-text {
   background: var(--grad);
   -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 0 18px color-mix(in srgb, var(--brand) 32%, transparent));
 }
+/* a neon frame: gradient hairline + soft cyan/violet glow (hero cards, highlights) */
+.neon-frame { position: relative; box-shadow: var(--neon); }
+.neon-frame::after {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: var(--grad); opacity: 0.55;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+/* a glowing brand mark */
+.mark-glow { filter: drop-shadow(0 0 22px color-mix(in srgb, var(--brand) 45%, transparent)) drop-shadow(0 0 40px color-mix(in srgb, var(--accent) 35%, transparent)); }
+@media (prefers-reduced-motion: no-preference) {
+  .mark-glow { animation: mark-breathe 5s ease-in-out infinite; }
+}
+@keyframes mark-breathe { 50% { filter: drop-shadow(0 0 30px color-mix(in srgb, var(--brand) 60%, transparent)) drop-shadow(0 0 54px color-mix(in srgb, var(--accent) 45%, transparent)); } }
 
 /* Glass surfaces --------------------------------------------------------- */
 .glass {
@@ -182,6 +210,8 @@ body {
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: var(--glass-edge), var(--shadow-sm);
 }
+.card { transition: border-color 0.2s ease, box-shadow 0.25s ease; }
+.card:hover { border-color: color-mix(in srgb, var(--brand) 28%, var(--border-strong)); }
 .card-pad { padding: 1.35rem; }
 
 /* Buttons ---------------------------------------------------------------- */
@@ -200,7 +230,7 @@ body {
 }
 .btn-primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 14px 32px -10px color-mix(in srgb, var(--brand) 60%, transparent);
+  box-shadow: 0 14px 34px -10px color-mix(in srgb, var(--brand) 70%, transparent), 0 0 30px -6px color-mix(in srgb, var(--accent) 65%, transparent);
 }
 .btn-secondary {
   background: var(--glass-2); color: var(--ink);
@@ -280,12 +310,12 @@ body {
   padding: 0.95rem 1.15rem;
 }
 
-/* Hero glow — a localized teal→blue signal above the global field. */
+/* Hero glow — a localized cyan→violet signal above the global field. */
 .aurora {
   position: absolute; inset: -30% -10% auto -10%; height: 320px; z-index: -1; pointer-events: none; opacity: 0.55;
   background:
-    radial-gradient(38% 55% at 14% 0%, color-mix(in srgb, var(--teal) 34%, transparent), transparent 70%),
-    radial-gradient(36% 52% at 86% 10%, color-mix(in srgb, var(--blue) 30%, transparent), transparent 72%);
+    radial-gradient(38% 55% at 14% 0%, color-mix(in srgb, var(--teal) 32%, transparent), transparent 70%),
+    radial-gradient(36% 52% at 86% 10%, color-mix(in srgb, var(--blue) 34%, transparent), transparent 72%);
   filter: blur(52px);
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -352,7 +382,7 @@ body {
 /* glowing signal bar on the active item */
 .rail-link[data-active="true"]::after {
   content: ""; position: absolute; left: 0; top: 50%; width: 3px; height: 1.1rem; margin-top: -0.55rem;
-  border-radius: 999px; background: var(--grad); box-shadow: 0 0 10px 1px color-mix(in srgb, var(--brand) 70%, transparent);
+  border-radius: 999px; background: var(--grad); box-shadow: 0 0 10px 1px color-mix(in srgb, var(--brand) 70%, transparent), 0 0 16px 2px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 @media (prefers-reduced-motion: reduce) {
   .rail-link:hover .rail-ico { transform: none; }
