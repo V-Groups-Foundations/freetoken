@@ -5,7 +5,7 @@ Thanks for helping make free AI more useful! Every contribution counts — a new
 ## Setup
 
 ```bash
-git clone https://github.com/V-groups-foundation/freetoken.git && cd freetoken
+git clone https://github.com/V-Groups-Foundations/freetoken.git && cd freetoken
 npm install
 npm run setup   # .env.local + built-in database
 npm run dev     # http://localhost:3000

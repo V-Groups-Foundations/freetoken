@@ -10,8 +10,8 @@
   <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1000&color=3AD1FF&center=true&vCenter=true&width=640&lines=Free+AI+API+%E2%80%94+one+key+for+every+free+model.;A+Cursor+%2F+Claude+Code+style+agent%2C+for+free.;Set+up+in+3+minutes.+Pay+%240+forever." alt="FreeToken" />
 </a>
 
-[![GitHub stars](https://img.shields.io/github/stars/V-groups-foundation/freetoken?style=social)](https://github.com/V-groups-foundation/freetoken/stargazers)
-[![CI](https://github.com/V-groups-foundation/freetoken/actions/workflows/ci.yml/badge.svg)](https://github.com/V-groups-foundation/freetoken/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/V-Groups-Foundations/freetoken?style=social)](https://github.com/V-Groups-Foundations/freetoken/stargazers)
+[![CI](https://github.com/V-Groups-Foundations/freetoken/actions/workflows/ci.yml/badge.svg)](https://github.com/V-Groups-Foundations/freetoken/actions/workflows/ci.yml)
 ![Cost](https://img.shields.io/badge/cost-%240%20forever-22c55e)
 ![Setup](https://img.shields.io/badge/setup-3%20minutes-3ad1ff)
 ![OpenAI compatible](https://img.shields.io/badge/API-OpenAI%20compatible-a78bfa)
@@ -51,7 +51,7 @@ Your keys are encrypted and used only for *your* requests. Nothing is shared, no
 You need **Node.js 20.9+**. That's it — the database is built in.
 
 ```bash
-git clone https://github.com/V-groups-foundation/freetoken.git
+git clone https://github.com/V-Groups-Foundations/freetoken.git
 cd freetoken
 npm install
 npm run setup     # creates .env.local with fresh secrets + the built-in database
@@ -151,7 +151,7 @@ Contributions are very welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Good 
 
 FreeToken is free and will stay free. If it helps you, **star the repo** and share it — that's how other people find free AI tools.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=V-groups-foundation/freetoken&type=Date)](https://star-history.com/#V-groups-foundation/freetoken&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=V-Groups-Foundations/freetoken&type=Date)](https://star-history.com/#V-Groups-Foundations/freetoken&Date)
 
 ## 📄 License
 
