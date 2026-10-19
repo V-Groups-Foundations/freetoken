@@ -135,6 +135,20 @@ export function ChatPanel(props: {
   sidRef.current = sid;
 
   const refreshPending = () => api.pending(sidRef.current).then(setPending).catch(() => {});
+  // set when the task was started with "Accept all": its file changes are kept without a review step
+  const keepChanges = useRef(false);
+  async function keepAll() {
+    const sidNow = sidRef.current;
+    const files = await api.pending(sidNow).catch(() => [] as string[]);
+    for (const p of files) await api.accept(sidNow, p).catch(() => {});
+    // above the turn's summary row, which must stay last (it carries Retry and the follow-ups)
+    if (files.length) setItems((prev) => {
+      const note: Item = { kind: "note", text: `Kept changes to ${files.length} file${files.length === 1 ? "" : "s"} — you chose Accept all. ✎ Edit or ↻ Retry undoes them.` };
+      const at = prev.map((x) => x.kind).lastIndexOf("turn");
+      return at < 0 ? [...prev, note] : [...prev.slice(0, at), note, ...prev.slice(at)];
+    });
+    refreshPending();
+  }
   useEffect(() => { refreshPending(); }, [props.pendingVersion, sid]);
   useEffect(() => { if (props.focusSignal) box.current?.focus(); }, [props.focusSignal]);
 
@@ -244,7 +258,11 @@ export function ChatPanel(props: {
       return next;
     });
     if (e.type === "file_changed") { props.onFilesChanged([e.path]); refreshPending(); }
-    if (e.type === "done") { setBusy(false); setAutoRun(false); refreshPending(); refreshMem(); }
+    if (e.type === "done") {
+      setBusy(false); setAutoRun(false); refreshMem();
+      // "Accept all" chosen up front means no questions at all: keep the file changes too (✎ Edit / ↻ Retry still undo them)
+      if (keepChanges.current) { keepChanges.current = false; keepAll(); } else refreshPending();
+    }
     if (e.type === "memory") refreshMem();
   }
 
@@ -272,6 +290,7 @@ export function ChatPanel(props: {
       if (!run) { setChooser({ text, as }); return; }
       autoRunRef.current = run === "all";
       setAutoRun(run === "all");
+      keepChanges.current = run === "all";
     }
     setChooser(null);
     const mode = as;
@@ -571,7 +590,7 @@ export function ChatPanel(props: {
         {!atBottom && <button className="jump" onClick={jump}>↓ Jump to latest</button>}
       </OpenFileContext.Provider>
 
-      {pending.length > 0 && (
+      {pending.length > 0 && !keepChanges.current && (
         <div className="review-bar" aria-label="Files changed">
           <div className="review-title">{pending.length} file{pending.length > 1 ? "s" : ""} changed
             <span className="spacer" /><button className="btn small" onClick={rejectAll}>Reject all</button><button className="btn small primary" onClick={acceptAll}>Accept all</button></div>

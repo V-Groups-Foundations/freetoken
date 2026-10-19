@@ -180,6 +180,9 @@ async function main() {
       await page.locator(".msg-ai", { hasText: "Built the plan" }).waitFor({ timeout: 15000 });
       if (!(await page.getByRole("radio", { name: "Agent" }).getAttribute("aria-checked"))?.includes("true")) throw new Error("not switched to Agent");
       if (!fs.existsSync(path.join(proj, "src/farewell.ts"))) throw new Error("plan not built");
+      // Accept all = no questions: the change is kept without a review bar
+      await page.locator(".mem-note", { hasText: "Kept changes to 1 file" }).waitFor({ timeout: 5000 });
+      if (await page.getByText(/files? changed/).count()) throw new Error("review bar shown after Accept all");
       await page.getByLabel("Suggested next steps").waitFor();
       // rewind: back to before "carry out the plan" — the new file goes away and the prompt returns for editing
       const msg = page.locator(".msg-user-wrap", { hasText: "carry out the plan" });
