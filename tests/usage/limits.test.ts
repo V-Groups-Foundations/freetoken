@@ -63,13 +63,30 @@ describe('getUsageSummary', () => {
     });
 
     const s = await getUsageSummary(userId, deps());
-    expect(s.today).toEqual({ requests: 2, tokens: 80 });
+    expect(s.today).toEqual({ requests: 2, tokens: 80, estimatedTokens: 0 });
     const groq = s.providers.find((p) => p.provider === 'groq')!;
     const live = groq.models.find((m) => m.modelId === 'llama-70b')!;
     expect(live).toMatchObject({ requests: 1, tokens: 40, remainingRequests: 999, limitRequests: 1000, source: 'provider' });
     const gemini = s.providers.find((p) => p.provider === 'gemini')!;
     expect(gemini.models[0]).toMatchObject({ requests: 1, remainingRequests: null, source: 'unknown' });
     expect(s.knownRemainingRequests).toBe(999 + 0); // groq/llama-8b has no known limit either
+    expect(s.liveRemainingRequests).toBe(999);
+    expect(s.publishedRemainingRequests).toBe(0);
+    expect(gemini.limitNote).toMatch(/Google/);
+    expect(groq.limitNote).toBeNull();
+  });
+
+  it('separates guessed tokens and catalog limits from what providers reported', async () => {
+    await saveKey(db, userId, 'groq', 'gsk_mine', null, TEST_VAULT_KEY);
+    const ev = { userId, source: 'api' as const, provider: 'groq', modelId: 'llama-8b', latencyMs: 1, status: 'ok' as const };
+    await recordUsage(db, { ...ev, promptTokens: 100, completionTokens: 20 });
+    await recordUsage(db, { ...ev, promptTokens: 50, completionTokens: 5, estimated: true });
+    const s = await getUsageSummary(userId, deps());
+    expect(s.today).toEqual({ requests: 2, tokens: 175, estimatedTokens: 55 });
+    const m = s.providers[0].models.find((x) => x.modelId === 'llama-8b')!;
+    expect(m).toMatchObject({ tokens: 175, estimatedTokens: 55 });
+    expect(s.liveRemainingRequests).toBe(0);
+    expect(s.publishedRemainingRequests).toBe(s.knownRemainingRequests);
   });
 
   it('estimates remaining from catalog limits when the provider sends nothing', async () => {
@@ -154,6 +171,6 @@ describe('getUsageSummary', () => {
     await recordUsage(db, { userId: other, source: 'api', provider: 'groq', modelId: 'llama-70b', promptTokens: 5, completionTokens: 5, latencyMs: 1, status: 'ok' });
     const s = await getUsageSummary(userId, deps());
     expect(s.providers).toEqual([]);
-    expect(s.today).toEqual({ requests: 0, tokens: 0 });
+    expect(s.today).toEqual({ requests: 0, tokens: 0, estimatedTokens: 0 });
   });
 });

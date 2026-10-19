@@ -19,12 +19,17 @@ function clock(iso: string | null, now: number): string {
 }
 
 function sourceNote(m: ModelUsage, now: number): string {
-  if (m.source === 'estimate') return ' · estimated';
+  if (m.source === 'estimate') return ' · published limit, not reported live';
   if (m.source === 'shared') return ' · counts toward the shared limit';
   if (m.source !== 'provider') return '';
   // a live number goes stale between requests; say when it was read
   const age = m.asOf && now ? now - new Date(m.asOf).getTime() : 0;
   return age > 5 * 60_000 ? ` · live, as of ${clock(m.asOf, now)}` : ' · live';
+}
+
+/** "1,234 tokens", or "≈1,234 tokens" when some of it was guessed (the provider didn't report counts). */
+function tokensText(tokens: number, estimated: number) {
+  return `${estimated > 0 ? '≈' : ''}${tokens.toLocaleString()} tokens`;
 }
 
 function Bar({ used, limit }: { used: number; limit: number }) {
@@ -52,7 +57,7 @@ function ModelRow({ m, now }: { m: ModelUsage; now: number }) {
       </div>
       {known && <Bar used={m.limitRequests! - m.remainingRequests!} limit={m.limitRequests!} />}
       <div className="flex justify-between text-xs text-[var(--faint)]">
-        <span>{m.tokens.toLocaleString()} tokens today{sourceNote(m, now)}</span>
+        <span>{tokensText(m.tokens, m.estimatedTokens)} today{sourceNote(m, now)}</span>
         <span>{relReset(m.resetAt, now)}</span>
       </div>
     </div>
@@ -84,6 +89,7 @@ function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
           <div className="text-xs text-[var(--faint)]">{p.account.note}</div>
         </div>
       )}
+      {p.limitNote && <p className="text-xs text-[var(--faint)]">{p.limitNote}</p>}
       <div className="divide-y divide-[var(--border)]">
         {p.models.map((m) => <ModelRow key={m.modelId} m={m} now={now} />)}
       </div>
@@ -140,13 +146,30 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
         </div>
         <div className="card card-pad">
           <div className="faint text-xs font-medium">Tokens today</div>
-          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.tokens.toLocaleString()}</div>
-          <div className="faint text-xs">prompt + completion</div>
+          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.estimatedTokens > 0 ? '≈ ' : ''}{data.today.tokens.toLocaleString()}</div>
+          <div className="faint text-xs">
+            {data.today.estimatedTokens > 0
+              ? `prompt + completion · ${Math.round((data.today.estimatedTokens / Math.max(1, data.today.tokens)) * 100)}% estimated (the provider didn't report counts)`
+              : 'prompt + completion, as reported by the providers'}
+          </div>
         </div>
         <div className="card card-pad">
           <div className="faint text-xs font-medium">Free requests left</div>
-          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">≈ {data.knownRemainingRequests.toLocaleString()}</div>
-          <div className="faint text-xs">shared account limits counted once · providers without a published limit not included</div>
+          {data.liveRemainingRequests > 0 ? (
+            <>
+              <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.liveRemainingRequests.toLocaleString()}</div>
+              <div className="faint text-xs">
+                reported by the providers
+                {data.publishedRemainingRequests > 0 && <> · plus ≈{data.publishedRemainingRequests.toLocaleString()} by published limits</>}
+                {' '}· per-minute-only providers not counted
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">≈ {data.publishedRemainingRequests.toLocaleString()}</div>
+              <div className="faint text-xs">by published limits — no provider has reported live numbers yet · per-minute-only providers not counted</div>
+            </>
+          )}
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">

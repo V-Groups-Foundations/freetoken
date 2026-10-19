@@ -75,6 +75,20 @@ async function main() {
     return m[0].content === "add dark mode now" && m[1].role === "assistant" && m[1].provider === "v-run";
   });
 
+  await check("V.md memory: the agent can't save change logs; real facts and user notes still save", async () => {
+    const mem = await import("../src/main/memory");
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-mem-"));
+    ws.setRoot(proj);
+    const logs = ["CSS margin-bottom missing colon syntax errors fixed in 8 HTML files (index, about).", "Fixed the navbar overlap", "Added dark mode toggle to header", "All margin-bottom properties were corrected"];
+    const facts = ["Start the site with npm start (port 3000)", "After editing CSS, check every property has a colon", "Fix bugs with a failing test first", "User prefers Tailwind over plain CSS"];
+    let rejected = 0;
+    for (const l of logs) { try { await mem.remember(l, "project", { fromAgent: true }); } catch (e) { if (/change log/.test((e as Error).message)) rejected++; } }
+    for (const f of facts) await mem.remember(f, "project", { fromAgent: true });
+    const userNote = await mem.remember("Fixed width layouts only on this project", "project"); // typed by the user: always saved
+    const doc = fs.readFileSync(path.join(proj, "V.md"), "utf8");
+    return rejected === logs.length && facts.every((f) => doc.includes(`- ${f}`)) && userNote.added && !doc.includes("navbar");
+  });
+
   await check("V.md memory: project + personal files, dedup, Memory section, CRLF kept, in the system prompt", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-home-"));
     process.env.VRUN_HOME = home;

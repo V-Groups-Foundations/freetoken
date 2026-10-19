@@ -14,7 +14,7 @@ describe('ledger', () => {
     await recordUsage(db, { ...ev, status: 'ok' });
     await recordUsage(db, { ...ev, status: 'ok' });
     await recordUsage(db, { ...ev, status: 'rate_limited' });
-    expect((await usageToday(db, id)).get('groq/m')).toEqual({ requests: 2, tokens: 30 });
+    expect((await usageToday(db, id)).get('groq/m')).toEqual({ requests: 2, tokens: 30, estimatedTokens: 0 });
   });
   it('estimates tokens', () => {
     expect(estimateTokens([{ role: 'user', content: 'x'.repeat(400) }])).toBeGreaterThan(100);

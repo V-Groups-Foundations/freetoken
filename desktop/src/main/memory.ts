@@ -34,10 +34,24 @@ export async function memoryForPrompt() {
   return parts.join("\n\n");
 }
 
+/**
+ * A report of work just done ("Fixed X in 8 files") rather than something worth knowing next time.
+ * The agent tends to save these; they clutter V.md and say nothing about how to work on the project.
+ */
+export function looksLikeChangeLog(text: string) {
+  return /^(?:i\s+|we\s+|just\s+)?(?:fixed|added|updated|changed|removed|created|implemented|refactored|renamed|deleted|moved|resolved|built|wrote|rewrote|made|replaced|corrected|completed|finished|edited|converted)\b/i.test(text)
+    || /\b(?:were|was|have been|has been|are now|is now)\s+(?:fixed|added|updated|changed|removed|created|corrected|resolved|replaced)\b/i.test(text)
+    || /\b(?:fixed|updated|changed|edited|corrected|added|removed) in (?:\d+|all|every|both) (?:\w+ )?(?:files?|places?|pages?)\b/i.test(text)
+    || /\b(?:errors?|bugs?|issues?|problems?) (?:were |was |have been |has been )?(?:fixed|resolved|corrected)\b/i.test(text);
+}
+
 /** Add one line under "## Memory" (creating the file from a template); exact repeats are skipped. */
-export async function remember(fact: string, scope: Scope = "project") {
+export async function remember(fact: string, scope: Scope = "project", { fromAgent = false } = {}) {
   const text = fact.replace(/\s+/g, " ").trim().replace(/^[-*]\s+/, "");
   if (!text) throw new Error("Nothing to remember.");
+  if (fromAgent && looksLikeChangeLog(text)) {
+    throw new Error("Not saved: that's a record of work just done, and V.md isn't a change log. Save a lasting rule or fact that helps next time instead — e.g. \"Start the site with npm start (serves on port 3000)\" or \"After editing CSS, check every property has a colon\". If nothing lasting was learned, don't save anything.");
+  }
   if (text.length > 500) throw new Error("Keep memories to one short line (under 500 characters).");
   const file = pathFor(scope);
   if (!file) throw new Error("Open a folder first — project memory lives in its V.md.");

@@ -164,5 +164,7 @@ export const usageEvents = pgTable('usage_events', {
   completionTokens: integer('completion_tokens').notNull().default(0),
   status: text('status').notNull(), // ok | rate_limited | error
   latencyMs: integer('latency_ms').notNull().default(0),
+  /** token counts were guessed (the provider didn't report them) */
+  estimated: boolean('estimated').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('usage_user_provider_time').on(t.userId, t.provider, t.createdAt)]);

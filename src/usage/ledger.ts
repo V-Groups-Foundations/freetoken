@@ -12,6 +12,8 @@ export interface UsageEvent {
   completionTokens: number;
   status: 'ok' | 'rate_limited' | 'error';
   latencyMs: number;
+  /** token counts are a guess because the provider didn't report them */
+  estimated?: boolean;
 }
 
 export async function recordUsage(db: DB, e: UsageEvent) {
@@ -35,11 +37,12 @@ export async function usageSince(db: DB, userId: string, start: Date) {
       modelId: usageEvents.modelId,
       requests: sql<number>`count(*)::int`,
       tokens: sql<number>`coalesce(sum(${usageEvents.promptTokens} + ${usageEvents.completionTokens}), 0)::int`,
+      estimatedTokens: sql<number>`coalesce(sum(case when ${usageEvents.estimated} then ${usageEvents.promptTokens} + ${usageEvents.completionTokens} else 0 end), 0)::int`,
     })
     .from(usageEvents)
     .where(and(eq(usageEvents.userId, userId), eq(usageEvents.status, 'ok'), gte(usageEvents.createdAt, start)))
     .groupBy(usageEvents.provider, usageEvents.modelId);
-  return new Map(rows.map((r) => [usageKey(r.provider, r.modelId), { requests: r.requests, tokens: r.tokens }]));
+  return new Map(rows.map((r) => [usageKey(r.provider, r.modelId), { requests: r.requests, tokens: r.tokens, estimatedTokens: r.estimatedTokens }]));
 }
 
 // ~chars/4, but an image is counted as a flat cost rather than its (huge) base64 length,

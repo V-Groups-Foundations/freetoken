@@ -82,6 +82,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   }
 
   const stream = body.stream === true;
+  // Ask for token counts on streams (most providers only send them when asked), unless the client
+  // already did; the extra chunk is then stripped so the client sees what it asked for.
+  const clientWantsUsage = !!(body.stream_options as { include_usage?: boolean } | undefined)?.include_usage;
 
   for (const m of candidates) {
     if (cooling.has(m.provider)) continue; // a model of this provider failed earlier in this loop
@@ -91,7 +94,11 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
     const started = now();
     const usageBase = { userId, provider: m.provider, modelId: m.modelId, source };
-    const r = await callChat(def, c.creds, { ...body, model: m.modelId }, { fetchImpl: deps.fetchImpl });
+    const plain = { ...body, model: m.modelId };
+    const askUsage = stream && !clientWantsUsage;
+    let r = await callChat(def, c.creds, askUsage ? { ...plain, stream_options: { ...(body.stream_options as object), include_usage: true } } : plain, { fetchImpl: deps.fetchImpl });
+    // a provider that rejects stream_options: try again exactly as the client sent it
+    if (askUsage && !r.ok && r.error.kind === 'bad_request') r = await callChat(def, c.creds, plain, { fetchImpl: deps.fetchImpl });
 
     if (!r.ok) {
       const e = r.error;
@@ -133,8 +140,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
           completionTokens: usage?.completionTokens ?? Math.ceil(completionChars / 4),
           status: failed ? 'error' : 'ok',
           latencyMs: now() - started,
+          estimated: !usage,
         }).catch((err) => console.error('usage record failed', err));
-      });
+      }, { stripUsageChunk: !clientWantsUsage });
       return { ok: true, response: new Response(tapped, { status: 200, headers }) };
     }
 
@@ -155,6 +163,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       completionTokens: json.usage?.completion_tokens ?? 0,
       status: 'ok',
       latencyMs: now() - started,
+      estimated: json.usage?.prompt_tokens == null,
     });
     return { ok: true, response: Response.json(json, { headers }) };
   }

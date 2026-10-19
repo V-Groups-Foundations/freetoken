@@ -13,10 +13,13 @@ export interface ModelUsage {
   tier: string;
   requests: number;
   tokens: number;
+  /** part of `tokens` that was guessed because the provider didn't report counts */
+  estimatedTokens: number;
   limitRequests: number | null;
   remainingRequests: number | null;
   resetAt: string | null;
-  /** provider = from the provider's rate-limit headers; shared = counts toward the provider's account-wide limit */
+  /** provider = from the provider's rate-limit headers; estimate = FreeToken's catalog of published limits;
+   *  shared = counts toward the provider's account-wide limit */
   source: 'provider' | 'estimate' | 'shared' | 'unknown';
   /** when the provider's numbers were last seen (live rows only) */
   asOf: string | null;
@@ -39,14 +42,21 @@ export interface ProviderUsage {
   status: string;
   coolingUntil: Date | null;
   account: AccountUsage | null;
+  /** why there's no daily number for this provider, when there isn't */
+  limitNote: string | null;
   models: ModelUsage[];
 }
 
 export interface UsageSummary {
-  today: { requests: number; tokens: number };
+  today: { requests: number; tokens: number; estimatedTokens: number };
   /** when "today" began (00:00 UTC), so the UI can show it in local time */
   dayStartedAt: string;
+  /** live + published (kept for older clients) */
   knownRemainingRequests: number;
+  /** requests left as reported by the providers themselves */
+  liveRemainingRequests: number;
+  /** requests left by published limits FreeToken knows of, not confirmed by the provider */
+  publishedRemainingRequests: number;
   providers: ProviderUsage[];
 }
 
@@ -83,6 +93,14 @@ async function openRouterAccount(creds: Credentials, fetchImpl: FetchFn): Promis
 const keyRowsUse = (rows: { provider: string }[], period: 'day' | 'month') =>
   rows.some((r) => SHARED_POOLS[r.provider]?.period === period);
 
+/** Providers that don't have (or don't report) a daily request count. */
+const NO_DAILY_LIMIT: Record<string, string> = {
+  nvidia: 'NVIDIA limits requests per minute (about 40/min), not per day — there is no daily count to show.',
+  sambanova: 'SambaNova limits requests per minute, not per day — there is no daily count to show.',
+  gemini: "Google sets Gemini's free limits per model and changes them often, and doesn't report them to apps — see AI Studio → Usage.",
+  default: "This provider doesn't publish or report a daily limit, so only what you've used is shown.",
+};
+
 export async function getUsageSummary(userId: string, deps: Deps): Promise<UsageSummary> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const creds = await loadCredentials(deps.db, userId, deps.vaultKey);
@@ -100,13 +118,15 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
   const limitRows = await deps.db.select().from(providerLimits).where(eq(providerLimits.userId, userId));
   const liveLimits = new Map(limitRows.map((r) => [usageKey(r.provider, r.modelId), r]));
 
-  const today = { requests: 0, tokens: 0 };
+  const today = { requests: 0, tokens: 0, estimatedTokens: 0 };
   for (const u of used.values()) {
     today.requests += u.requests;
     today.tokens += u.tokens;
+    today.estimatedTokens += u.estimatedTokens;
   }
 
-  let knownRemainingRequests = 0;
+  let liveRemainingRequests = 0;
+  let publishedRemainingRequests = 0;
   const providers: ProviderUsage[] = [];
 
   for (const key of keyRows) {
@@ -129,14 +149,15 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
       account = liveAccount
         ? { label: pool.label, ...liveAccount, period: pool.period, source: 'provider', note: pool.note }
         : { label: pool.label, used: counted, limit: pool.limit, remaining: Math.max(0, pool.limit - counted), period: pool.period, source: 'estimate', note: pool.note };
-      knownRemainingRequests += account.remaining;
+      if (account.source === 'provider') liveRemainingRequests += account.remaining;
+      else publishedRemainingRequests += account.remaining;
     }
 
     const modelUsages: ModelUsage[] = catalog
       .filter((m) => m.provider === key.provider)
       .sort((a, b) => a.priority - b.priority || a.id - b.id)
       .map((m) => {
-        const u = used.get(usageKey(m.provider, m.modelId)) ?? { requests: 0, tokens: 0 };
+        const u = used.get(usageKey(m.provider, m.modelId)) ?? { requests: 0, tokens: 0, estimatedTokens: 0 };
         const live = liveLimits.get(usageKey(m.provider, m.modelId));
         let limitRequests: number | null = null;
         let remainingRequests: number | null = null;
@@ -160,13 +181,17 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           remainingRequests = Math.max(0, m.rpd - u.requests);
           source = 'estimate';
         }
-        if (remainingRequests != null) knownRemainingRequests += remainingRequests;
+        if (remainingRequests != null) {
+          if (source === 'provider') liveRemainingRequests += remainingRequests;
+          else publishedRemainingRequests += remainingRequests;
+        }
         return {
           modelId: m.modelId,
           displayName: m.displayName,
           tier: m.tier,
           requests: u.requests,
           tokens: u.tokens,
+          estimatedTokens: u.estimatedTokens,
           limitRequests,
           remainingRequests,
           resetAt,
@@ -182,9 +207,14 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
       status: key.status,
       coolingUntil,
       account,
+      limitNote: !account && modelUsages.every((x) => x.limitRequests == null) ? (NO_DAILY_LIMIT[key.provider] ?? NO_DAILY_LIMIT.default) : null,
       models: modelUsages,
     });
   }
 
-  return { today, dayStartedAt: started.toISOString(), knownRemainingRequests, providers };
+  return {
+    today, dayStartedAt: started.toISOString(),
+    knownRemainingRequests: liveRemainingRequests + publishedRemainingRequests, liveRemainingRequests, publishedRemainingRequests,
+    providers,
+  };
 }

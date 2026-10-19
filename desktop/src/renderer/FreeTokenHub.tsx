@@ -97,8 +97,8 @@ export function FreeTokenHub({ onSignIn, onClose, onToast }: { onSignIn: () => v
           <div className="hub-stats">
             {[
               ["Requests today", fmt(hub!.usage?.requests ?? 0), "across all providers"],
-              ["Tokens today", fmt(hub!.usage?.tokens ?? 0), "prompt + completion"],
-              ["Known requests left", fmt(hub!.usage?.remaining ?? 0), "from providers that report limits"],
+              ["Tokens today", (hub!.usage?.tokensEstimated ? "≈" : "") + fmt(hub!.usage?.tokens ?? 0), hub!.usage?.tokensEstimated ? "partly estimated — not every provider reports counts" : "as reported by the providers"],
+              ["Requests left", (hub!.usage?.remainingLive ? "" : "≈") + fmt(hub!.usage?.remaining ?? 0), hub!.usage?.remainingLive ? "reported live by your providers" : "by published limits, not reported live"],
             ].map(([label, value, hint], i) => (
               <div key={label} className="hub-stat" style={{ animationDelay: `${i * 60}ms` }}>
                 <div className="hub-stat-label">{label}</div>

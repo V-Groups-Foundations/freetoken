@@ -29,6 +29,7 @@ export async function handleMessages(req: Request, deps: Deps): Promise<Response
   const parsed = await readBody(req);
   if (parsed instanceof Response) return parsed;
   const body = toOpenAI(parsed.raw);
+  if (parsed.raw.stream) body.stream_options = { include_usage: true }; // real output tokens in message_delta
   const v = validateChatBody(body, parsed.size);
   if (!v.ok) return anthropicError(400, v.message);
 

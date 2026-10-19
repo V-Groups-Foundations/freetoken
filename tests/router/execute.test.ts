@@ -165,7 +165,42 @@ describe('routeChat', () => {
     expect(await out.response.text()).toBe(chunks.join(''));
     await new Promise((r) => setTimeout(r, 50)); // usage is recorded after the stream ends
     const [ev] = await db.select().from(usageEvents);
-    expect(ev).toMatchObject({ status: 'ok', completionTokens: 2 });
+    expect(ev).toMatchObject({ status: 'ok', completionTokens: 2, estimated: true });
+  });
+
+  it('asks for usage on streams, records real counts and hides the extra chunk from the client', async () => {
+    await connect('groq', 'gsk_mine');
+    const content = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n';
+    const usage = 'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3}}\n\n';
+    let sent: Record<string, unknown> = {};
+    const { p } = run((_url, init) => { sent = JSON.parse(String(init?.body)); return sse([content, usage, 'data: [DONE]\n\n']); }, { stream: true });
+    const out = await p;
+    if (!out.ok) throw new Error('expected ok');
+    expect(await out.response.text()).toBe(`${content}data: [DONE]\n\n`);
+    expect(sent.stream_options).toEqual({ include_usage: true });
+    await new Promise((r) => setTimeout(r, 50));
+    const [ev] = await db.select().from(usageEvents);
+    expect(ev).toMatchObject({ promptTokens: 11, completionTokens: 3, estimated: false });
+  });
+
+  it('passes the usage chunk through when the client asked for it', async () => {
+    await connect('groq', 'gsk_mine');
+    const chunks = ['data: {"choices":[{"delta":{"content":"hi"}}]}\n\n', 'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n', 'data: [DONE]\n\n'];
+    const out = await run(() => sse(chunks), { stream: true, stream_options: { include_usage: true } }).p;
+    if (!out.ok) throw new Error('expected ok');
+    expect(await out.response.text()).toBe(chunks.join(''));
+  });
+
+  it('retries without stream_options when a provider rejects it', async () => {
+    await connect('groq', 'gsk_mine');
+    const bodies: Record<string, unknown>[] = [];
+    const out = await run((_url, init) => {
+      const b = JSON.parse(String(init?.body));
+      bodies.push(b);
+      return b.stream_options ? new Response('{"error":{"message":"unknown field stream_options"}}', { status: 400 }) : sse(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', 'data: [DONE]\n\n']);
+    }, { stream: true }).p;
+    expect(out.ok).toBe(true);
+    expect(bodies.map((b) => 'stream_options' in b)).toEqual([true, false]);
   });
 
   it('lists models for connected providers only', async () => {

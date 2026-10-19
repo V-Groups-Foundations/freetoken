@@ -80,6 +80,8 @@ export type HubData = {
   projects: { id: string; name: string; updatedAt: string | null }[];
   usage: {
     requests: number; tokens: number; remaining: number;
+    /** tokens include guesses (provider didn't report counts); remaining is from published limits, not live */
+    tokensEstimated: boolean; remainingLive: boolean;
     providers: { id: string; name: string; status: string; requests: number; used: number | null; limit: number | null; models: number }[];
   } | null;
   models: string[];
@@ -105,7 +107,10 @@ export async function hubData(base: string, token: string, fetchImpl: typeof fet
     origin, state: "connected",
     projects: (projects.value as any[]).map((p) => ({ id: String(p.id), name: String(p.name), updatedAt: p.updatedAt ?? null })),
     usage: u ? {
-      requests: u.today?.requests ?? 0, tokens: u.today?.tokens ?? 0, remaining: u.knownRemainingRequests ?? 0,
+      requests: u.today?.requests ?? 0, tokens: u.today?.tokens ?? 0, tokensEstimated: (u.today?.estimatedTokens ?? 0) > 0,
+      // live numbers when providers report them; older servers only send the combined total
+      remaining: u.liveRemainingRequests || (u.publishedRemainingRequests ?? u.knownRemainingRequests ?? 0),
+      remainingLive: (u.liveRemainingRequests ?? 0) > 0,
       providers: (u.providers ?? []).map((p: any) => ({
         id: String(p.provider), name: String(p.name ?? p.provider), status: String(p.status ?? ""),
         requests: (p.models ?? []).reduce((n: number, m: any) => n + (m.requests ?? 0), 0),

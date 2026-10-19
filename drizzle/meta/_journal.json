@@ -36,6 +36,20 @@
       "when": 1791939731634,
       "tag": "0004_cute_pixie",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792397132965,
+      "tag": "0005_large_fantastic_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792397878870,
+      "tag": "0006_mark_old_usage_estimated",
+      "breakpoints": true
     }
   ]
 }

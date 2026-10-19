@@ -521,6 +521,13 @@ export function ChatPanel(props: {
               <Logo size={44} />
               <h2>What should we build?</h2>
               <p className="muted">{modeInfo.hint}.</p>
+              {mem?.project.file && !mem.project.exists && (
+                <div className="init-offer" role="note">
+                  <span aria-hidden>◆</span>
+                  <div><b>This project has no V.md yet.</b> <span className="muted">Let the agent note how to run, test and build it, so every chat starts knowing the project.</span></div>
+                  <button className="btn primary small" onClick={() => send("/init")} disabled={busy}>Set up V.md</button>
+                </div>
+              )}
               <div className="suggestions">
                 {SUGGEST.map((s) => <button key={s} onClick={() => send(s)}>{s}</button>)}
               </div>
