@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { getDb } from '@/db';
 import { listKeys } from '@/keys/service';
 import { requireUserId } from '@/lib/session';
@@ -60,6 +61,24 @@ export default async function ConnectPage({
       )}
 
       <QuickConnect welcome={welcome === '1'} starterOn={starterEnabled()} connected={connectedIds} />
+
+      {/* the tools people already use, on this pool */}
+      <div className="neon-frame card card-pad flex flex-wrap items-center justify-between gap-5">
+        <div className="max-w-xl space-y-1.5">
+          <span className="eyebrow">use it everywhere</span>
+          <h2 className="h2">Claude Code, Cursor &amp; Cline — on your free pool</h2>
+          <p className="muted text-sm">
+            FreeToken speaks the OpenAI and the Anthropic API, so your AI coding tools run on the keys you connect here.
+            In the FreeToken folder, <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">npm run claude</code> starts Claude Code on free models.
+          </p>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {['Claude Code', 'Cursor', 'Cline', 'Continue', 'Aider', 'Codex', 'OpenCode'].map((t) => (
+              <span key={t} className="badge badge-off">{t}</span>
+            ))}
+          </div>
+        </div>
+        <Link href="/settings#tools" className="btn btn-primary">Set up a tool →</Link>
+      </div>
 
       {/* Provider grid */}
       <div className="pt-2">

@@ -21,7 +21,7 @@ export default async function SettingsPage() {
         <div>Models <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">auto-smart</code> <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">auto-fast</code> <span className="muted">or any from</span> <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">/models</code></div>
       </div>
       <Tokens />
-      <div className="card card-pad space-y-4">
+      <div id="tools" className="card card-pad scroll-mt-6 space-y-4">
         <div>
           <span className="eyebrow">use it everywhere</span>
           <h2 className="h2 mt-2">Run your favourite AI tools on your free models</h2>

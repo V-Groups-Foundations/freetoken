@@ -1,14 +1,39 @@
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
 import Link from 'next/link';
 import { OpenVRun } from '../v-run/launch';
+import { NeonLogo, type Colorway } from './neon-logo';
+import './neon-logo.css';
+
+/**
+ * Colourways for the neon logo. Drop your own versions of the logo (png/jpg/webp, same framing) into
+ * public/brand/vgroups-variants/ and they're used in filename order; until then, colour-shifted
+ * versions of the original stand in.
+ */
+function colorways(): Colorway[] {
+  try {
+    const dir = path.join(process.cwd(), 'public', 'brand', 'vgroups-variants');
+    const files = readdirSync(dir).filter((f) => /\.(png|jpe?g|webp|avif)$/i.test(f)).sort();
+    const glows = ['#38d6ff', '#c084fc', '#34d399', '#fb923c', '#f472b6', '#e0f2fe'];
+    if (files.length) return files.map((f, i) => ({ src: `/brand/vgroups-variants/${f}`, name: f.replace(/\.[^.]+$/, ''), glow: glows[i % glows.length] }));
+  } catch { /* no folder: use the generated colourways */ }
+  const src = '/brand/vgroups.jpg';
+  return [
+    { src, name: 'Original', glow: '#38d6ff' },
+    { src, name: 'Magenta', filter: 'hue-rotate(55deg) saturate(1.15)', glow: '#e879f9' },
+    { src, name: 'Emerald', filter: 'hue-rotate(-55deg) saturate(1.1)', glow: '#34d399' },
+    { src, name: 'Sunset', filter: 'hue-rotate(150deg) saturate(1.25)', glow: '#fb923c' },
+    { src, name: 'Ice', filter: 'saturate(0.35) brightness(1.2)', glow: '#e0f2fe' },
+  ];
+}
 
 /** The V Groups family: FreeToken (this site) and V-Run (the desktop coding app). */
 export default function VGroupsPage() {
   return (
     <section className="space-y-8">
       <div className="relative overflow-hidden rounded-3xl border border-[var(--border)] shadow-[0_20px_60px_#0006]">
-        {/* eslint-disable-next-line @next/next/no-img-element -- brand art */}
-        <img src="/brand/vgroups.jpg" alt="V Groups" width={1408} height={768} className="block h-auto w-full" />
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-6 text-sm text-white/80">
+        <NeonLogo colorways={colorways()} />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[3] bg-gradient-to-t from-black/80 to-transparent p-6 text-sm text-white/80">
           Free AI tools that work together — build it for free, use it for free.
         </div>
       </div>
