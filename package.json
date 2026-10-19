@@ -20,10 +20,10 @@
     "v-groups"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/varunkar2003/freetoken#readme",
+  "homepage": "https://github.com/V-groups-foundation/freetoken#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/varunkar2003/freetoken.git"
+    "url": "https://github.com/V-groups-foundation/freetoken.git"
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",
