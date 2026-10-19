@@ -13,7 +13,7 @@ export default async function SettingsPage() {
     <section className="space-y-6">
       <PageHeader
         title="Your API"
-        subtitle="Use FreeToken from any OpenAI-compatible tool — Cline, Continue, or your own scripts."
+        subtitle="Use FreeToken from Claude Code, Cursor, Cline, Continue, Aider or your own scripts — OpenAI- and Anthropic-compatible."
       />
       <div className="card card-pad space-y-1.5 text-sm">
         <div>Base URL <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">{baseUrl}</code></div>
@@ -27,7 +27,7 @@ export default async function SettingsPage() {
           <h2 className="h2 mt-2">Run your favourite AI tools on your free models</h2>
           <p className="muted mt-1 text-sm">Create a token above, then pick your tool. From a terminal, <code className="font-mono text-xs">freetoken run &lt;tool&gt;</code> sets everything up for that run; <code className="font-mono text-xs">freetoken setup &lt;tool&gt;</code> prints this.</p>
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid items-start gap-3 md:grid-cols-2">
           {Object.entries(GUIDES).map(([id, g]) => (
             <details key={id} className="tile p-4" open={id === 'claude-code'}>
               <summary className="cursor-pointer font-semibold">{g.name}</summary>

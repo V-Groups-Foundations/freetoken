@@ -10,7 +10,7 @@ const PROVIDERS = [
 
 const FEATURES = [
   { icon: '🔀', t: 'One key, every free model', d: 'Each request goes to a provider with free quota left and falls back the moment one is rate-limited — Gemini, Groq, OpenRouter, NVIDIA, Cohere, GitHub Models and more.' },
-  { icon: '⌘', t: 'Claude Code, Cursor & Cline — free', d: 'An OpenAI- and Anthropic-compatible API. `freetoken run claude` starts Claude Code on your free models; Cursor, Cline and Continue take a base URL.' },
+  { icon: '⌘', t: 'Claude Code, Cursor & Cline — free', d: 'An OpenAI- and Anthropic-compatible API. “freetoken run claude” starts Claude Code on your free models; Cursor, Cline and Continue take a base URL.' },
   { icon: '▶', t: 'V-Run, the desktop agent', d: 'Plan a project in chat, then continue it in V-Run — an AI code editor that writes your code, runs your app and fixes what it sees.' },
   { icon: '⚡', t: 'Works in a minute', d: 'One-line install, signed in automatically, and a built-in starter model so you can chat before adding a single key.' },
   { icon: '🔒', t: 'Yours, on your machine', d: 'Self-hosted and open source. Keys are encrypted with your own secret and only ever sent to the provider they belong to.' },

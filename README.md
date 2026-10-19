@@ -82,6 +82,18 @@ npm run dev       # sets itself up, then opens http://localhost:3000 signed in
 npm run desktop   # builds and opens V-Run — it starts FreeToken and connects itself
 ```
 
+## 🤖 Claude Code, Cursor & Cline — on free models
+
+FreeToken speaks both the **OpenAI** API (`/api/v1/chat/completions`) and the **Anthropic** API (`/api/v1/messages`, with streaming and tool use), so the AI tools you already use run on your free pool:
+
+```bash
+freetoken run claude              # Claude Code, on free models (in this folder: npm run claude)
+freetoken run aider --model openai/auto-smart
+freetoken setup cursor            # copy-paste setup for Cursor, Cline, Continue, Codex, OpenCode…
+```
+
+`freetoken run` only sets the environment for that one run — your tool's own settings are untouched. Claude model names map to FreeToken automatically (`haiku` → `auto-fast`, everything else → `auto-smart`). The **API** page in the app shows the same setup with your URLs.
+
 ## 📸 Screenshots
 
 | V-Run: the agent edits, runs and verifies | V-Run: your FreeToken hub |
@@ -104,6 +116,7 @@ npm run desktop   # builds and opens V-Run — it starts FreeToken and connects 
 | 🛠️ **Tools** | Extract · translate · summarize · classify. |
 | 📊 **Usage dashboard** | Exactly how much free quota you have left, per provider and per model. |
 | 🖥️ **Terminal agent** | `freetoken` CLI: a coding agent in your terminal; you approve each step. |
+| 🤖 **Anthropic-compatible API** | `/api/v1/messages` — run Claude Code and Anthropic SDKs on free models (`freetoken run claude`). |
 
 ## 🖥️ V-Run — the free AI coding agent
 
