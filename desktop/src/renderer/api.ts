@@ -102,7 +102,7 @@ export type FtHub = {
   origin: string; state: "connected" | "no-token" | "bad-token" | "offline"; error?: string; canStart: boolean;
   model: string; provider: "anthropic" | "freetoken";
   projects: { id: string; name: string; updatedAt: string | null }[];
-  usage: { requests: number; tokens: number; remaining: number;
+  usage: { requests: number; tokens: number; remaining: number; tokensEstimated: boolean; remainingLive: boolean;
     providers: { id: string; name: string; status: string; requests: number; used: number | null; limit: number | null; models: number }[] } | null;
   models: string[];
 };
