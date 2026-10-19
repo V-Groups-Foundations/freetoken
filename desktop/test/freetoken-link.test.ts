@@ -100,6 +100,22 @@ async function main() {
       && ai.READ_ONLY.has("remember");
   });
 
+  await check("autoConnect: sends the local sign-in token from .data and keeps only an ft_ token", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-auto-"));
+    const none = await link.autoConnect("http://localhost:1", root); // no token file yet
+    fs.mkdirSync(path.join(root, ".data"));
+    fs.writeFileSync(path.join(root, ".data", "local-login.token"), "  secret-token-1234567890-abcdefghijklmn\n");
+    let sent: any = null;
+    const fake = (async (url: string, init: RequestInit) => {
+      sent = { url, body: JSON.parse(String(init.body)) };
+      return Response.json({ token: "ft_good" });
+    }) as unknown as typeof fetch;
+    const ok = await link.autoConnect("http://localhost:3000", root, fake);
+    const bad = await link.autoConnect("http://localhost:3000", root, (async () => Response.json({ token: "nope" })) as unknown as typeof fetch);
+    return none === null && ok === "ft_good" && bad === null
+      && sent.url === "http://localhost:3000/api/local/v-run-token" && sent.body.token === "secret-token-1234567890-abcdefghijklmn";
+  });
+
   await check("runner finds a server address printed without http:// (\"started on 0.0.0.0:8501\")", async () => {
     ws.setRoot(tmp);
     const urls: string[] = [];

@@ -98,7 +98,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
         setSettings((prev) => { if (prev && !prev.hasFtToken && x.hasFtToken) setToast("V-Run is connected to FreeToken"); return x; });
         setFtPane((p) => (p === "/v-run" && x.hasFtToken ? "hub" : p)); // signed in: back to the hub
       })),
-      api.onFtServer((st) => st === "started" && setToast("Started the FreeToken server")),
+      api.onFtServer((st) => setToast(st === "connected" ? "V-Run connected itself to FreeToken — chat is ready" : "Started the FreeToken server")),
     ];
     return () => subs.forEach((u) => u());
   }, []);

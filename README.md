@@ -7,18 +7,18 @@
 <p><strong>Pool every free AI tier — Gemini, Groq, OpenRouter, NVIDIA, Cohere, GitHub Models and more — into<br/>one chat, one OpenAI-compatible API, and V-Run, a desktop AI coding agent. $0, no credit card, self-hosted.</strong></p>
 
 <a href="https://readme-typing-svg.demolab.com">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1000&color=3AD1FF&center=true&vCenter=true&width=640&lines=Free+AI+API+%E2%80%94+one+key+for+every+free+model.;A+Cursor+%2F+Claude+Code+style+agent%2C+for+free.;Set+up+in+3+minutes.+Pay+%240+forever." alt="FreeToken" />
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1000&color=3AD1FF&center=true&vCenter=true&width=640&lines=Free+AI+API+%E2%80%94+one+key+for+every+free+model.;A+Cursor+%2F+Claude+Code+style+agent%2C+for+free.;One-line+setup.+No+key+needed+to+start." alt="FreeToken" />
 </a>
 
 [![GitHub stars](https://img.shields.io/github/stars/V-Groups-Foundations/freetoken?style=social)](https://github.com/V-Groups-Foundations/freetoken/stargazers)
 [![CI](https://github.com/V-Groups-Foundations/freetoken/actions/workflows/ci.yml/badge.svg)](https://github.com/V-Groups-Foundations/freetoken/actions/workflows/ci.yml)
 ![Cost](https://img.shields.io/badge/cost-%240%20forever-22c55e)
-![Setup](https://img.shields.io/badge/setup-3%20minutes-3ad1ff)
+![Setup](https://img.shields.io/badge/setup-one%20line-3ad1ff)
 ![OpenAI compatible](https://img.shields.io/badge/API-OpenAI%20compatible-a78bfa)
 ![Tests](https://img.shields.io/badge/tests-235%20passing-22c55e)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-**[Quick start](#-quick-start-3-minutes) · [Features](#-what-you-get) · [V-Run desktop app](#%EF%B8%8F-v-run--the-free-ai-coding-agent) · [FAQ](#-faq)**
+**[Quick start](#-quick-start-one-line) · [Features](#-what-you-get) · [V-Run desktop app](#%EF%B8%8F-v-run--the-free-ai-coding-agent) · [FAQ](#-faq)**
 
 <sub>A <b>V Groups</b> project · if it saves you money, a ⭐ helps others find it</sub>
 
@@ -46,24 +46,40 @@ Your keys are encrypted and used only for *your* requests. Nothing is shared, no
   GitHub ┘
 ```
 
-## ⚡ Quick start (3 minutes)
+## ⚡ Quick start (one line)
 
-You need **Node.js 20.9+**. That's it — the database is built in.
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/V-Groups-Foundations/freetoken/master/install.ps1 | iex
+```
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/V-Groups-Foundations/freetoken/master/install.sh | bash
+```
+
+That's it. Your browser opens **already signed in** (no account, no password — a private link only your computer has), and **chat works immediately** with the built-in starter model — no API key needed.
+
+Then make it fast: on **Connect**, click *Get key* for Gemini or Groq, copy the key on their page, and come back — it's added automatically. OpenRouter is one click. Already have keys? Paste them all at once (or a whole `.env` file) and FreeToken recognises each one.
+
+<details><summary>Prefer to do it by hand?</summary>
+
+You need **Node.js 20.9+**. The database is built in.
 
 ```bash
 git clone https://github.com/V-Groups-Foundations/freetoken.git
 cd freetoken
 npm install
-npm run setup     # creates .env.local with fresh secrets + the built-in database
-npm run dev       # → http://localhost:3000
+npm run dev       # sets itself up, then opens http://localhost:3000 signed in
 ```
-
-Then sign in, open **Connect**, and paste a free key or two ([Gemini](https://aistudio.google.com/apikey) and [Groq](https://console.groq.com/keys) take a minute each). Start chatting.
+</details>
 
 **Want the desktop coding agent too?**
 
 ```bash
-npm run desktop   # builds and opens V-Run (it starts FreeToken for you)
+npm run desktop   # builds and opens V-Run — it starts FreeToken and connects itself
 ```
 
 ## 📸 Screenshots
@@ -116,7 +132,7 @@ Optional tools: Tavily (web search) · DeepL (translation) · Jina (embeddings) 
 
 <details><summary><b>Is it really free?</b></summary>
 
-Yes. FreeToken is open source (MIT) and runs on your machine. It uses the free tiers that AI providers already offer; you sign up for them yourself (most need no credit card). FreeToken just makes them work together — no subscription, no hidden costs.
+Yes. FreeToken is open source (MIT) and runs on your machine. It uses the free tiers that AI providers already offer; you sign up for them yourself (most need no credit card). FreeToken just makes them work together — no subscription, no hidden costs. Out of the box it also includes a keyless starter model (via [Pollinations](https://pollinations.ai)'s free tier) so you can try everything before adding a single key; it's shared and rate-limited, so add your own free keys for real use, and set `FREETOKEN_STARTER=off` to turn it off.
 </details>
 
 <details><summary><b>Where do the "free tokens" come from?</b></summary>
@@ -131,7 +147,7 @@ Yes — create a token under **API** and use `http://localhost:3000/api/v1` as a
 
 <details><summary><b>Are my API keys safe?</b></summary>
 
-They're encrypted at rest with your own `VAULT_MASTER_KEY` (generated by `npm run setup`) and only ever sent to the provider they belong to.
+They're encrypted at rest with your own `VAULT_MASTER_KEY` (generated on first start) and only ever sent to the provider they belong to. Signing in on your own computer uses a random link that changes every start and is readable only on your machine (like Jupyter's token); set `FREETOKEN_LOCAL_LOGIN=off` if you host FreeToken for others.
 </details>
 
 <details><summary><b>How is V-Run different from Cursor or Claude Code?</b></summary>
