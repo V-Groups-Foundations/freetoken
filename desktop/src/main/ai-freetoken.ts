@@ -70,6 +70,24 @@ export function truncateFreeToken(id: string, n: number) { const m = transcripts
  * Many open models stream their reasoning inline as <think>…</think>. Split it from the answer, coping with
  * tags cut across chunks.
  */
+/**
+ * How long to wait before retrying, or null to give up: rate limits (429) up to 6 times, honouring
+ * Retry-After; a provider's passing server error (5xx) twice, briefly.
+ */
+export function rateLimitWait(e: unknown, waits: number): number | null {
+  const err = e as { status?: number; headers?: Headers | Record<string, string> } | null;
+  if (err?.status && err.status >= 500 && err.status < 600) return waits < 2 ? 2000 * (waits + 1) : null;
+  if (err?.status !== 429 || waits >= 6) return null;
+  const h = err.headers;
+  const raw = h instanceof Headers ? h.get("retry-after") : h?.["retry-after"];
+  const s = Number(raw);
+  return Math.min(30_000, Number.isFinite(s) && s > 0 ? s * 1000 : 4000 * 2 ** waits);
+}
+const sleepUnlessAborted = (ms: number, signal: AbortSignal) => new Promise<void>((r) => {
+  const t = setTimeout(r, ms);
+  signal.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true });
+});
+
 export function thinkSplitter() {
   let inside = false, pending = "";
   return (chunk: string) => {
@@ -118,11 +136,12 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   msgs.push({ role: "user", content: ctx.length ? `<context>\n${ctx.join("\n\n")}\n</context>\n\n${req.text}` : req.text });
 
   try {
-    const system = await systemPrompt(req.mode);
+    const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"));
     for (let turn = 0; turn < 60; turn++) {
       let text = "";
       let calls: { id: string; name: string; args: string }[] = [];
       let finish: string | null = null;
+      let waits = 0;
       for (let attempt = 0; ; attempt++) {
         text = ""; calls = []; finish = null;
         const nudge = attempt ? `\n\nIMPORTANT: call only these tools, by their exact names: ${tools.map((t) => t.type === "function" ? t.function.name : "").join(", ")}. No other tools exist (there is no repo_browser).` : "";
@@ -132,7 +151,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             messages: [{ role: "system", content: system + nudge }, ...compact(msgs, userIndex)],
             tools,
             stream: true,
-          }, { signal: s.abort.signal });
+          }, { signal: s.abort.signal, maxRetries: 0 }); // retries happen below, visibly (rateLimitWait)
           let usage: { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
           const split = thinkSplitter();
           for await (const chunk of stream) {
@@ -158,12 +177,23 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
           if (usage) emit({ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 });
           break;
         } catch (e) {
+          // free tiers rate-limit often and briefly: wait it out instead of failing the whole task
+          const wait = rateLimitWait(e, waits);
+          if (wait !== null && !s.abort.signal.aborted) {
+            waits++;
+            attempt--; // a wait isn't a bad-tool retry
+            emit({ type: "waiting", seconds: Math.max(1, Math.round(wait / 1000)), reason: "Free models are busy" });
+            await sleepUnlessAborted(wait, s.abort.signal);
+            if (s.abort.signal.aborted) throw e;
+            continue;
+          }
           if (attempt >= 2 || s.abort.signal.aborted || !BAD_TOOL_CALL.test(String((e as Error)?.message))) throw e;
           if (text) emit({ type: "text", delta: "\n\n" });
         }
       }
 
-      const uses = calls.filter(Boolean).map((cl, i) => ({ ...cl, id: cl.id || `call_${turn}_${i}` }));
+      // GPT-OSS models sometimes leak their channel markup into the name ("write_file<|channel|>commentary")
+      const uses = calls.filter(Boolean).map((cl, i) => ({ ...cl, name: cl.name.split("<|")[0].trim(), id: cl.id || `call_${turn}_${i}` }));
       msgs.push({
         role: "assistant",
         content: text || null,

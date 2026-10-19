@@ -116,6 +116,49 @@ async function main() {
       && sent.url === "http://localhost:3000/api/local/v-run-token" && sent.body.token === "secret-token-1234567890-abcdefghijklmn";
   });
 
+  await check("Stop ends a command at once, even when a child process holds its output open", async () => {
+    ws.setRoot(tmp);
+    const s = ai.getSession("stop-cmd");
+    s.abort = new AbortController();
+    // approve automatically; the command starts a grandchild that keeps the pipes open forever
+    const cmd = `node -e "require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'}); setInterval(()=>{},1000)"`;
+    const t0 = Date.now();
+    const run = ai.execTool(s, "run_terminal_command", { command: cmd }, (e) => { if (e.type === "approval") ai.approve("stop-cmd", e.id, true); }, "c1");
+    setTimeout(() => s.abort!.abort(), 1500);
+    const r = await run;
+    return Date.now() - t0 < 6000 && r.content.includes("[stopped by the user]");
+  });
+
+  await check("a server command asked of the terminal is started as the app instead", async () => {
+    ws.setRoot(tmp);
+    fs.writeFileSync(path.join(tmp, "server.js"), "require('http').createServer((q,r)=>r.end('ok')).listen(0,()=>console.log('listening'));");
+    const s = ai.getSession("srv");
+    s.abort = new AbortController();
+    const r = await ai.execTool(s, "run_terminal_command", { command: "node server.js" }, (e) => { if (e.type === "approval") ai.approve("srv", e.id, true); }, "c2");
+    const running = runner.appStatus().running;
+    runner.stopApp();
+    return r.content.startsWith("That command keeps running") && running
+      && runner.LONG_RUNNING.test("python -m http.server 4321") && runner.LONG_RUNNING.test("npm run dev") && !runner.LONG_RUNNING.test("npm run build") && !runner.LONG_RUNNING.test("npx vite build");
+  });
+
+  await check("the web design brief is added for website tasks only", async () => {
+    const web = await ai.systemPrompt("agent", "build me a landing page for my bakery");
+    const other = await ai.systemPrompt("agent", "fix the off-by-one bug in parser.py");
+    const ask = await ai.systemPrompt("ask", "build me a landing page");
+    process.env.VRUN_DESIGN_BRIEF = "off";
+    const off = await ai.systemPrompt("agent", "build me a landing page");
+    delete process.env.VRUN_DESIGN_BRIEF;
+    const bar = "Building websites and UIs";
+    return web.includes(bar) && !other.includes(bar) && !ask.includes(bar) && !off.includes(bar);
+  });
+
+  await check("rate limits are waited out (Retry-After honoured, backoff capped, gives up after 6)", () => {
+    const w = ftAi.rateLimitWait;
+    return w({ status: 429, headers: new Headers({ "retry-after": "3" }) }, 0) === 3000
+      && w({ status: 429, headers: {} }, 2) === 16000 && w({ status: 429 }, 5) === 30000
+      && w({ status: 429 }, 6) === null && w({ status: 502 }, 0) === 2000 && w({ status: 502 }, 2) === null && w({ status: 400 }, 0) === null && w(new Error("x"), 0) === null;
+  });
+
   await check("runner finds a server address printed without http:// (\"started on 0.0.0.0:8501\")", async () => {
     ws.setRoot(tmp);
     const urls: string[] = [];

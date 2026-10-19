@@ -71,6 +71,7 @@ const PAGES: Record<string, string> = {
 export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; requests: any[]; projects: Map<string, FakeProject>; close: () => void }> {
   const requests: any[] = [];
   const projects = new Map<string, FakeProject>();
+  const busySeen = new Set<string>();
   let n = 0;
   const server = http.createServer((req, res) => {
     const pathOnly = (req.url ?? "/").split("?")[0];
@@ -116,6 +117,12 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
         return res.end(JSON.stringify({ project: { id: pm[1], name: p.name, model: p.model }, messages: p.messages }));
       }
       requests.push(body);
+      // mimic every free provider being rate-limited for a moment (once per "busy test" message)
+      if (/busy test/i.test(lastUserText(body)) && !busySeen.has(lastUserText(body))) {
+        busySeen.add(lastUserText(body));
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+        return res.end(JSON.stringify({ error: { message: "All providers are rate-limited.", type: "rate_limit_error" } }));
+      }
       // mimic Groq rejecting a hallucinated tool on the first try (as relayed by FreeToken)
       if (/flaky tool/i.test(lastUserText(body)) && !String(body.messages[0]?.content).includes("IMPORTANT: call only")) {
         res.writeHead(400, { "content-type": "application/json" });

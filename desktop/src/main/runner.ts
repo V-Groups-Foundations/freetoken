@@ -2,8 +2,30 @@
 // streams to the App panel, plus an embedded browser for web apps. The agent drives both through
 // tools, so it sees what the user sees. Electron-specific preview code lives in main.ts behind
 // PreviewHost so this module (and the agent tools) stay testable in plain Node.
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { getRoot } from "./workspace";
+
+// PowerShell 7 (pwsh) understands && and || like bash; Windows PowerShell 5.1 rejects them, which is
+// the first thing models write. Use pwsh when it's installed.
+let pwsh: string | null | undefined;
+export function windowsShell() {
+  if (pwsh === undefined) {
+    try { pwsh = execFileSync("where.exe", ["pwsh"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/)[0].trim() || null; }
+    catch { pwsh = null; }
+  }
+  return pwsh ?? "powershell.exe";
+}
+export const usingPwsh = () => process.platform === "win32" && windowsShell() !== "powershell.exe";
+
+/** Kill a process and everything it started (a server is usually a grandchild of the shell). */
+export function killTree(p: ChildProcess) {
+  if (!p.pid) return;
+  if (process.platform === "win32") spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  else try { process.kill(-p.pid, "SIGKILL"); } catch { try { p.kill("SIGKILL"); } catch { /* gone */ } }
+}
+
+/** Commands that keep running (servers, watchers): they belong in the App panel, not a terminal call. */
+export const LONG_RUNNING = /(\bhttp\.server\b|SimpleHTTPServer|\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|preview)\b|\bnpx\s+(serve|http-server|live-server|vite(?!\s+build))\b|\bnext\s+(dev|start)\b|\bvite(\s+(dev|serve|preview))?\s*$|\b(uvicorn|gunicorn|hypercorn)\b|\bflask\s+run\b|\bstreamlit\s+run\b|manage\.py\s+runserver|\bphp\s+-S\b|\brails\s+s(erver)?\b|\b(http-server|live-server)\b|\bnodemon\b|\bnode\s+\S*(server|app|index|main)\.[cm]?[jt]s\s*$)/i;
 
 export type RunEvent =
   | { type: "start"; command: string }
@@ -63,7 +85,7 @@ export function startApp(cmd: string) {
   stopApp();
   command = cmd; out = ""; readPos = 0; url = undefined; exitCode = undefined;
   const win = process.platform === "win32";
-  const p = spawn(win ? "powershell.exe" : "/bin/bash", win ? ["-NoProfile", "-NonInteractive", "-Command", cmd] : ["-lc", cmd], {
+  const p = spawn(win ? windowsShell() : "/bin/bash", win ? ["-NoProfile", "-NonInteractive", "-Command", cmd] : ["-lc", cmd], {
     cwd: root,
     // unbuffered output, no colors, and dev servers shouldn't pop open an external browser
     env: { ...process.env, PYTHONUNBUFFERED: "1", FORCE_COLOR: "0", NO_COLOR: "1", BROWSER: "none" },

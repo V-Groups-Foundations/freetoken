@@ -143,7 +143,7 @@ const terms = new Map<string, ChildProcess>();
 function termRun(id: string, command: string) {
   const root = getRoot();
   if (!root) throw new Error("Open a folder first");
-  const shellBin = process.platform === "win32" ? "powershell.exe" : "/bin/bash";
+  const shellBin = process.platform === "win32" ? runner.windowsShell() : "/bin/bash";
   const args = process.platform === "win32" ? ["-NoProfile", "-Command", command] : ["-lc", command];
   const p = spawn(shellBin, args, { cwd: root, env: process.env });
   terms.set(id, p);

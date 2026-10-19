@@ -100,6 +100,10 @@ export function ChatPanel(props: {
   const [skipActive, setSkipActive] = useState(false);
   useEffect(() => setSkipActive(false), [props.activeFile]);
   const [confirmRewind, setConfirmRewind] = useState<number | null>(null);
+  // a message sent while the agent was busy, waiting for the stop to finish
+  const queued = useRef<{ text: string; as: Mode } | null>(null);
+  const [queuedText, setQueuedText] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   // "Accept all" or "Step by step", asked when an Agent prompt is sent (remembered per chat if the user wants)
   const [chooser, setChooser] = useState<{ text: string; as: Mode } | null>(null);
   const [remember, setRemember] = useState(false);
@@ -122,7 +126,7 @@ export function ChatPanel(props: {
   const autoRunRef = useRef(autoRun);
   autoRunRef.current = autoRun;
   const [atBottom, setAtBottom] = useState(true);
-  const turn = useRef({ start: 0, tokens: 0, chars: 0, tools: 0, verb: THINKING[0], mode: "agent" as Mode });
+  const turn = useRef({ start: 0, tokens: 0, chars: 0, tools: 0, verb: THINKING[0], mode: "agent" as Mode, waitUntil: 0 });
   const history = useRef<string[]>([]);
   const histPos = useRef(-1);
   const list = useRef<HTMLDivElement>(null);
@@ -175,6 +179,8 @@ export function ChatPanel(props: {
     if (e.type === "text") t.chars += e.delta.length;
     if (e.type === "usage") { t.tokens += e.output; if (e.input) setCtxTokens(e.input); }
     if (e.type === "tool_start") t.tools++;
+    if (e.type === "waiting") t.waitUntil = Date.now() + e.seconds * 1000;
+    else if (e.type === "text" || e.type === "tool_start" || e.type === "thinking") t.waitUntil = 0;
     setItems((prev) => {
       const next = [...prev];
       // a thinking block ends as soon as anything else arrives
@@ -244,7 +250,16 @@ export function ChatPanel(props: {
 
   async function send(raw = input, as: Mode = modeRef.current, run?: "all" | "step") {
     const text = raw.trim();
-    if (!text || busy) return;
+    if (!text) return;
+    // typing while the agent works: stop it, then send this as soon as it has stopped
+    if (busy) {
+      queued.current = { text, as };
+      setQueuedText(text);
+      setInput("");
+      setStopping(true);
+      api.stop(sidRef.current);
+      return;
+    }
     if (/^\/(new|clear)$/.test(text)) { setInput(""); return newChat(); }
     if (/^\/(ask|agent|plan)$/.test(text)) { setMode(text.slice(1) as Mode); setInput(""); return; }
     if (text === "/memory") { setInput(""); setMemOpen(true); refreshMem(); return; }
@@ -266,7 +281,7 @@ export function ChatPanel(props: {
     const chips = [...mentions.map((m) => `@${m}`), ...(sel ? [`${sel.path}:${sel.start}-${sel.end}`] : [])];
     history.current = [text, ...history.current.filter((h) => h !== text)].slice(0, 50);
     histPos.current = -1;
-    turn.current = { start: Date.now(), tokens: 0, chars: 0, tools: 0, verb: THINKING[Math.floor(Math.random() * THINKING.length)], mode };
+    turn.current = { start: Date.now(), tokens: 0, chars: 0, tools: 0, verb: THINKING[Math.floor(Math.random() * THINKING.length)], mode, waitUntil: 0 };
     stick.current = true;
     setItems((p) => [...p, { kind: "user", text, chips }]);
     setInput(""); setMentions([]); props.clearSelection();
@@ -360,6 +375,13 @@ export function ChatPanel(props: {
     if (u) send(u.text, m?.mode);
   }
 
+  useEffect(() => {
+    if (busy) return;
+    setStopping(false);
+    const q = queued.current;
+    if (q) { queued.current = null; setQueuedText(null); send(q.text, q.as); }
+  }, [busy]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // prompts from the rest of the editor
   useEffect(() => {
     if (!props.inject) return;
@@ -434,6 +456,7 @@ export function ChatPanel(props: {
   // status-line verb: what the agent is doing right now
   const running = [...items].reverse().find((x): x is ToolItem => x.kind === "tool" && x.status === "running");
   const verb = waiting ? "Waiting for your approval"
+    : turn.current.waitUntil > Date.now() ? `Free models are busy — retrying in ${Math.ceil((turn.current.waitUntil - Date.now()) / 1000)}s`
     : running ? `${TOOLS[running.name]?.verb ?? "Running"}${argOf(running) && running.name !== "run_terminal_command" ? ` ${short(baseName(argOf(running)), 32)}` : ""}`
     : items[items.length - 1]?.kind === "thinking" ? "Thinking"
     : turn.current.verb;
@@ -564,6 +587,10 @@ export function ChatPanel(props: {
       )}
 
       <div className="composer">
+        {queuedText && (
+          <div className="queued" role="status"><span>⏹ Stopping, then sending: <b>{short(queuedText, 60)}</b></span>
+            <button className="linklike" onClick={() => { queued.current = null; setQueuedText(null); }}>Cancel</button></div>
+        )}
         {autoRun && busy && (
           <div className="autorun" role="status"><span>⏵⏵ Auto-running commands until this task finishes</span>
             <button className="linklike" onClick={() => setAutoRun(false)}>Turn off</button></div>
@@ -617,7 +644,7 @@ export function ChatPanel(props: {
             </div>
           )}
           <textarea ref={box} rows={1} aria-label="Message the AI"
-            placeholder={busy ? "Type your next message…" : project && mode === "agent" ? `Continue ${project.name}…` : modeInfo.placeholder}
+            placeholder={busy ? "Type to stop it and do this instead…" : project && mode === "agent" ? `Continue ${project.name}…` : modeInfo.placeholder}
             value={input} onChange={(e) => onInput(e.target.value)} onKeyDown={onKeyDown} />
           <div className="composer-row">
             <div className={`mode-switch m-${mode}`} role="radiogroup" aria-label="Mode">
@@ -629,7 +656,7 @@ export function ChatPanel(props: {
             </div>
             <span className="spacer" />
             {ctxTokens > 0 && <span className="ctx-meter" title={`The model read ${ctxTokens.toLocaleString()} tokens of context on its last step. Start a new chat (/new) when switching to an unrelated task.`}>{fmtTokens(ctxTokens)} context</span>}
-            {busy ? <button className="send stop" onClick={() => api.stop(sid)} aria-label="Stop the agent" title="Stop (Esc)"><span /></button>
+            {busy ? <button className={`send stop${stopping ? " stopping" : ""}`} onClick={() => { setStopping(true); api.stop(sid); }} aria-label="Stop the agent" title={stopping ? "Stopping…" : "Stop (Esc) — or just type your next message"}><span /></button>
               : <button className="send" onClick={() => send()} disabled={!input.trim()} aria-label="Send" title="Send (Enter)">↑</button>}
           </div>
         </div>

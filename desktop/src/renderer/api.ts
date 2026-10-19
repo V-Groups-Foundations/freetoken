@@ -8,6 +8,7 @@ export type ToolDetail =
 export type AgentEvent =
   | { type: "turn_start"; index: number }
   | { type: "thinking"; delta: string }
+  | { type: "waiting"; seconds: number; reason: string }
   | { type: "text"; delta: string }
   | { type: "tool_start"; id: string; name: string; input: any }
   | { type: "tool_end"; id: string; ok: boolean; summary: string; detail?: ToolDetail }

@@ -88,6 +88,15 @@ async function main() {
     return typeof miss === "string" && miss.includes("Closest match") && miss.includes("| def");
   });
 
+  await check("a rate-limited request is waited out and the turn still succeeds", async () => {
+    const events: AI.AgentEvent[] = [];
+    const t0 = Date.now();
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "busy", mode: "ask", text: "busy test please" }, (e) => { events.push(e); if (e.type === "done") r(); }));
+    const waited = events.find((e) => e.type === "waiting");
+    const text = events.filter((e) => e.type === "text").map((e: any) => e.delta).join("");
+    return !!waited && Date.now() - t0 >= 900 && text.includes("FreeToken says") && !events.some((e) => e.type === "error");
+  });
+
   await check("<think> reasoning is split from the answer even when tags are cut across chunks", async () => {
     const { thinkSplitter } = await import("../src/main/ai-freetoken");
     const split = thinkSplitter();
