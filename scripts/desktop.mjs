@@ -29,7 +29,8 @@ if (!built || newest(join(desk, 'src')) > built) {
   if (spawnSync(win ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: desk, stdio: 'inherit', shell: win }).status) process.exit(1);
 }
 
-const server = process.argv.includes('--with-server') ? npm(['run', 'dev'], root) : null;
+// FREETOKEN_NO_OPEN: V-Run is what you're opening; it signs itself in to this server
+const server = process.argv.includes('--with-server') ? npm(['run', 'dev'], root, { env: { ...process.env, FREETOKEN_NO_OPEN: '1' } }) : null;
 const app = npm(['start'], desk);
 const stop = () => {
   if (!server?.pid) return;

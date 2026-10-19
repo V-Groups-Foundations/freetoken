@@ -244,7 +244,23 @@ const projects = new Map<string, link.FreeTokenProject>();
 let pendingProject: link.FreeTokenProject | null = null;
 const chatLinks = new Map<string, string>(); // chat session → FreeToken project id
 
+/** Sign V-Run in to the FreeToken next door on its own (no-op when connected or not local). */
+async function tryAutoConnect() {
+  if (ftToken()) return true;
+  if (!ftRoot || isTest && !process.env.VRUN_ALLOW_AUTOCONNECT) return false;
+  const origin = ftOrigin();
+  if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return false;
+  const token = await link.autoConnect(origin, ftRoot);
+  if (!token) return false;
+  settings.ftTokenEnc = encrypt(token);
+  settings.provider = "freetoken";
+  saveSettings();
+  send("settings-changed", null);
+  return true;
+}
+
 async function openFreeTokenProject(id: string) {
+  if (!ftToken()) await link.ensureServer(ftOrigin(), ftRoot).then(tryAutoConnect).catch(() => false);
   if (!ftToken()) {
     openFtPage("/v-run").catch(() => {});
     throw new Error("Connect V-Run to FreeToken first — the sign-in page is open in V-Run.");
@@ -349,6 +365,7 @@ function registerIpc() {
   handle("ft:hub", async () => {
     const origin = ftOrigin();
     if (!(await link.isUp(origin))) return { origin, state: "offline", canStart: !!ftRoot, projects: [], usage: null, models: [], model: settings.ftModel, provider: useFreeToken() ? "freetoken" : "anthropic" };
+    await tryAutoConnect();
     return { ...(await link.hubData(ftBase(), ftToken())), canStart: !!ftRoot, model: settings.ftModel, provider: useFreeToken() ? "freetoken" : "anthropic" };
   });
   handle("ft:start-server", () => link.ensureServer(ftOrigin(), ftRoot));
@@ -480,8 +497,12 @@ app.whenReady().then(async () => {
     if (pendingLink) { const u = pendingLink; pendingLink = null; handleDeepLink(u); }
   });
   // V-Run inside the FreeToken repo brings its server up when it's the model provider
-  if (useFreeToken() && ftRoot && !isTest)
-    link.ensureServer(ftOrigin(), ftRoot).then((how) => how === "started" && send("ft-server", "started")).catch(() => {});
+  // and when V-Run has no AI set up at all, it connects itself to that server: zero-step first run
+  const noAi = !ftToken() && !storedKey() && !process.env.ANTHROPIC_API_KEY;
+  if (ftRoot && !isTest && (useFreeToken() || noAi))
+    link.ensureServer(ftOrigin(), ftRoot)
+      .then(async (how) => { if (how === "started") send("ft-server", "started"); if (await tryAutoConnect()) send("ft-server", "connected"); })
+      .catch(() => {});
 });
 app.on("will-quit", () => link.stopServer());
 app.on("window-all-closed", () => {

@@ -1,15 +1,16 @@
 import { getDb } from '@/db';
 import { listKeys } from '@/keys/service';
 import { requireUserId } from '@/lib/session';
-import { PROVIDERS, toPublicProvider } from '@/providers/registry';
+import { PROVIDERS, starterEnabled, toPublicProvider } from '@/providers/registry';
 import { SERVICES, toPublicService } from '@/services/registry';
 import { ProviderCard } from './provider-card';
+import { QuickConnect } from './quick-connect';
 import { ServiceCard } from './service-card';
 
 export default async function ConnectPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connected?: string; error?: string }>;
+  searchParams: Promise<{ connected?: string; error?: string; welcome?: string }>;
 }) {
   const uid = await requireUserId();
   const keyList = await listKeys(getDb(), uid);
@@ -17,7 +18,8 @@ export default async function ConnectPage({
   // Only count keys for providers still offered (an orphaned key from a removed provider must not inflate the tally).
   const offered = new Set<string>(PROVIDERS.map((p) => p.id));
   const connectedCount = keyList.filter((k) => k.status === 'valid' && offered.has(k.provider)).length;
-  const { connected, error } = await searchParams;
+  const { connected, error, welcome } = await searchParams;
+  const connectedIds = keyList.filter((k) => k.status === 'valid').map((k) => k.provider);
 
   return (
     <section className="grid-bg relative space-y-8">
@@ -57,7 +59,13 @@ export default async function ConnectPage({
         <p className="rounded-xl border border-[var(--border)] bg-[var(--danger-tint)] px-4 py-3 text-sm text-[var(--danger)]">{error}</p>
       )}
 
+      <QuickConnect welcome={welcome === '1'} starterOn={starterEnabled()} connected={connectedIds} />
+
       {/* Provider grid */}
+      <div className="pt-2">
+        <span className="eyebrow">every provider</span>
+        <h2 className="h2 mt-2.5">All free providers</h2>
+      </div>
       <div className="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {PROVIDERS.map((p) => (
           <ProviderCard key={p.id} provider={toPublicProvider(p)} connected={keys.get(p.id) ?? null} oauth={p.id === 'openrouter'} />

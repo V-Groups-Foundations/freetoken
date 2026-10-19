@@ -5,6 +5,7 @@ import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db';
 import { accounts, sessions, users, verificationTokens } from '@/db/schema';
+import { localLoginEnabled, localLoginMatches, localOwner } from '@/server/local-login';
 
 export const devLoginEnabled =
   process.env.AUTH_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'production';
@@ -19,6 +20,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
   session: { strategy: 'jwt' },
   pages: { signIn: '/login' },
   providers: [
+    // This computer: the token from `npm run dev`'s welcome link (see src/server/local-login.ts)
+    ...(localLoginEnabled()
+      ? [
+          Credentials({
+            id: 'local',
+            name: 'This computer',
+            credentials: { token: {} },
+            async authorize(c) {
+              return localLoginMatches(c?.token) ? localOwner(getDb()) : null;
+            },
+          }),
+        ]
+      : []),
     ...(process.env.AUTH_GOOGLE_ID ? [Google] : []),
     ...(devLoginEnabled
       ? [

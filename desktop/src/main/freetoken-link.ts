@@ -143,7 +143,7 @@ export async function ensureServer(origin: string, root: string | null, onLog?: 
   if (!server) {
     const port = new URL(origin).port || "3000";
     server = spawn(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "dev", "--", "--port", port], {
-      cwd: root, shell: process.platform === "win32", windowsHide: true, env: { ...process.env, BROWSER: "none" },
+      cwd: root, shell: process.platform === "win32", windowsHide: true, env: { ...process.env, BROWSER: "none", FREETOKEN_NO_OPEN: "1" },
       detached: process.platform !== "win32",
     });
     server.stdout?.on("data", (d) => onLog?.(String(d)));
@@ -156,6 +156,22 @@ export async function ensureServer(origin: string, root: string | null, onLog?: 
     await new Promise((r) => setTimeout(r, 1000));
   }
   throw new Error("FreeToken is taking too long to start.");
+}
+
+/**
+ * Connect V-Run to the FreeToken next door with no sign-in: prove we can read its local sign-in token
+ * (.data/local-login.token, written by `npm run dev`) and get V-Run's own API token back.
+ */
+export async function autoConnect(origin: string, root: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  let token: string;
+  try { token = (await fs.promises.readFile(path.join(root, ".data", "local-login.token"), "utf8")).trim(); } catch { return null; }
+  try {
+    const res = await fetchImpl(`${origin}/api/local/v-run-token`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }), signal: AbortSignal.timeout(15_000),
+    });
+    const j = await res.json().catch(() => null) as { token?: string } | null;
+    return res.ok && j?.token?.startsWith("ft_") ? j.token : null;
+  } catch { return null; }
 }
 
 /** Stop the server only if V-Run started it. */

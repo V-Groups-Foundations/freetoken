@@ -1,5 +1,5 @@
 export type ProviderId =
-  | 'gemini' | 'groq' | 'openrouter' | 'github' | 'nvidia' | 'sambanova' | 'cohere';
+  | 'gemini' | 'groq' | 'openrouter' | 'github' | 'nvidia' | 'sambanova' | 'cohere' | 'starter';
 
 export interface ProviderDef {
   id: ProviderId;
@@ -89,8 +89,25 @@ export const PROVIDERS: ProviderDef[] = [
   },
 ];
 
+/**
+ * Built in, no key: Pollinations' free anonymous tier (GPT-OSS 20B, tool calling included), so chat,
+ * the API and V-Run work the moment FreeToken starts. It's the last resort — every connected provider
+ * is tried first — and it's shared and rate-limited, so don't send it anything sensitive.
+ * Turn it off with FREETOKEN_STARTER=off.
+ */
+export const STARTER: ProviderDef = {
+  id: 'starter',
+  name: 'Starter (built in, no key)',
+  keyUrl: 'https://pollinations.ai',
+  steps: [],
+  note: 'Free and needs no key, so FreeToken works straight away. Shared and rate-limited — add your own free keys for speed and higher limits.',
+  validateModel: 'openai',
+  baseUrl: () => 'https://text.pollinations.ai/openai',
+};
+export const starterEnabled = () => (process.env.FREETOKEN_STARTER ?? '').toLowerCase() !== 'off';
+
 export function getProvider(id: string): ProviderDef | undefined {
-  return PROVIDERS.find((p) => p.id === id);
+  return id === 'starter' ? STARTER : PROVIDERS.find((p) => p.id === id);
 }
 
 export type PublicProvider = Omit<ProviderDef, 'baseUrl' | 'validateModel'>;

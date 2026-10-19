@@ -5,6 +5,9 @@ type NewModel = typeof models.$inferInsert;
 // Model IDs checked against provider docs 2026-10-13. Free-tier limits are approximate (null = unknown;
 // the router still learns from 429s) and change often; edit rows in the DB rather than here.
 export const SEED_MODELS: NewModel[] = [
+  // Built-in keyless starter (Pollinations, anonymous tier): last resort, so priority 90.
+  { provider: 'starter', modelId: 'openai', displayName: 'GPT-OSS 20B (starter, no key)', tier: 'smart', priority: 90, contextWindow: 131072, supportsTools: true },
+  { provider: 'starter', modelId: 'openai-fast', displayName: 'GPT-OSS 20B fast (starter, no key)', tier: 'fast', priority: 90, contextWindow: 131072, supportsTools: true },
   { provider: 'groq', modelId: 'openai/gpt-oss-120b', displayName: 'GPT-OSS 120B', tier: 'smart', priority: 10, contextWindow: 131072, supportsTools: true, rpm: 30, rpd: 1000, tpd: 200000 },
   { provider: 'groq', modelId: 'qwen/qwen3.8-27b', displayName: 'Qwen 3.8 27B', tier: 'smart', priority: 15, contextWindow: 131072, supportsTools: true, rpm: 30, rpd: 1000, tpd: 200000 },
   { provider: 'groq', modelId: 'openai/gpt-oss-20b', displayName: 'GPT-OSS 20B', tier: 'fast', priority: 10, contextWindow: 131072, supportsTools: true, rpm: 30, rpd: 1000, tpd: 500000 },

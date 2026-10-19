@@ -4,7 +4,7 @@ import { createTestDb, createUser } from '../helpers/db';
 import { fakeFetch, okJson, sse, type Handler } from '../helpers/fake-fetch';
 import { TEST_VAULT_KEY, seedTestModels } from '../helpers/fixtures';
 import type { DB } from '@/db';
-import { providerKeys, usageEvents } from '@/db/schema';
+import { models, providerKeys, usageEvents } from '@/db/schema';
 import { createMemoryKV, type KV } from '@/lib/kv';
 import { saveKey } from '@/keys/service';
 import { routeChat } from '@/router/execute';
@@ -102,6 +102,39 @@ describe('routeChat', () => {
     const { f, p } = run(() => new Response('{"error":{"message":"bad param"}}', { status: 400 }));
     expect(await p).toMatchObject({ ok: false, status: 400, message: 'bad param' });
     expect(f.calls).toHaveLength(1);
+  });
+
+  describe('built-in keyless starter', () => {
+    const POLL = 'text.pollinations.ai';
+    const addStarter = () => db.insert(models).values([
+      { provider: 'starter', modelId: 'openai', displayName: 'Starter', tier: 'smart', priority: 90, contextWindow: 131072, supportsTools: true },
+      { provider: 'starter', modelId: 'openai-fast', displayName: 'Starter fast', tier: 'fast', priority: 90, contextWindow: 131072, supportsTools: true },
+    ]);
+
+    it('answers with no keys at all, without sending a key', async () => {
+      await addStarter();
+      const { f, p } = run(() => okJson('hi from starter'));
+      expect((await p).ok).toBe(true);
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0].url).toContain(POLL);
+      expect(f.calls[0].auth).toBeNull();
+    });
+
+    it("is only a fallback: the user's own provider goes first", async () => {
+      await addStarter();
+      await connect('groq', 'gsk_mine');
+      const { f, p } = run((url) => (url.includes(GROQ) ? new Response('{}', { status: 429 }) : okJson('saved by starter')));
+      expect((await p).ok).toBe(true);
+      expect(f.calls[0].url).toContain(GROQ);
+      expect(f.calls.at(-1)!.url).toContain(POLL);
+    });
+
+    it('can be turned off with FREETOKEN_STARTER=off', async () => {
+      await addStarter();
+      process.env.FREETOKEN_STARTER = 'off';
+      try { expect(await run(() => okJson()).p).toMatchObject({ ok: false, status: 400, code: 'no_providers' }); }
+      finally { delete process.env.FREETOKEN_STARTER; }
+    });
   });
 
   it('explains when no providers are connected', async () => {

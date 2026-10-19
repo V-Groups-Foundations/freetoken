@@ -66,7 +66,8 @@ export async function postJson(
   try {
     const res = await fetchImpl(`${def.baseUrl(creds.extra)}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${creds.key}` },
+      // keyless providers (the built-in starter) get no Authorization header at all
+      headers: { 'content-type': 'application/json', ...(creds.key ? { authorization: `Bearer ${creds.key}` } : {}) },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
