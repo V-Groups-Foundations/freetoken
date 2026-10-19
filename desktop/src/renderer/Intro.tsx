@@ -8,18 +8,24 @@ const DURATION = 5000;
 
 export function Intro() {
   const [state, setState] = useState<"play" | "leave" | "gone">(() => (new URLSearchParams(location.search).get("intro") === "0" ? "gone" : "play"));
+  // only a *playing* intro can be skipped: the key listener lives exactly as long as that state, and
+  // "skip" never brings back an intro that has already left (that was the half-second flash on the
+  // first key press after the intro had ended by itself)
+  const leave = () => setState((s) => (s === "play" ? "leave" : s));
   useEffect(() => {
     if (state !== "play") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const t1 = setTimeout(() => setState("leave"), reduce ? 900 : DURATION - 450);
-    const t2 = setTimeout(() => setState("gone"), reduce ? 1300 : DURATION);
-    const skip = () => { setState("leave"); setTimeout(() => setState("gone"), 450); };
-    window.addEventListener("keydown", skip, { once: true });
-    return () => { clearTimeout(t1); clearTimeout(t2); window.removeEventListener("keydown", skip); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = setTimeout(leave, reduce ? 900 : DURATION - 450);
+    window.addEventListener("keydown", leave);
+    return () => { clearTimeout(t); window.removeEventListener("keydown", leave); };
+  }, [state]);
+  useEffect(() => {
+    if (state !== "leave") return;
+    const t = setTimeout(() => setState("gone"), 450);
+    return () => clearTimeout(t);
+  }, [state]);
 
   if (state === "gone") return null;
-  const leave = () => { setState("leave"); setTimeout(() => setState("gone"), 450); };
   return (
     <div className={`vg-intro${state === "leave" ? " vg-leave" : ""}`} role="presentation" onClick={leave}>
       <div className="vg-stage vg-group">

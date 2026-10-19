@@ -16,7 +16,13 @@ const DURATION = 7800;
 export function Intro() {
   const [state, setState] = useState<'play' | 'leave' | 'gone'>('play');
 
+  // Only a *playing* intro can be skipped: the key listener lives exactly as long as that state, and
+  // "skip" never brings back an intro that has already left (that was the half-second flash on the
+  // first key press after the intro had ended by itself).
+  const leave = () => setState((s) => (s === 'play' ? 'leave' : s));
+
   useEffect(() => {
+    if (state !== 'play') return;
     if (document.documentElement.classList.contains('vg-seen')) {
       const t = setTimeout(() => setState('gone'), 0);
       return () => clearTimeout(t);
@@ -25,15 +31,18 @@ export function Intro() {
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     // the CSS timeline began at first paint, before hydration: count from there, not from now
     const begun = Number(document.querySelector('.vg-art')?.getAnimations()[0]?.currentTime ?? 0) || 0;
-    const t1 = setTimeout(() => setState('leave'), Math.max(0, (reduce ? 1500 : DURATION - 700) - begun));
-    const t2 = setTimeout(() => setState('gone'), Math.max(700, (reduce ? 2200 : DURATION) - begun));
-    const skip = () => { setState('leave'); setTimeout(() => setState('gone'), 700); };
-    window.addEventListener('keydown', skip, { once: true });
-    return () => { clearTimeout(t1); clearTimeout(t2); window.removeEventListener('keydown', skip); };
-  }, []);
+    const t = setTimeout(leave, Math.max(0, (reduce ? 1500 : DURATION - 700) - begun));
+    window.addEventListener('keydown', leave);
+    return () => { clearTimeout(t); window.removeEventListener('keydown', leave); };
+  }, [state]);
+
+  useEffect(() => {
+    if (state !== 'leave') return;
+    const t = setTimeout(() => setState('gone'), 700);
+    return () => clearTimeout(t);
+  }, [state]);
 
   if (state === 'gone') return null;
-  const leave = () => { setState('leave'); setTimeout(() => setState('gone'), 700); };
   return (
     <div className={`vg-intro${state === 'leave' ? ' vg-leave' : ''}`} role="presentation" onClick={leave}>
       <div className="vg-stage vg-group">
