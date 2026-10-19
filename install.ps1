@@ -5,6 +5,8 @@
 $ErrorActionPreference = 'Stop'
 $repo = 'V-Groups-Foundations/freetoken'
 $dir = if ($env:FREETOKEN_DIR) { $env:FREETOKEN_DIR } else { Join-Path $HOME 'freetoken' }
+# expand short (8.3) names like C:\Users\NAME~1 - PowerShell's location cmdlets reject them
+$dir = [IO.Path]::GetFullPath($dir)
 
 Write-Host "`n  FreeToken by V Groups - free AI for everyone`n" -ForegroundColor Cyan
 
@@ -34,7 +36,7 @@ if (Test-Path (Join-Path $dir 'package.json')) {
   Remove-Item $zip, $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Set-Location $dir
+Set-Location -LiteralPath $dir
 Write-Host "  Installing (about a minute)..."
 npm install --no-audit --no-fund --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
