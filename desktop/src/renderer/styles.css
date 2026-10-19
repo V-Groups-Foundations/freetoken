@@ -500,3 +500,17 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .init-offer > span { color: var(--accent, #38d6ff); }
 .init-offer > div { flex: 1; }
 .init-offer .btn { flex-shrink: 0; }
+
+/* skills panel (Skills.tsx) */
+.skills-panel { max-height: 70vh; }
+.skill-install { display: flex; gap: 6px; }
+.skill-install input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border, #333); background: var(--bg, #111); color: inherit; font: inherit; font-size: 12px; }
+.skill-state { font-size: 12px; padding: 6px 8px; border-radius: 7px; background: color-mix(in srgb, var(--accent, #38d6ff) 8%, transparent); }
+.skill-state.error { background: color-mix(in srgb, #ef4444 14%, transparent); }
+.skill-state .link-btn { background: none; border: 0; padding: 0; color: var(--accent, #38d6ff); cursor: pointer; font: inherit; text-decoration: underline; }
+.skill-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
+.skill-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border, #333); }
+.skill-main { flex: 1; min-width: 0; }
+.skill-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-scope { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: color-mix(in srgb, var(--fg, #fff) 8%, transparent); opacity: .85; }
+.skill-scope.builtin { background: color-mix(in srgb, var(--accent, #38d6ff) 18%, transparent); }

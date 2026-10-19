@@ -8,6 +8,7 @@ import * as schema from './schema';
 import { acquireDirLock } from './lock';
 import { runMigrations } from './migrations';
 import journal from '../../drizzle/meta/_journal.json';
+import { SEED_MODELS } from '../catalog/seed';
 
 export type DB = PgDatabase<PgQueryResultHKT, typeof schema>;
 
@@ -26,8 +27,11 @@ export function createDb(url: string): DB {
 
 const g = globalThis as unknown as { __ftDb?: DB; __ftMigratedTo?: string };
 
-/** The newest migration this code ships with; the running database is brought up to it automatically. */
-const LATEST_MIGRATION = journal.entries.at(-1)?.tag ?? '';
+/**
+ * The newest migration and model catalog this code ships with; the running database is brought up to
+ * them automatically (new catalog rows are added, existing rows — and your edits to them — are kept).
+ */
+const LATEST_MIGRATION = `${journal.entries.at(-1)?.tag ?? ''}:${SEED_MODELS.map((m) => `${m.provider}/${m.modelId}`).join(',').length}`;
 
 export function getDb(): DB {
   const url = process.env.DATABASE_URL;
@@ -39,7 +43,8 @@ export function getDb(): DB {
   // columns its database doesn't have until someone runs db:migrate. Applied once per migration set.
   if (url && g.__ftMigratedTo !== LATEST_MIGRATION && process.env.FREETOKEN_AUTO_MIGRATE !== 'off' && existsSync('drizzle')) {
     g.__ftMigratedTo = LATEST_MIGRATION;
-    runMigrations(g.__ftDb, url).catch((e) => {
+    const db = g.__ftDb;
+    runMigrations(db, url).then(() => db.insert(schema.models).values(SEED_MODELS).onConflictDoNothing()).catch((e) => {
       g.__ftMigratedTo = undefined;
       console.error('FreeToken: applying database migrations failed — run npm run db:migrate', e);
     });

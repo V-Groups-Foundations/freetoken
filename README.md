@@ -136,8 +136,11 @@ freetoken setup cursor            # copy-paste setup for Cursor, Cline, Continue
 
 | Provider | Free tier |
 |---|---|
+| **Kilo Gateway · LLM7** | **work with no key at all** — used out of the box (Nemotron Ultra 550B, DeepSeek V4 Flash, Codestral…) |
 | Google Gemini · Groq · NVIDIA NIM · Cohere · GitHub Models · SambaNova | free, no card |
-| OpenRouter | dozens of `:free` models |
+| Cloudflare Workers AI | 10,000 neurons/day free (GPT-OSS 120B, GLM 4.7 Flash) |
+| Z.ai | GLM Flash models free |
+| OpenRouter · Requesty | free models (OpenRouter 50/day, Requesty 200/day) |
 
 Optional tools: Tavily (web search) · DeepL (translation) · Jina (embeddings) · OCR.space (scanned files) · ElevenLabs / Google TTS (voices).
 

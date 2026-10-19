@@ -59,7 +59,9 @@ export function ProviderCard({ provider, connected, oauth = false }: { provider:
   const isConnected = connected?.status === 'valid';
   const needs = provider.extraField ? `API key + ${provider.extraField.label}` : 'API key';
   const badge = !connected
-    ? <span className="badge badge-off">Not connected</span>
+    ? provider.keyless
+      ? <span className="badge badge-ok" title="Used automatically; add a key only for higher limits">Works — no key needed</span>
+      : <span className="badge badge-off">Not connected</span>
     : isConnected
       ? <span className="badge badge-ok">••••{connected.last4}</span>
       : <span className="badge badge-bad">Key rejected</span>;

@@ -4,6 +4,7 @@ import { ChatPanel } from "./Chat";
 import { Banner } from "./Logo";
 import ftMark from "./brand/freetoken.png";
 import { FreeTokenHub } from "./FreeTokenHub";
+import * as videoEncoder from "./video-encoder";
 import { EditorArea, liveText, registerTabCompletions, type Review, type Selection, type Tab } from "./Editor";
 
 export function App() {
@@ -66,6 +67,16 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
     const b = api.onPreviewOpen(() => { setTermOpen(true); setPanelTab("preview"); });
     return () => { a(); b(); };
   }, []);
+  // video export: the main process renders frames, this window encodes them
+  useEffect(() => api.onVideoEncode(async (m) => {
+    try {
+      const value = m.op === "begin" ? await videoEncoder.begin(m.payload)
+        : m.op === "frame" ? await videoEncoder.frame(m.payload)
+        : m.op === "end" ? await videoEncoder.end()
+        : videoEncoder.abort();
+      api.videoReply({ id: m.id, ok: true, value });
+    } catch (e) { api.videoReply({ id: m.id, ok: false, error: (e as Error).message }); }
+  }), []);
   const [index, setIndex] = useState<IndexStatus>({ state: "indexing" });
   const [selection, setSelection] = useState<Selection | null>(null);
   const [treeVersion, setTreeVersion] = useState(0);

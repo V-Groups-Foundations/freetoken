@@ -1,5 +1,6 @@
 export type ProviderId =
-  | 'gemini' | 'groq' | 'openrouter' | 'github' | 'nvidia' | 'sambanova' | 'cohere' | 'starter';
+  | 'gemini' | 'groq' | 'openrouter' | 'github' | 'nvidia' | 'sambanova' | 'cohere'
+  | 'cloudflare' | 'zai' | 'requesty' | 'kilo' | 'llm7' | 'starter';
 
 export interface ProviderDef {
   id: ProviderId;
@@ -10,6 +11,8 @@ export interface ProviderDef {
   extraField?: { name: 'accountId'; label: string; pattern?: string; hint?: string };
   /** Cheap model used for the connect-time "Test" call. */
   validateModel: string;
+  /** Works without a key (anonymous free tier): used out of the box; a key only raises the limits. */
+  keyless?: boolean;
   baseUrl(extra?: string | null): string;
 }
 
@@ -87,7 +90,63 @@ export const PROVIDERS: ProviderDef[] = [
     validateModel: 'command-r7b-12-2024',
     baseUrl: () => 'https://api.cohere.ai/compatibility/v1',
   },
+  {
+    id: 'cloudflare',
+    name: 'Cloudflare Workers AI',
+    keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+    steps: [
+      'Sign in to the Cloudflare dashboard (free account, no card).',
+      'Copy your Account ID (right sidebar of any zone, or Workers & Pages → Overview).',
+      'Profile → API Tokens → Create Token → "Workers AI" template → copy the token and paste it here.',
+    ],
+    note: 'Free every day: 10,000 "neurons" (roughly 100k+ tokens on GPT-OSS 120B), reset at 00:00 UTC.',
+    extraField: { name: 'accountId', label: 'Account ID', pattern: '^[0-9a-f]{32}$', hint: '32 hex characters' },
+    validateModel: '@cf/zai-org/glm-4.7-flash',
+    baseUrl: (accountId) => `https://api.cloudflare.com/client/v4/accounts/${accountId ?? ''}/ai/v1`,
+  },
+  {
+    id: 'zai',
+    name: 'Z.ai (GLM Flash)',
+    keyUrl: 'https://z.ai/manage-apikey/apikey-list',
+    steps: ['Sign in at z.ai.', 'Open API Keys and create a key.', 'Copy it and paste it here.'],
+    note: 'GLM Flash models are free (limited concurrency). Other GLM models are paid and never used here.',
+    validateModel: 'glm-4.5-flash',
+    baseUrl: () => 'https://api.z.ai/api/paas/v4',
+  },
+  {
+    id: 'requesty',
+    name: 'Requesty',
+    keyUrl: 'https://app.requesty.ai/api-keys',
+    steps: ['Sign up at app.requesty.ai (no card needed).', 'Create an API key.', 'Copy it and paste it here.'],
+    note: 'Free models only: 200 requests/day and 20/minute, shared across them.',
+    validateModel: 'google/gemma-4-31b-it',
+    baseUrl: () => 'https://router.requesty.ai/v1',
+  },
+  {
+    id: 'kilo',
+    name: 'Kilo Gateway',
+    keyless: true,
+    keyUrl: 'https://app.kilo.ai',
+    steps: ['Works without a key. Optional: sign in at app.kilo.ai, create an API key and paste it here.'],
+    note: 'Free ":free" models (Nemotron Ultra 550B and more) with no key: about 200 requests/hour per network. Some free models may log prompts.',
+    validateModel: 'nvidia/nemotron-3.5-lightning:free',
+    baseUrl: () => 'https://ai-gateway.kilo.ai/api/v1',
+  },
+  {
+    id: 'llm7',
+    name: 'LLM7',
+    keyless: true,
+    keyUrl: 'https://dash.llm7.io',
+    steps: ['Works without a key. Optional: get a free token at dash.llm7.io for higher limits (100k tokens/day) and paste it here.'],
+    note: 'Free "turbo" models with no key; a free token raises the limits. Limits may change without notice.',
+    validateModel: 'codestral-latest',
+    baseUrl: () => 'https://api.llm7.io/v1',
+  },
 ];
+
+/** Providers usable with no key at all, the built-in starter included (FREETOKEN_STARTER=off turns them all off). */
+export const keylessIds = (): ProviderId[] =>
+  starterEnabled() ? ['starter', ...PROVIDERS.filter((p) => p.keyless).map((p) => p.id)] : [];
 
 /**
  * Built in, no key: Pollinations' free anonymous tier (GPT-OSS 20B, tool calling included), so chat,
@@ -113,6 +172,6 @@ export function getProvider(id: string): ProviderDef | undefined {
 export type PublicProvider = Omit<ProviderDef, 'baseUrl' | 'validateModel'>;
 
 export function toPublicProvider(def: ProviderDef): PublicProvider {
-  const { id, name, keyUrl, steps, note, extraField } = def;
-  return { id, name, keyUrl, steps, ...(note ? { note } : {}), ...(extraField ? { extraField } : {}) };
+  const { id, name, keyUrl, steps, note, extraField, keyless } = def;
+  return { id, name, keyUrl, steps, ...(note ? { note } : {}), ...(extraField ? { extraField } : {}), ...(keyless ? { keyless } : {}) };
 }

@@ -15,6 +15,8 @@ export type AgentEvent =
   | { type: "usage"; input: number; output: number }
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "memory"; scope: "project" | "user"; line: string; added: boolean }
+  | { type: "skill"; name: string; scope: "project" | "user" }
+  | { type: "progress"; id: string; text: string }
   | { type: "file_changed"; path: string }
   | { type: "approval"; id: string; command: string; explanation?: string }
   | { type: "todos"; todos: { content: string; status: string }[] }
@@ -63,6 +65,14 @@ interface Api {
   previewBounds(r: { x: number; y: number; width: number; height: number } | null): Promise<void>;
   ftOpen(route?: string): Promise<void>;
   memoryStatus(): Promise<MemoryStatus>;
+  skillsList(): Promise<SkillInfo[]>;
+  skillsInstall(source: string): Promise<{ source: string; installed: { name: string; files: number; skipped: number }[]; readme: string }>;
+  skillsRemove(name: string): Promise<void>;
+  skillsOpen(name: string): Promise<void>;
+  videoExport(file: string, opts?: { fps?: number; width?: number; height?: number; duration?: number }): Promise<{ file: string; bytes: number; frames: number; duration: number; ext: string; errors: string[] }>;
+  videoReply(r: { id: number; ok: boolean; value?: unknown; error?: string }): void;
+  onVideoEncode(fn: (m: { id: number; op: "begin" | "frame" | "end" | "abort"; payload?: any }) => void): Unsub;
+  onVideoProgress(fn: (p: { done: number; total: number }) => void): Unsub;
   remember(fact: string, scope: "project" | "user"): Promise<{ file: string; added: boolean; line: string }>;
   openMemory(scope: "project" | "user"): Promise<string | null>;
   ftHub(): Promise<FtHub>;
@@ -97,6 +107,7 @@ export type AppEvent = { type: "start"; command: string } | { type: "data"; data
 export type PreviewState = { url: string; title: string; loading: boolean };
 export type FtProject = { id: string; name: string; model: string; origin: string; messages: { role: "user" | "assistant"; content: string; provider?: string | null }[] };
 type MemoryFile = { file: string | null; exists: boolean; lines: number; entries: number };
+export type SkillInfo = { name: string; description: string; scope: "user" | "project" | "builtin"; dir: string | null; source?: string };
 export type MemoryStatus = { project: MemoryFile; user: MemoryFile };
 export type FtHub = {
   origin: string; state: "connected" | "no-token" | "bad-token" | "offline"; error?: string; canStart: boolean;

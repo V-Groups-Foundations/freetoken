@@ -1,7 +1,7 @@
 import { models } from '@/db/schema';
 import { loadCredentials, markInvalid, touchKey } from '@/keys/service';
 import { callChat } from '@/providers/client';
-import { getProvider, starterEnabled } from '@/providers/registry';
+import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
 import { estimateTokens, recordUsage, usageToday } from '@/usage/ledger';
 import { tapSseUsage } from '@/usage/tap';
@@ -30,10 +30,13 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   // Only this user's keys: the hard no-pooling rule lives here.
   const creds = await loadCredentials(deps.db, userId, deps.vaultKey);
   const catalog = (await deps.db.select().from(models)) as CatalogModel[];
-  // The keyless starter needs no key of the user's; it's only added when its models are in the catalog
-  // and sorts last (high priority number), so the user's own providers are always tried first.
-  if (starterEnabled() && !creds.has('starter') && catalog.some((m) => m.provider === 'starter' && m.enabled)) {
-    creds.set('starter', { creds: { key: '', extra: null }, excludedFromAuto: false });
+  // Keyless providers (the built-in starter, Kilo, LLM7) need no key of the user's; they're added when
+  // their models are in the catalog and sort after the user's own providers (high priority numbers).
+  // A user who adds a key for one of them gets their key used instead.
+  for (const id of keylessIds()) {
+    if (!creds.has(id) && catalog.some((m) => m.provider === id && m.enabled)) {
+      creds.set(id, { creds: { key: '', extra: null }, excludedFromAuto: false });
+    }
   }
   if (creds.size === 0) {
     return fail(400, 'no_providers', 'You have no connected providers. Add an API key at /connect.');

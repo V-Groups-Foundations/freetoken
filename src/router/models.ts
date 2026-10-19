@@ -1,13 +1,13 @@
 import { and, eq } from 'drizzle-orm';
 import type { DB } from '@/db';
 import { models, providerKeys } from '@/db/schema';
-import { getProvider, starterEnabled } from '@/providers/registry';
+import { getProvider, keylessIds } from '@/providers/registry';
 
 export async function listUserModels(db: DB, userId: string) {
   const keys = await db.select({ provider: providerKeys.provider }).from(providerKeys)
     .where(and(eq(providerKeys.userId, userId), eq(providerKeys.status, 'valid')));
   const connected = new Set(keys.map((k) => k.provider));
-  if (starterEnabled()) connected.add('starter'); // built in, no key
+  for (const id of keylessIds()) connected.add(id); // work without a key
   const rows = await db.select().from(models).where(eq(models.enabled, true));
   return rows
     .filter((r) => connected.has(r.provider))

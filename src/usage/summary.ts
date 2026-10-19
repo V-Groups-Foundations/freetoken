@@ -69,6 +69,10 @@ const SHARED_POOLS: Record<string, { label: string; limit: number; period: 'day'
     label: 'Free-model requests today', limit: 50, period: 'day',
     note: 'One daily allowance shared by every :free model (1,000/day once the account has bought $10+ of credits). Resets 00:00 UTC.',
   },
+  requesty: {
+    label: 'Free-model requests today', limit: 200, period: 'day',
+    note: 'Requesty allows 200 free-model requests a day (20 a minute), shared by all its free models.',
+  },
   cohere: {
     label: 'Trial calls this month', limit: 1000, period: 'month',
     note: 'Trial keys get 1,000 calls a month shared by all models. Production keys are not capped this way.',
@@ -97,6 +101,10 @@ const keyRowsUse = (rows: { provider: string }[], period: 'day' | 'month') =>
 const NO_DAILY_LIMIT: Record<string, string> = {
   nvidia: 'NVIDIA limits requests per minute (about 40/min), not per day — there is no daily count to show.',
   sambanova: 'SambaNova limits requests per minute, not per day — there is no daily count to show.',
+  cloudflare: 'Cloudflare gives 10,000 "neurons" a day (reset 00:00 UTC) — a compute budget rather than a request count.',
+  zai: "Z.ai's Flash models are free with limited concurrency; it doesn't publish a daily count.",
+  kilo: 'Kilo allows about 200 requests an hour per network for free models, with or without a key.',
+  llm7: 'LLM7 limits by rate and tokens (with a free token: 100k tokens/day, 60/min), not a daily request count.',
   gemini: "Google sets Gemini's free limits per model and changes them often, and doesn't report them to apps — see AI Studio → Usage.",
   default: "This provider doesn't publish or report a daily limit, so only what you've used is shown.",
 };

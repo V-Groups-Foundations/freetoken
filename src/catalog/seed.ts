@@ -8,6 +8,20 @@ export const SEED_MODELS: NewModel[] = [
   // Built-in keyless starter (Pollinations, anonymous tier): last resort, so priority 90.
   { provider: 'starter', modelId: 'openai', displayName: 'GPT-OSS 20B (starter, no key)', tier: 'smart', priority: 90, contextWindow: 131072, supportsTools: true },
   { provider: 'starter', modelId: 'openai-fast', displayName: 'GPT-OSS 20B fast (starter, no key)', tier: 'fast', priority: 90, contextWindow: 131072, supportsTools: true },
+  // Keyless gateways (checked live 2026-10-19, anonymous, tools + streamed usage): after the user's own
+  // providers, ahead of the Pollinations starter.
+  { provider: 'kilo', modelId: 'nvidia/nemotron-3-ultra-550b-a55b:free', displayName: 'Nemotron 3 Ultra 550B (Kilo, no key)', tier: 'smart', priority: 78, contextWindow: 262144, supportsTools: true },
+  { provider: 'kilo', modelId: 'nvidia/nemotron-3.5-lightning:free', displayName: 'Nemotron 3.5 Lightning (Kilo, no key)', tier: 'fast', priority: 78, contextWindow: 262144, supportsTools: true },
+  { provider: 'kilo', modelId: 'kilo-auto/free', displayName: 'Kilo Auto Free (no key)', tier: 'smart', priority: 82, contextWindow: 200000, supportsTools: true },
+  { provider: 'llm7', modelId: 'codestral-latest', displayName: 'Codestral (LLM7, no key)', tier: 'fast', priority: 84, contextWindow: 32000, supportsTools: true },
+  { provider: 'llm7', modelId: 'DeepSeek-V4-Flash-0731', displayName: 'DeepSeek V4 Flash (LLM7, no key)', tier: 'smart', priority: 86, contextWindow: 400000, supportsTools: true },
+  // Keyed free tiers (IDs from the providers' docs 2026-10-19; not live-tested without keys).
+  { provider: 'cloudflare', modelId: '@cf/openai/gpt-oss-120b', displayName: 'GPT-OSS 120B (Workers AI)', tier: 'smart', priority: 30, contextWindow: 131072, supportsTools: true },
+  { provider: 'cloudflare', modelId: '@cf/zai-org/glm-4.7-flash', displayName: 'GLM 4.7 Flash (Workers AI)', tier: 'fast', priority: 30, contextWindow: 131072, supportsTools: true },
+  { provider: 'zai', modelId: 'glm-4.7-flash', displayName: 'GLM 4.7 Flash', tier: 'smart', priority: 32, contextWindow: 200000, supportsTools: true },
+  { provider: 'zai', modelId: 'glm-4.5-flash', displayName: 'GLM 4.5 Flash', tier: 'fast', priority: 32, contextWindow: 128000, supportsTools: true },
+  { provider: 'requesty', modelId: 'nvidia/nemotron-3-ultra-550b-a55b', displayName: 'Nemotron 3 Ultra 550B (Requesty)', tier: 'smart', priority: 44, contextWindow: 131072, supportsTools: true, rpm: 20 },
+  { provider: 'requesty', modelId: 'google/gemma-4-31b-it', displayName: 'Gemma 4 31B (Requesty)', tier: 'fast', priority: 44, contextWindow: 131072, supportsTools: false, rpm: 20 },
   { provider: 'groq', modelId: 'openai/gpt-oss-120b', displayName: 'GPT-OSS 120B', tier: 'smart', priority: 10, contextWindow: 131072, supportsTools: true, rpm: 30, rpd: 1000, tpd: 200000 },
   { provider: 'groq', modelId: 'qwen/qwen3.8-27b', displayName: 'Qwen 3.8 27B', tier: 'smart', priority: 15, contextWindow: 131072, supportsTools: true, rpm: 30, rpd: 1000, tpd: 200000 },
   { provider: 'groq', modelId: 'openai/gpt-oss-20b', displayName: 'GPT-OSS 20B', tier: 'fast', priority: 10, contextWindow: 131072, supportsTools: true, rpm: 30, rpd: 1000, tpd: 500000 },

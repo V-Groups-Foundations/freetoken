@@ -129,6 +129,23 @@ describe('routeChat', () => {
       expect(f.calls.at(-1)!.url).toContain(POLL);
     });
 
+    it('keyless gateways (Kilo, LLM7) come before the starter, keyless; a saved key is sent instead', async () => {
+      await addStarter();
+      await db.insert(models).values([
+        { provider: 'kilo', modelId: 'k:free', displayName: 'Kilo', tier: 'smart', priority: 78, contextWindow: 131072, supportsTools: true },
+        { provider: 'llm7', modelId: 'l', displayName: 'LLM7', tier: 'smart', priority: 84, contextWindow: 131072, supportsTools: true },
+      ]);
+      const first = run((url) => (url.includes('kilo.ai') ? new Response('{}', { status: 429 }) : okJson('from llm7')));
+      expect((await first.p).ok).toBe(true);
+      expect(first.f.calls.map((c) => new URL(c.url).host)).toEqual(['ai-gateway.kilo.ai', 'api.llm7.io']);
+      expect(first.f.calls.every((c) => c.auth === null)).toBe(true);
+
+      await connect('llm7', 'llm7_token_mine');
+      const keyed = run(() => okJson('ok'), { model: 'llm7/l' });
+      expect((await keyed.p).ok).toBe(true);
+      expect(keyed.f.calls[0].auth).toBe('Bearer llm7_token_mine');
+    });
+
     it('can be turned off with FREETOKEN_STARTER=off', async () => {
       await addStarter();
       process.env.FREETOKEN_STARTER = 'off';

@@ -5,4 +5,5 @@ await build({ ...common, entryPoints: ["src/main/main.ts"], outfile: "dist/main/
   external: ["electron", "@vscode/ripgrep-*"] });
 await build({ ...common, entryPoints: ["src/preload/preload.ts"], outfile: "dist/preload/preload.js", external: ["electron"] });
 await build({ ...common, entryPoints: ["src/preload/freetoken-bridge.ts"], outfile: "dist/preload/freetoken-bridge.js", external: ["electron"] });
+await build({ ...common, entryPoints: ["src/preload/video-clock.ts"], outfile: "dist/preload/video-clock.js", external: ["electron"] });
 console.log("main + preload built");

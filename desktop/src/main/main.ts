@@ -8,6 +8,8 @@ import * as index from "./indexer";
 import * as link from "./freetoken-link";
 import * as memory from "./memory";
 import * as runner from "./runner";
+import * as skills from "./skills";
+import * as video from "./video";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText } from "./workspace";
 
@@ -180,6 +182,24 @@ function ensurePreview() {
   preview = v;
   return v;
 }
+
+// Video export encodes in the window (WebCodecs): a small request/reply channel to it.
+const encodeCalls = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+let encodeSeq = 0;
+function encodeCall<T>(op: string, payload?: unknown): Promise<T> {
+  if (!win || win.isDestroyed()) return Promise.reject(new Error("Video export needs the V-Run window to be open."));
+  const id = ++encodeSeq;
+  return new Promise<T>((resolve, reject) => {
+    encodeCalls.set(id, { resolve, reject });
+    send("video-encode", { id, op, payload });
+  });
+}
+video.setEncoderHost({
+  begin: (cfg) => encodeCall("begin", cfg),
+  frame: (bgra) => encodeCall("frame", bgra),
+  end: () => encodeCall("end"),
+  abort: () => { encodeCall("abort").catch(() => {}); },
+});
 
 runner.setPreviewHost({
   async open(url) {
@@ -354,6 +374,25 @@ function registerIpc() {
   handle("ft:open", (route?: string) => openFtPage(route));
   // V.md memory
   handle("memory:status", () => memory.memoryStatus());
+  // skills
+  handle("skills:list", () => skills.listSkills());
+  handle("skills:install", (source: string) => skills.installFromGitHub(String(source)));
+  handle("skills:remove", (name: string) => skills.removeSkill(String(name)));
+  handle("skills:open", async (name: string) => {
+    const s = (await skills.listSkills()).find((x) => x.name === name);
+    if (s?.dir) await shell.openPath(path.join(s.dir, "SKILL.md"));
+  });
+  // video export: the window answers encode requests here
+  ipcMain.on("video-encode-reply", (_e, r: { id: number; ok: boolean; value?: unknown; error?: string }) => {
+    const c = encodeCalls.get(r.id);
+    if (!c) return;
+    encodeCalls.delete(r.id);
+    if (r.ok) c.resolve(r.value); else c.reject(new Error(r.error || "Encoding failed."));
+  });
+  handle("video:export", (file: string, opts?: { fps?: number; width?: number; height?: number; duration?: number }) => {
+    const p = resolveInRoot(String(file)).abs;
+    return video.exportVideo(p, { ...(opts ?? {}), onProgress: (done, total) => send("video-progress", { done, total }) });
+  });
   handle("memory:remember", (fact: string, scope: memory.Scope) => memory.remember(String(fact), scope === "user" ? "user" : "project"));
   handle("memory:open", async (scope: memory.Scope) => {
     const file = await memory.ensureMemoryFile(scope === "user" ? "user" : "project");

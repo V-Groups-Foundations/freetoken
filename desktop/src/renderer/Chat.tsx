@@ -6,6 +6,7 @@ import { api, type AgentEvent, type FtProject, type MemoryStatus, type ToolDetai
 import type { Selection } from "./Editor";
 import { Logo } from "./Logo";
 import { Markdown, OpenFileContext } from "./Markdown";
+import { SkillsPanel } from "./Skills";
 
 type ToolItem = { kind: "tool"; id: string; name: string; input: any; status: "running" | "ok" | "error"; summary?: string; detail?: ToolDetail };
 type Mode = "agent" | "plan" | "ask";
@@ -39,12 +40,16 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   open_preview: { label: "Preview", arg: "url", verb: "Opening the preview" },
   inspect_preview: { label: "Inspect page", verb: "Looking at the page" },
   remember: { label: "Remember", arg: "fact", verb: "Saving to memory" },
+  use_skill: { label: "Skill", arg: "name", verb: "Loading skill" },
+  save_skill: { label: "Learn skill", arg: "name", verb: "Learning skill" },
+  install_skills: { label: "Install skills", arg: "source", verb: "Installing skills" },
+  export_video: { label: "Export video", arg: "path", verb: "Rendering video" },
 };
 const EXPLORE = new Set(["read_file", "list_dir", "grep_search", "file_search", "codebase_search", "inspect_preview", "app_output"]);
 const FILE_ARG = new Set(["read_file", "edit_file", "write_file"]);
 const THINKING = ["Thinking", "Reasoning", "Working", "Planning", "Considering"];
 const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
-const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
+const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
 const SUGGEST = ["Explain how this project is structured", "Run the app and check it works", "Find and fix a bug in the open file", "Write tests for the open file"];
 const MODES: { id: Mode; label: string; hint: string; placeholder: string }[] = [
   { id: "agent", label: "Agent", hint: "Reads, edits and runs things — asks before running commands", placeholder: "Ask the agent to build, fix or run something…" },
@@ -113,6 +118,7 @@ export function ChatPanel(props: {
   // V.md memory: what's in it, and the little panel in the header
   const [mem, setMem] = useState<MemoryStatus | null>(null);
   const [memOpen, setMemOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const refreshMem = () => api.memoryStatus().then(setMem).catch(() => {});
   useEffect(() => { refreshMem(); }, []);
   const [busy, setBusy] = useState(false);
@@ -240,6 +246,14 @@ export function ChatPanel(props: {
         case "memory":
           next.push({ kind: "note", text: e.added ? `Remembered in ${e.scope === "user" ? "your personal memory" : "V.md"}: ${e.line.replace(/^- /, "")}` : "Already in memory" });
           break;
+        case "skill":
+          next.push({ kind: "note", text: `Learned skill${e.name.includes(",") ? "s" : ""}: ${e.name}` });
+          break;
+        case "progress": {
+          const i = next.findIndex((x) => x.kind === "tool" && x.id === e.id);
+          if (i >= 0 && (next[i] as ToolItem).status === "running") next[i] = { ...(next[i] as ToolItem), summary: e.text };
+          break;
+        }
         case "synced": {
           const k = next.map((x) => x.kind).lastIndexOf("turn");
           if (k >= 0) next[k] = { ...(next[k] as Extract<Item, { kind: "turn" }>), synced: e.ok ? true : e.error ?? "failed" };
@@ -281,6 +295,7 @@ export function ChatPanel(props: {
     if (/^\/(new|clear)$/.test(text)) { setInput(""); return newChat(); }
     if (/^\/(ask|agent|plan)$/.test(text)) { setMode(text.slice(1) as Mode); setInput(""); return; }
     if (text === "/memory") { setInput(""); setMemOpen(true); refreshMem(); return; }
+    if (text === "/skills") { setInput(""); setMemOpen(false); setSkillsOpen(true); return; }
     if (text === "/init") { setInput(""); return send(INIT_PROMPT, "agent", run); }
     // "# something" is a note to remember, not a message (Ctrl+Enter: personal memory)
     if (/^#(?!#)\s*\S/.test(text)) { await saveNote(text.replace(/^#\s*/, ""), noteScope.current); noteScope.current = "project"; return; }
@@ -494,8 +509,11 @@ export function ChatPanel(props: {
           aria-label="Memory" aria-expanded={memOpen} title="What V-Run remembers (V.md)">
           <span aria-hidden>◆</span> Memory{mem && mem.project.entries + mem.user.entries > 0 ? <span className="mem-count">{mem.project.entries + mem.user.entries}</span> : null}
         </button>
+        <button className={`mem-btn${skillsOpen ? " on" : ""}`} onClick={() => { setSkillsOpen((v) => !v); setMemOpen(false); }}
+          aria-label="Skills" aria-expanded={skillsOpen} title="Skills (/skills)"><span aria-hidden>✦</span> Skills</button>
         <button className="icon-btn" onClick={newChat} title="New chat (/new)" aria-label="New chat">＋</button>
       </div>
+      {skillsOpen && <SkillsPanel busy={busy} onClose={() => setSkillsOpen(false)} onPrefill={(t) => setInput(t)} onAsk={(t) => send(t)} />}
       {memOpen && (
         <div className="mem-panel" role="dialog" aria-label="Memory">
           <div className="mem-head"><b>V-Run memory</b><span className="spacer" /><button className="icon-btn" onClick={() => setMemOpen(false)} aria-label="Close memory">✕</button></div>

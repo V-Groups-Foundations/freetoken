@@ -155,6 +155,87 @@ async function main() {
       && runner.LONG_RUNNING.test("python -m http.server 4321") && runner.LONG_RUNNING.test("npm run dev") && !runner.LONG_RUNNING.test("npm run build") && !runner.LONG_RUNNING.test("npx vite build");
   });
 
+  await check("skills: GitHub links and SKILL.md frontmatter parse", async () => {
+    const sk = await import("../src/main/skills");
+    const a = sk.parseRepo("anthropics/skills");
+    const b = sk.parseRepo("https://github.com/anthropics/skills/tree/main/document-skills/pdf");
+    const c = sk.parseRepo("github.com/o/r@v2");
+    const fm = sk.parseFrontmatter("---\nname: pdf\ndescription: >\n  Work with PDFs:\n  fill forms\nlicense: MIT\n---\n# Body\n");
+    return a?.owner === "anthropics" && a.repo === "skills" && !a.ref && a.sub === ""
+      && b?.ref === "main" && b.sub === "document-skills/pdf" && c?.ref === "v2" && sk.parseRepo("not a repo") === null
+      && fm.meta.name === "pdf" && fm.meta.description === "Work with PDFs: fill forms" && fm.body.startsWith("# Body");
+  });
+
+  await check("skills: install from GitHub (each SKILL.md folder), skip big files, learn from a README otherwise", async () => {
+    const sk = await import("../src/main/skills");
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-skills-"));
+    const files: Record<string, string> = {
+      "skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Fill PDF forms\n---\nUse pypdf.",
+      "skills/pdf/reference.md": "# API",
+      "skills/pdf/big.bin": "x",
+      "skills/slides/SKILL.md": "---\nname: Slides Maker\ndescription: Make decks\n---\nSteps.",
+      "README.md": "# Repo",
+    };
+    const sizes: Record<string, number> = { "skills/pdf/big.bin": 5_000_000 };
+    const fake = (async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/repos/o/withskills")) return Response.json({ default_branch: "main" });
+      if (u.includes("/repos/o/withskills/git/trees/")) return Response.json({ tree: Object.keys(files).map((p) => ({ path: p, type: "blob", size: sizes[p] ?? files[p].length })) });
+      if (u.endsWith("/repos/o/plain")) return Response.json({ default_branch: "main" });
+      if (u.includes("/repos/o/plain/git/trees/")) return Response.json({ tree: [{ path: "README.md", type: "blob", size: 20 }, { path: "src/x.ts", type: "blob", size: 5 }] });
+      const raw = u.match(/raw\.githubusercontent\.com\/o\/(\w+)\/main\/(.+)$/);
+      if (raw) return new Response(raw[1] === "plain" ? "# Plain tool\nRun plain --go" : files[decodeURIComponent(raw[2])] ?? "", { status: 200 });
+      return new Response("nope", { status: 404 });
+    }) as typeof fetch;
+    const r = await sk.installFromGitHub("github.com/o/withskills", fake, dest);
+    const plain = await sk.installFromGitHub("o/plain", fake, dest);
+    const names = r.installed.map((x) => x.name).sort().join(",");
+    const pdf = r.installed.find((x) => x.name === "pdf")!;
+    return names === "pdf,slides-maker" && pdf.skipped === 1
+      && fs.readFileSync(path.join(dest, "pdf", "reference.md"), "utf8") === "# API" && !fs.existsSync(path.join(dest, "pdf", "big.bin"))
+      && JSON.parse(fs.readFileSync(path.join(dest, "pdf", ".vrun-source.json"), "utf8")).source.includes("github.com/o/withskills")
+      && plain.installed.length === 0 && plain.readme.includes("Run plain --go");
+  });
+
+  await check("skills: learn one, list it in the prompt, load it and its files, built-in html-video, no path escapes", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-home-"));
+    process.env.VRUN_HOME = home;
+    const sk = await import("../src/main/skills");
+    ws.setRoot(fs.mkdtempSync(path.join(os.tmpdir(), "vrun-proj-")));
+    const s = ai.getSession("skills");
+    const events: any[] = [];
+    const saved = await ai.execTool(s, "save_skill", { name: "Deploy to Fly", description: "Use when deploying this kind of app to Fly.io", instructions: "1. fly launch\n2. fly deploy\nAlways set the region to ams." }, (e) => events.push(e), "k1");
+    fs.writeFileSync(path.join(home, "skills", "deploy-to-fly", "notes.md"), "extra notes");
+    const prompt = await ai.systemPrompt("agent", "deploy it");
+    const used = await ai.execTool(s, "use_skill", { name: "deploy-to-fly" }, () => {}, "k2");
+    const file = await ai.execTool(s, "use_skill", { name: "deploy-to-fly", file: "notes.md" }, () => {}, "k3");
+    const video = await sk.loadSkill("html-video");
+    let escaped = false;
+    try { await sk.loadSkill("deploy-to-fly", "../../V.md"); escaped = true; } catch { /* refused */ }
+    delete process.env.VRUN_HOME;
+    return saved.summary === "Learned skill: deploy-to-fly" && events.some((e) => e.type === "skill")
+      && prompt.includes("# Skills") && prompt.includes("- deploy-to-fly: Use when deploying") && prompt.includes("- html-video:")
+      && used.content.includes("Always set the region to ams.") && used.content.includes("- notes.md")
+      && file.content === "extra notes" && video.text.includes("window.__video") && !escaped;
+  });
+
+  await check("websites get a design direction per project; video tasks get the html-video skill instead", async () => {
+    const seen = new Set<string>();
+    let last = "";
+    for (let i = 0; i < 12; i++) {
+      ws.setRoot(fs.mkdtempSync(path.join(os.tmpdir(), `vrun-site${i}-`)));
+      const p = await ai.systemPrompt("agent", "build me a landing page for my bakery");
+      last = p.match(/Design direction for this project: ([^\n]+)/)?.[1] ?? "";
+      seen.add(last);
+    }
+    const again = await ai.systemPrompt("agent", "make the hero bigger on the page");
+    const vid = await ai.systemPrompt("agent", "make a 15 second animated intro video for my bakery website");
+    console.log(`      ${seen.size} different directions across 12 projects`);
+    return seen.size >= 4 && !seen.has("") && again.includes(`Design direction for this project: ${last}`)
+      && again.includes("Avoid the generic AI look")
+      && vid.includes('use_skill with name "html-video"') && !vid.includes("Building websites and UIs");
+  });
+
   await check("the web design brief is added for website tasks only", async () => {
     const web = await ai.systemPrompt("agent", "build me a landing page for my bakery");
     const other = await ai.systemPrompt("agent", "fix the off-by-one bug in parser.py");

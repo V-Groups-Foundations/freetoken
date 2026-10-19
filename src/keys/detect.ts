@@ -21,6 +21,11 @@ export const ENV_NAMES: Record<string, string[]> = {
   github: ['GITHUB_MODELS_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN'],
   sambanova: ['SAMBANOVA_API_KEY'],
   cohere: ['COHERE_API_KEY', 'CO_API_KEY'],
+  zai: ['ZAI_API_KEY', 'Z_AI_API_KEY', 'ZHIPUAI_API_KEY'],
+  requesty: ['REQUESTY_API_KEY'],
+  kilo: ['KILO_API_KEY'],
+  llm7: ['LLM7_API_KEY'],
+  // Cloudflare also needs an account id, so it's connected on its card rather than imported
 };
 const BY_ENV = new Map(Object.entries(ENV_NAMES).flatMap(([p, names]) => names.map((n) => [n, p] as const)));
 
