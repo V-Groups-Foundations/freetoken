@@ -6,6 +6,9 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { execFileSync, spawn as spawnChild } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { envFor, launchPlan, originOf as originOfBase, setupText } from '../src/cli/integrations.mjs';
 import { basename } from 'node:path';
 import { stdin, stdout, env, argv, exit, chdir, cwd } from 'node:process';
 import { resolveConfig, deltaFromLine, parseArgs, applyCommand, sanitizeFolderName, renderTranscript, toApiMessages, expandMentions } from '../src/cli/core.mjs';
@@ -648,7 +651,55 @@ async function runChat(parsed) {
   });
 }
 
+// ---------------------------------------------------------------- run / setup: other AI tools on FreeToken
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const DEFAULT_BASE = 'http://localhost:3000/api/v1';
+
+/** The token for `run`: the saved one, or — next to a running FreeToken — sign in on our own, like V-Run. */
+async function tokenForRun(baseUrl, saved) {
+  if (saved) return saved;
+  try {
+    const login = (await readFile(join(REPO_ROOT, '.data', 'local-login.token'), 'utf8')).trim();
+    const res = await fetch(`${originOfBase(baseUrl)}/api/local/v-run-token`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: login, name: 'CLI' }),
+    });
+    const j = await res.json().catch(() => null);
+    if (res.ok && j?.token) {
+      await saveConfigFile({ baseUrl, token: j.token });
+      return j.token;
+    }
+  } catch { /* not running locally */ }
+  return null;
+}
+
+async function runTool(args) {
+  if (!args.length) {
+    console.error('Usage: freetoken run <command> [args…]   e.g. freetoken run claude');
+    exit(1);
+  }
+  const cfg = resolveConfig(await loadConfigFile(), env);
+  const baseUrl = cfg.baseUrl ?? DEFAULT_BASE;
+  const token = await tokenForRun(baseUrl, cfg.token);
+  if (!token) {
+    console.error(red('No FreeToken token yet. Start FreeToken with `npm run dev` (then this signs in by itself), or run `freetoken login`.'));
+    exit(1);
+  }
+  console.error(dim(`◆ ${args[0]} → FreeToken (${originOfBase(baseUrl)}) · free models, model auto-smart`));
+  const which = (name) => { try { return execFileSync('where.exe', [name], { encoding: 'utf8' }).split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch { return []; } };
+  const plan = launchPlan(args[0], args.slice(1), which);
+  const child = spawnChild(plan.file, plan.args, { stdio: 'inherit', env: { ...env, ...envFor(baseUrl, token) }, shell: plan.shell });
+  child.on('error', (e) => { console.error(red(`Couldn't start ${args[0]}: ${e.message}`)); exit(1); });
+  child.on('exit', (code) => exit(code ?? 0));
+}
+
+async function runSetup(args) {
+  const cfg = resolveConfig(await loadConfigFile(), env);
+  console.log(setupText(args[0], cfg.baseUrl ?? DEFAULT_BASE, cfg.token ? `${cfg.token.slice(0, 7)}… (your saved token)` : '<your ft_ token from FreeToken → API>'));
+}
+
 const rawArgs = argv.slice(2);
+if (rawArgs[0] === 'run') { await runTool(rawArgs.slice(1)); await new Promise(() => {}); }
+if (rawArgs[0] === 'setup') { await runSetup(rawArgs.slice(1)); exit(0); }
 if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
   console.log(
     bold('freetoken') + dim(' — terminal client for your FreeToken app\n') +
@@ -658,7 +709,9 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
       '  freetoken "your question"           one-shot answer (plain chat)\n' +
       '  freetoken --yolo "build me X"       one-shot agent task, auto-approving every tool\n' +
       '  freetoken --project <id>            use a saved project (shared with the web app)\n' +
-      '  freetoken -m <model> "question"     pick a model (auto-smart, auto-fast, provider/model)\n',
+      '  freetoken -m <model> "question"     pick a model (auto-smart, auto-fast, provider/model)\n' +
+      '  freetoken run claude                run Claude Code (or any tool) on your free models\n' +
+      '  freetoken setup [tool]              setup for claude-code, codex, cursor, cline, continue, aider, opencode\n',
   );
   printHelp();
   exit(0);

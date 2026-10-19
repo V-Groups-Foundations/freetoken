@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- these tests inspect untyped JSON bodies */
 import { describe, it, expect } from 'vitest';
 import { fromOpenAI, mapModel, MAX_OUTPUT_TOKENS, streamToAnthropic, toOpenAI } from '@/anthropic/translate';
 
