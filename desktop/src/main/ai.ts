@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import * as index from "./indexer";
-import { isVideoTask, isWebTask, webDesignBrief } from "./design";
+import { isVideoTask, isWebProject, isWebTask, webDesignBrief } from "./design";
 import * as memory from "./memory";
 import { prepareAttachments, type Attachment, type Prepared } from "./attachments";
 import * as skills from "./skills";
@@ -408,7 +408,9 @@ export const toolDetail = (name: string, r: ToolOutput) => r.detail ?? (SHOW_OUT
  */
 export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "skills">, emit: (e: AgentEvent) => void) {
   const picked = (req.skills ?? []).filter((n) => !s.skills.has(n));
-  const auto = (await skills.matchSkills(req.text, 2, new Set([...s.skills, ...picked])).catch(() => [])).map((x) => x.name);
+  // in a web project, "redesign the app" is web design work: match it as such
+  const ask = isWebTask(req.text, isWebProject(getRoot())) && !isVideoTask(req.text) ? `${req.text} (website UI design, styling, layout)` : req.text;
+  const auto = (await skills.matchSkills(ask, 2, new Set([...s.skills, ...picked])).catch(() => [])).map((x) => x.name);
   const parts = [...(await skills.pickedSkillsContext(picked)), ...(await skills.pickedSkillsContext(auto, true))];
   for (const n of [...picked, ...auto]) s.skills.add(n);
   if (picked.length || auto.length) emit({ type: "skills_used", names: [...picked, ...auto], auto: !picked.length });
@@ -705,7 +707,7 @@ export async function systemPrompt(mode: ChatRequest["mode"], task = "", worker?
     "Memory: V-Run keeps a V.md memory (project V.md + the user's personal ~/.v-run/V.md), shown below when it exists. Follow it. Save one short line with the remember tool when the user tells you a preference or rule ('always…', 'never…', 'I prefer…' — use scope 'user' when it applies to every project), or when you learned a non-obvious fact that will matter next time. Good: \"Run the dev server with npm run dev (port 5173)\", \"Tests: npx vitest run; the e2e suite needs Chrome\", \"User prefers Tailwind over plain CSS\". Bad: anything describing what you just did (\"Fixed the navbar in 3 files\"), what is obvious from the code, temporary details, secrets. In Agent mode, when you finish a task in which you learned how to run, test or build the project, or hit a pitfall worth avoiding, and it isn't in V.md yet, save it before your final summary.",
     // a video is made as an HTML page too, but follows the html-video skill rather than the website brief
     mode !== "ask" && isVideoTask(task) ? "\nThis looks like a video / animation task: call use_skill with name \"html-video\" first and follow it." : "",
-    mode !== "ask" && isWebTask(task) && !isVideoTask(task) ? `\n${webDesignBrief(getRoot() ?? "")}` : "",
+    mode !== "ask" && isWebTask(task, isWebProject(getRoot())) && !isVideoTask(task) ? `\n${webDesignBrief(getRoot() ?? "")}` : "",
     skillList ? `\n${skillList}` : "",
     mem ? `\n# V-Run memory\n${mem}` : "",
     rules ? `\nProject rules provided by the user:\n${rules}` : "",

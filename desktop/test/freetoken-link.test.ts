@@ -237,6 +237,20 @@ async function main() {
       && vid.includes('use_skill with name "html-video"') && !vid.includes("Building websites and UIs");
   });
 
+  await check("in a web project, 'redesign the app / fix the images' gets the design brief (and not elsewhere)", async () => {
+    const site = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-site-"));
+    fs.mkdirSync(path.join(site, "public"));
+    fs.writeFileSync(path.join(site, "public", "index.html"), "<!doctype html><title>Shop</title>");
+    const py = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-py-"));
+    fs.writeFileSync(path.join(py, "main.py"), "print('hi')\n");
+    const ask = "redesign the entire app, it feels AI-built, make it very nice and the images aren't added properly";
+    ws.setRoot(site);
+    const inSite = await ai.systemPrompt("agent", ask);
+    ws.setRoot(py);
+    const inPy = await ai.systemPrompt("agent", ask);
+    return inSite.includes("Building websites and UIs") && !inPy.includes("Building websites and UIs");
+  });
+
   await check("the web design brief is added for website tasks only", async () => {
     const web = await ai.systemPrompt("agent", "build me a landing page for my bakery");
     const other = await ai.systemPrompt("agent", "fix the off-by-one bug in parser.py");

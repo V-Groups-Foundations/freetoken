@@ -3,15 +3,42 @@
 // site look the same, so each project gets its own design direction (palette, type, layout, details),
 // picked from the project so it stays consistent there and differs between projects.
 import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 
-/** Does this request (or the conversation so far) look like building / changing a web UI? */
-export const isWebTask = (text: string) =>
+/** Words about how something looks — in a web project they mean web design work. */
+const LOOKS = /\b(re-?design|design|restyle|look(s|ing)?|feel(s|ing)?|nice|nicer|pretty|prettier|beautiful|modern|fresh|ugly|clean|sleek|polish(ed)?|theme|layout|style[ds]?|styling|images?|photos?|pictures?|icons?|hero|ui|ux|responsive|mobile|app|colou?rs?|fonts?|typography|animations?)\b/i;
+
+/**
+ * Does this request (or the conversation so far) look like building / changing a web UI? In a web
+ * project ("this looks AI-built, redesign the app"), words about looks are enough.
+ */
+export const isWebTask = (text: string, webProject = false) =>
   (process.env.VRUN_DESIGN_BRIEF ?? '').toLowerCase() !== 'off' &&
-  /\b(web ?site|web ?page|landing|homepage|home page|web ?app|portfolio|dashboard|front-?end|ui\b|ux\b|html|css|tailwind|react|next\.?js|vue|svelte|page|site|navbar|hero section|style it|make it (look )?(nice|better|modern|beautiful|pretty))/i.test(text);
+  (/\b(web ?site|web ?page|landing|homepage|home page|web ?app|portfolio|dashboard|front-?end|ui\b|ux\b|html|css|tailwind|react|next\.?js|vue|svelte|page|site|navbar|hero section|style it|make it look (very |really |more )?(nice|better|modern|beautiful|pretty))/i.test(text)
+    || (webProject && LOOKS.test(text)));
+
+const webProjects = new Map<string, boolean>();
+/** Is the open folder a website / web app? (HTML pages, or a web framework in package.json.) Cached per folder. */
+export function isWebProject(root: string | null) {
+  if (!root) return false;
+  const hit = webProjects.get(root);
+  if (hit !== undefined) return hit;
+  let web = ["index.html", "public/index.html", "src/index.html", "app/page.tsx", "src/App.tsx", "src/App.jsx", "src/App.vue"].some((f) => existsSync(path.join(root, f)));
+  if (!web) {
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+      web = /"(react|react-dom|vue|svelte|next|nuxt|vite|astro|@angular\/core|tailwindcss|express)"/.test(JSON.stringify({ ...pkg.dependencies, ...pkg.devDependencies }));
+    } catch { /* no package.json */ }
+  }
+  if (!web) { try { web = readdirSync(root).some((f) => f.endsWith(".html")); } catch { /* unreadable */ } }
+  webProjects.set(root, web);
+  return web;
+}
 
 /** A video / motion request: the html-video skill applies rather than the website brief. */
 export const isVideoTask = (text: string) =>
-  /\b(video|animation|animated|motion graphics?|explainer|intro sequence|title sequence|trailer|promo clip|reel|mp4)\b/i.test(text);
+  /\b(videos?|motion graphics?|explainer|intro sequence|title sequence|trailer|promo clip|reel|mp4|animated (intro|clip|logo|explainer))\b/i.test(text);
 
 export interface Direction { name: string; mood: string; palette: string; type: string; layout: string; details: string }
 

@@ -119,12 +119,13 @@ const ALIASES: Record<string, string[]> = {
   game: ["game"], snake: ["game"], tetris: ["game"], logo: ["svg", "logo"], icon: ["svg", "icons"],
   deploy: ["deploy", "deployment"], docker: ["docker"], db: ["database"], sql: ["database"], schema: ["database"],
   animate: ["animation"], motion: ["animation"], scroll: ["scroll", "animation"],
+  redesign: ["redesign", "design", "ui"], restyle: ["redesign", "style"], look: ["design", "ui"], ugly: ["design", "polish"], modern: ["design"], nicer: ["polish", "design"],
   commit: ["git"], branch: ["git"], pr: ["git"], endpoint: ["api"], rest: ["api"],
 };
 const words = (t: string, expand = false) => {
   const out = new Set<string>();
   for (const w of rawWords(t)) {
-    out.add(stem(w));
+    if (!STOP.has(stem(w))) out.add(stem(w)); // "adding" becomes "add": still an everyday word
     if (expand) for (const a of ALIASES[w] ?? []) for (const x of rawWords(a)) out.add(stem(x));
   }
   return out;
