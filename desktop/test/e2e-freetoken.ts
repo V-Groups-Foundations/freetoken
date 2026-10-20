@@ -251,6 +251,8 @@ async function main() {
       await box.fill("What did I send?");
       await box.press("Enter");
       await page.locator(".msg-images img").first().waitFor({ timeout: 5000 });
+      await page.waitForFunction(() => (document.querySelector(".msg-images img") as HTMLImageElement | null)?.naturalWidth! > 0, null, { timeout: 5000 })
+        .catch(() => { throw new Error("the attached image doesn't render in the message"); });
       await page.locator(".msg-ai", { hasText: "FreeToken says: What did I send?" }).waitFor({ timeout: 15000 });
       const req = fake.requests.slice(before).find((r: any) => r.messages);
       const user = req.messages.find((m: any) => m.role === "user");

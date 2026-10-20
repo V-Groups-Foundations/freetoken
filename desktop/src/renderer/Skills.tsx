@@ -72,7 +72,7 @@ export function SkillsPanel({ onClose, onPrefill, onAsk, busy }: {
                   <div className="skill-main">
                     <div><b>{s.name}</b>{s.scope === "project" && <span className="skill-scope project"> this project</span>}</div>
                     <div className="muted small skill-desc" title={s.description}>{s.description || "No description"}</div>
-                    {s.source && <div className="faint small">from {s.source}</div>}
+                    {s.source && <div className="faint small skill-desc" title={s.source}>from {s.source.replace(/^github\.com\//, "").replace(/\/skills\/[^/]+$/, "")}</div>}
                   </div>
                   {s.dir && <button className="btn small" onClick={() => api.skillsOpen(s.name)}>Open</button>}
                   {s.dir && s.scope !== "builtin" && <button className="icon-btn" onClick={() => remove(s.name)} aria-label={`Remove ${s.name}`} title="Remove">🗑</button>}

@@ -108,8 +108,12 @@ Claude model names map to FreeToken automatically (`haiku` → `auto-fast`, ever
 
 ## 📸 Screenshots
 
-| V-Run: the agent edits, runs and verifies | V-Run: your FreeToken hub |
+| V-Run Team mode: agents in parallel, one owner per file | V-Run skills: built in, from GitHub, or learned |
 |---|---|
+| ![V-Run Team mode](docs/screenshots/vrun-team.png) | ![V-Run Skills panel](docs/screenshots/vrun-skills.png) |
+| **Paste a screenshot, drop a file — the right skill loads itself** | **Usage: % used, what's left, when it resets** |
+| ![Attachments and automatic skills in V-Run](docs/screenshots/vrun-attachments.png) | ![FreeToken usage page](docs/screenshots/freetoken-usage.png) |
+| **V-Run: the agent edits, runs and verifies** | **V-Run: your FreeToken hub** |
 | ![V-Run agent](docs/screenshots/vrun-agent.png) | ![FreeToken hub in V-Run](docs/screenshots/vrun-freetoken-hub.png) |
 | **FreeToken on the web** | **The V Groups family** |
 | ![FreeToken home](docs/screenshots/freetoken-home.png) | ![V Groups](docs/screenshots/v-groups.png) |

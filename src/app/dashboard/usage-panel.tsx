@@ -70,6 +70,12 @@ function sourceNote(m: ModelUsage, now: number): string {
   return age > 5 * 60_000 ? ` · live, as of ${clock(m.asOf, now)}` : ' · live';
 }
 
+/** "37%", or "under 1%" — never "0%" next to a number marked as partly estimated. */
+function estimatedShare(estimated: number, total: number) {
+  const pct = (estimated / Math.max(1, total)) * 100;
+  return pct < 1 ? 'under 1%' : `${Math.round(pct)}%`;
+}
+
 /** "1,234 tokens", or "≈1,234 tokens" when some of it was guessed (the provider didn't report counts). */
 function tokensText(tokens: number, estimated: number) {
   return `${estimated > 0 ? '≈' : ''}${tokens.toLocaleString()} tokens`;
@@ -181,7 +187,7 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
           <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.estimatedTokens > 0 ? '≈ ' : ''}{data.today.tokens.toLocaleString()}</div>
           <div className="faint text-xs">
             {data.today.estimatedTokens > 0
-              ? `prompt + completion · ${Math.round((data.today.estimatedTokens / Math.max(1, data.today.tokens)) * 100)}% estimated (the provider didn't report counts)`
+              ? `prompt + completion · ${estimatedShare(data.today.estimatedTokens, data.today.tokens)} estimated (the provider didn't report counts)`
               : 'prompt + completion, as reported by the providers'}
           </div>
         </div>
