@@ -10,6 +10,7 @@ import { z } from "zod";
 import * as index from "./indexer";
 import { isVideoTask, isWebTask, webDesignBrief } from "./design";
 import * as memory from "./memory";
+import { prepareAttachments, type Attachment, type Prepared } from "./attachments";
 import * as skills from "./skills";
 import * as team from "./team";
 import * as video from "./video";
@@ -183,6 +184,7 @@ export type AgentEvent =
   | { type: "todos"; todos: { content: string; status: string }[] }
   | { type: "memory"; scope: "project" | "user"; line: string; added: boolean }
   | { type: "skill"; name: string; scope: "project" | "user" }
+  | { type: "skills_used"; names: string[]; auto: boolean }
   | { type: "progress"; id: string; text: string }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
@@ -200,11 +202,13 @@ export interface Session {
   idlePolls: number;
   /** one entry per user message: transcript length before it, and files as they were before it changed them (for rewind) */
   turns: { provider: "claude" | "ft"; hist: number; files: Map<string, string | null> }[];
+  /** skills already loaded into this conversation (not loaded again) */
+  skills: Set<string>;
 }
 const sessions = new Map<string, Session>();
 export function getSession(id: string): Session {
   let s = sessions.get(id);
-  if (!s) sessions.set(id, (s = { id, messages: [], checkpoints: new Map(), approvals: new Map(), seen: new Map(), idlePolls: 0, turns: [] }));
+  if (!s) sessions.set(id, (s = { id, messages: [], checkpoints: new Map(), approvals: new Map(), seen: new Map(), idlePolls: 0, turns: [], skills: new Set() }));
   return s;
 }
 
@@ -398,6 +402,19 @@ export type ToolOutput = { content: string; summary: string; image?: Buffer; det
 const SHOW_OUTPUT = new Set(["list_dir", "grep_search", "file_search", "codebase_search", "run_terminal_command", "run_app", "app_output", "app_input"]);
 export const toolDetail = (name: string, r: ToolOutput) => r.detail ?? (SHOW_OUTPUT.has(name) ? outputDetail(r.content) : undefined);
 
+/**
+ * The skills for this message: the ones the user picked, plus up to two that match the request
+ * (loaded automatically, like Claude's skills). Each is loaded once per conversation; the chat shows it.
+ */
+export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "skills">, emit: (e: AgentEvent) => void) {
+  const picked = (req.skills ?? []).filter((n) => !s.skills.has(n));
+  const auto = (await skills.matchSkills(req.text, 2, new Set([...s.skills, ...picked])).catch(() => [])).map((x) => x.name);
+  const parts = [...(await skills.pickedSkillsContext(picked)), ...(await skills.pickedSkillsContext(auto, true))];
+  for (const n of [...picked, ...auto]) s.skills.add(n);
+  if (picked.length || auto.length) emit({ type: "skills_used", names: [...picked, ...auto], auto: !picked.length });
+  return parts;
+}
+
 const WRITES = new Set(["edit_file", "write_file", "delete_file"]);
 /** Messages from the team (another agent changed a file this one read, the supervisor wrote…) ride along. */
 function withNotices(s: Session, r: ToolOutput): ToolOutput {
@@ -570,6 +587,7 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
     case "use_skill": {
       const r = await skills.loadSkill(input.name, input.file);
       if (input.file) return { content: r.text, summary: `Read ${r.skill.name}/${input.file}` };
+      s.skills.add(r.skill.name);
       const extra = r.files.length ? `\n\nFiles in this skill (read with use_skill name="${r.skill.name}" file="<path>"):\n${r.files.slice(0, 60).map((f) => `- ${f}`).join("\n")}` : "";
       return { content: `Skill "${r.skill.name}"${r.skill.source ? ` (from ${r.skill.source})` : ""}:\n\n${r.text}${extra}`, summary: `Using skill: ${r.skill.name}` };
     }
@@ -631,6 +649,10 @@ export interface ChatRequest {
   text: string;
   /** set when a Team-mode supervisor runs this as one of its worker agents */
   worker?: { name: string; supervisor: string };
+  /** files and images pasted or dropped into the chat */
+  attachments?: Attachment[];
+  /** skills the user picked for this message */
+  skills?: string[];
   context?: { activeFile?: string; selection?: { path: string; start: number; end: number; text: string }; openFiles?: string[]; mentionedFiles?: string[] };
 }
 
@@ -706,8 +728,15 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
   for (const f of c?.mentionedFiles ?? []) {
     try { ctxParts.push(`@${f}:\n\`\`\`\n${clip(await readText(f), 30_000)}\n\`\`\``); } catch (e) { ctxParts.push(`@${f}: (could not read: ${(e as Error).message})`); }
   }
+  let att: Prepared = { images: [], texts: [], note: "" };
+  try { att = await prepareAttachments(req.attachments); } catch (e) { ctxParts.push(`(The user's attachments couldn't be saved: ${(e as Error).message})`); }
+  ctxParts.push(...(await skillContext(s, req, emit)), ...att.texts);
+  if (att.note) ctxParts.push(att.note);
   emit({ type: "turn_start", index: beginTurn(s, "claude", s.messages.length) });
-  s.messages.push({ role: "user", content: ctxParts.length ? `<context>\n${ctxParts.join("\n\n")}\n</context>\n\n${req.text}` : req.text });
+  const userText = ctxParts.length ? `<context>\n${ctxParts.join("\n\n")}\n</context>\n\n${req.text}` : req.text;
+  s.messages.push({ role: "user", content: att.images.length
+    ? [...att.images.map((i) => ({ type: "image" as const, source: { type: "base64" as const, media_type: i.mime as "image/png", data: i.data } })), { type: "text" as const, text: userText }]
+    : userText });
 
   let jsonRetries = 0;
   try {

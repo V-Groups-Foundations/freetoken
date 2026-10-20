@@ -16,6 +16,7 @@ export type AgentEvent =
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "memory"; scope: "project" | "user"; line: string; added: boolean }
   | { type: "skill"; name: string; scope: "project" | "user" }
+  | { type: "skills_used"; names: string[]; auto: boolean }
   | { type: "progress"; id: string; text: string }
   | { type: "file_changed"; path: string }
   | { type: "approval"; id: string; command: string; explanation?: string }
@@ -39,7 +40,8 @@ interface Api {
   grep(pattern: string, opts: { caseSensitive?: boolean; fixed?: boolean; glob?: string }): Promise<{ hits: GrepHit[]; truncated: boolean }>;
   reindex(): Promise<void>;
   indexStatus(): Promise<IndexStatus>;
-  chat(req: { sessionId: string; mode: "agent" | "ask" | "plan" | "team"; text: string; context?: object }): Promise<boolean>;
+  chat(req: { sessionId: string; mode: "agent" | "ask" | "plan" | "team"; text: string; context?: object; attachments?: ChatAttachment[]; skills?: string[] }): Promise<boolean>;
+  pathForFile(f: File): string;
   approve(sid: string, toolId: string, ok: boolean): Promise<void>;
   stop(sid: string): Promise<void>;
   resetChat(sid: string): Promise<void>;
@@ -112,6 +114,7 @@ export type FtProject = { id: string; name: string; model: string; origin: strin
 type MemoryFile = { file: string | null; exists: boolean; lines: number; entries: number };
 export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string };
 export type TeamSnapshot = { supervisor: string; agents: TeamAgent[] };
+export type ChatAttachment = { name: string; mime?: string; data?: string; path?: string };
 export type SkillInfo = { name: string; description: string; scope: "user" | "project" | "builtin"; dir: string | null; source?: string };
 export type MemoryStatus = { project: MemoryFile; user: MemoryFile };
 export type FtHub = {

@@ -5,9 +5,10 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-  READ_ONLY, TOOLS, beginTurn, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
+  READ_ONLY, TOOLS, beginTurn, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
   type AgentEvent, type ChatRequest, type ToolName,
 } from "./ai";
+import { prepareAttachments, type Prepared } from "./attachments";
 import { readText } from "./workspace";
 
 export const FREETOKEN_DEFAULT_URL = "http://localhost:3000/api/v1";
@@ -132,9 +133,17 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   for (const f of c?.mentionedFiles ?? []) {
     try { ctx.push(`@${f}:\n\`\`\`\n${clip(await readText(f), 30_000)}\n\`\`\``); } catch (e) { ctx.push(`@${f}: (could not read: ${(e as Error).message})`); }
   }
+  let att: Prepared = { images: [], texts: [], note: "" };
+  try { att = await prepareAttachments(req.attachments); } catch (e) { ctx.push(`(The user's attachments couldn't be saved: ${(e as Error).message})`); }
+  ctx.push(...(await skillContext(s, req, emit)), ...att.texts);
+  if (att.note) ctx.push(att.note);
   const userIndex = msgs.length;
   emit({ type: "turn_start", index: beginTurn(s, "ft", msgs.length) });
-  msgs.push({ role: "user", content: ctx.length ? `<context>\n${ctx.join("\n\n")}\n</context>\n\n${req.text}` : req.text });
+  const userText = ctx.length ? `<context>\n${ctx.join("\n\n")}\n</context>\n\n${req.text}` : req.text;
+  // images go to the model as image parts (FreeToken routes them to a model that can see)
+  msgs.push({ role: "user", content: att.images.length
+    ? [{ type: "text", text: userText }, ...att.images.map((i) => ({ type: "image_url" as const, image_url: { url: `data:${i.mime};base64,${i.data}` } }))]
+    : userText });
 
   try {
     const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"), req.worker);
@@ -243,6 +252,9 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
     if (s.abort.signal.aborted) return emit({ type: "done", stopReason: "aborted" });
     emit({ type: "error", message: describeFreeTokenError(e) });
     emit({ type: "done", stopReason: "error" });
+  } finally {
+    // images are big: later turns keep the text and the saved paths, not the pictures
+    if (att.images.length && msgs[userIndex]?.role === "user") msgs[userIndex] = { role: "user", content: `${userText}\n\n(${att.images.length} image${att.images.length > 1 ? "s were" : " was"} shown with this message; the files are in .v-run/uploads.)` };
   }
 }
 

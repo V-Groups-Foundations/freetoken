@@ -5,7 +5,12 @@ import http from "node:http";
 type Block = { type: "text"; text: string } | { type: "tool"; name: string; args: unknown };
 
 const lastUserText = (body: any) => {
-  for (let i = body.messages.length - 1; i >= 0; i--) if (body.messages[i].role === "user") return String(body.messages[i].content);
+  for (let i = body.messages.length - 1; i >= 0; i--) if (body.messages[i].role === "user") {
+    const c = body.messages[i].content; // a message with images is a list of parts
+    const text = Array.isArray(c) ? c.filter((p: any) => p.type === "text").map((p: any) => p.text).join("\n") : String(c);
+    // script on what the user typed, not on context V-Run added (open files, skills that matched…)
+    return text.replace(/<context>[\s\S]*<\/context>\s*/, "");
+  }
   return "";
 };
 

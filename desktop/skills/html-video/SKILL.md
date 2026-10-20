@@ -1,10 +1,9 @@
-// Skills that ship with V-Run. A skill of the same name in ~/.v-run/skills or the project replaces one.
+---
+name: html-video
+description: "Make a video as an animated HTML page — explainers, product promos, intros, title sequences, animated charts, social clips — and export it to an MP4 file. Use whenever the user asks for a video, animation, motion graphics, intro or trailer."
+---
 
-export const BUILTIN_SKILLS: { name: string; description: string; body: string }[] = [
-  {
-    name: "html-video",
-    description: "Make a video as an animated HTML page — explainers, product promos, intros, title sequences, animated charts, social clips — and export it to an MP4 file. Use whenever the user asks for a video, animation, motion graphics, intro or trailer.",
-    body: `# HTML video
+# HTML video
 
 A video here is one self-contained HTML file that plays like a film: a fixed 16:9 stage, scenes on a
 timeline, and motion driven by time. It previews live in V-Run, and export_video renders it frame by
@@ -16,10 +15,10 @@ with start–end time, what is on screen, what moves and the text. 3–6 scenes.
 type, few words (a viewer reads ~3 words per second). End on a clear final frame (logo, call to action).
 
 ## 2. The file
-- \`video/index.html\` (or the name the user wants), everything inline; Google Fonts and images by URL are fine.
+- `video/index.html` (or the name the user wants), everything inline; Google Fonts and images by URL are fine.
 - The stage: a 1920×1080 element scaled to fit the window with CSS (letterboxed on black), so it previews
   at any size and exports at full size:
-  \`\`\`html
+  ```html
   <div id="stage"> …scenes… </div>
   <style>
     html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -30,22 +29,22 @@ type, few words (a viewer reads ~3 words per second). End on a clear final frame
     const fit=()=>document.documentElement.style.setProperty('--fit',Math.min(innerWidth/1920,innerHeight/1080));
     addEventListener('resize',fit);fit();
   </script>
-  \`\`\`
-- Declare the length: \`window.__video = { duration: 12 };\` (seconds). Export reads it.
+  ```
+- Declare the length: `window.__video = { duration: 12 };` (seconds). Export reads it.
 
 ## 3. Animate with time, not events
 Use ONE of these (both export perfectly):
 - **CSS animations with delays** on a shared clock: every element animates from page load, its scene
-  start is its \`animation-delay\`; use \`animation-fill-mode: both\`. Example:
-  \`.s2-title{animation:rise .8s cubic-bezier(.2,.8,.2,1) 4.2s both}\`.
+  start is its `animation-delay`; use `animation-fill-mode: both`. Example:
+  `.s2-title{animation:rise .8s cubic-bezier(.2,.8,.2,1) 4.2s both}`.
   Scenes appear/disappear with opacity/clip-path/transform keyframes at the right delays.
 - **A render(t) function** for anything computed (counters, charts, canvas, particles):
-  \`\`\`js
+  ```js
   window.__video = { duration: 12, render(t){ /* set every element from t (seconds) */ } };
   const t0 = performance.now();
   (function loop(){ __video.render((performance.now()-t0)/1000 % __video.duration); requestAnimationFrame(loop); })();
-  \`\`\`
-  Export calls \`render(t)\` itself for each frame. Make render a pure function of t (no accumulated state).
+  ```
+  Export calls `render(t)` itself for each frame. Make render a pure function of t (no accumulated state).
 Do not trigger animation on scroll, hover or click. setTimeout/setInterval also work (time is virtual
 during export), but prefer the two methods above.
 
@@ -60,10 +59,7 @@ during export), but prefer the two methods above.
 - No audio (exports are silent). No lorem ipsum.
 
 ## 5. Check, then export
-1. Preview it: open the file with open_preview (file path) or run_app \`npx serve .\`, and use inspect_preview;
+1. Preview it: open the file with open_preview (file path) or run_app `npx serve .`, and use inspect_preview;
    fix overflow, clipped text, console errors.
 2. Export with export_video (path to the HTML file). It writes an MP4 next to it (1920×1080, 30 fps)
    and reports the size. Tell the user where the file is.
-`,
-  },
-];

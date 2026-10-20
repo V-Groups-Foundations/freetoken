@@ -79,7 +79,8 @@ async function main() {
     const mem = await import("../src/main/memory");
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-mem-"));
     ws.setRoot(proj);
-    const logs = ["CSS margin-bottom missing colon syntax errors fixed in 8 HTML files (index, about).", "Fixed the navbar overlap", "Added dark mode toggle to header", "All margin-bottom properties were corrected"];
+    const logs = ["CSS margin-bottom missing colon syntax errors fixed in 8 HTML files (index, about).", "Fixed the navbar overlap", "Added dark mode toggle to header", "All margin-bottom properties were corrected",
+      "The shop page redesign includes animated category filters, responsive product cards with hover zoom, Quick View modal functionality, sticky filter bar with glass morphism, and smooth filtering animations while preserving all existing functionality"];
     const facts = ["Start the site with npm start (port 3000)", "After editing CSS, check every property has a colon", "Fix bugs with a failing test first", "User prefers Tailwind over plain CSS"];
     let rejected = 0;
     for (const l of logs) { try { await mem.remember(l, "project", { fromAgent: true }); } catch (e) { if (/change log/.test((e as Error).message)) rejected++; } }

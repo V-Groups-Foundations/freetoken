@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 async function call<T = any>(ch: string, ...args: unknown[]): Promise<T> {
@@ -53,6 +53,8 @@ const api = {
   ftOpen: (route?: string) => call("ft:open", route),
   memoryStatus: () => call("memory:status"),
   skillsList: () => call("skills:list"),
+  /** where a dropped file lives on disk ("" for pasted data, which has no file) */
+  pathForFile: (f: File) => { try { return webUtils.getPathForFile(f); } catch { return ""; } },
   skillsInstall: (source: string) => call("skills:install", source),
   skillsRemove: (name: string) => call("skills:remove", name),
   skillsOpen: (name: string) => call("skills:open", name),

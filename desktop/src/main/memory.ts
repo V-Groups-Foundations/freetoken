@@ -42,7 +42,10 @@ export function looksLikeChangeLog(text: string) {
   return /^(?:i\s+|we\s+|just\s+)?(?:fixed|added|updated|changed|removed|created|implemented|refactored|renamed|deleted|moved|resolved|built|wrote|rewrote|made|replaced|corrected|completed|finished|edited|converted)\b/i.test(text)
     || /\b(?:were|was|have been|has been|are now|is now)\s+(?:fixed|added|updated|changed|removed|created|corrected|resolved|replaced)\b/i.test(text)
     || /\b(?:fixed|updated|changed|edited|corrected|added|removed) in (?:\d+|all|every|both) (?:\w+ )?(?:files?|places?|pages?)\b/i.test(text)
-    || /\b(?:errors?|bugs?|issues?|problems?) (?:were |was |have been |has been )?(?:fixed|resolved|corrected)\b/i.test(text);
+    || /\b(?:errors?|bugs?|issues?|problems?) (?:were |was |have been |has been )?(?:fixed|resolved|corrected)\b/i.test(text)
+    // descriptions of a change just made: "the shop page redesign includes…", "…while preserving existing functionality"
+    || /\b(?:redesign|overhaul|revamp|rework|rewrite|makeover)(?:ed)?\b.{0,40}\b(?:includes?|has|adds?|features?|brings?)\b/i.test(text)
+    || /\bwhile (?:preserving|keeping|maintaining) (?:all )?(?:the )?existing\b/i.test(text);
 }
 
 /** Add one line under "## Memory" (creating the file from a template); exact repeats are skipped. */

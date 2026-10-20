@@ -227,6 +227,58 @@ async function main() {
       await review.getByRole("button", { name: "Accept all" }).click();
     });
 
+    await step("paste a screenshot, drop a file, pick a skill with Use: all reach the model with the message", async () => {
+      await page.getByRole("button", { name: "New chat" }).click();
+      await page.getByRole("radio", { name: "Ask" }).click();
+      const box = page.getByLabel("Message the AI");
+      // Ctrl+V of a screenshot: a paste event carrying an image file and no text
+      await box.evaluate((el) => {
+        const bin = atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+        const dt = new DataTransfer();
+        dt.items.add(new File([Uint8Array.from(bin, (c) => c.charCodeAt(0))], "image.png", { type: "image/png" }));
+        el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      await page.locator(".chip.attach.img", { hasText: /screenshot-\d+\.png/ }).waitFor({ timeout: 5000 });
+      // drag & drop a text file onto the chat: the overlay appears, the file is attached
+      const chat = page.getByRole("complementary", { name: "AI chat" });
+      const drop = await page.evaluateHandle(() => { const dt = new DataTransfer(); dt.items.add(new File(["name,score\nada,10\n"], "scores.csv", { type: "text/csv" })); return dt; });
+      await chat.dispatchEvent("dragover", { dataTransfer: drop });
+      await page.getByText("Drop to attach").waitFor({ timeout: 3000 });
+      await chat.dispatchEvent("drop", { dataTransfer: drop });
+      await page.locator(".chip.attach", { hasText: "scores.csv" }).waitFor({ timeout: 5000 });
+      await page.screenshot({ path: path.join(shots, "attachments.png") });
+      const before = fake.requests.length;
+      await box.fill("What did I send?");
+      await box.press("Enter");
+      await page.locator(".msg-images img").first().waitFor({ timeout: 5000 });
+      await page.locator(".msg-ai", { hasText: "FreeToken says: What did I send?" }).waitFor({ timeout: 15000 });
+      const req = fake.requests.slice(before).find((r: any) => r.messages);
+      const user = req.messages.find((m: any) => m.role === "user");
+      const parts = Array.isArray(user.content) ? user.content : [];
+      const text = parts.find((p: any) => p.type === "text")?.text ?? "";
+      if (!parts.some((p: any) => p.type === "image_url")) throw new Error("no image sent");
+      if (!text.includes("ada,10")) throw new Error("dropped CSV not included");
+      if (!fs.readdirSync(path.join(proj, ".v-run", "uploads")).some((f) => f.endsWith("scores.csv"))) throw new Error("file not saved in the project");
+    });
+
+    await step("skills: the panel lists every skill by source; a matching request loads one by itself and the chat says so", async () => {
+      await page.getByRole("button", { name: "Skills" }).click();
+      const panel = page.getByRole("dialog", { name: "Skills" });
+      await panel.getByRole("region", { name: "Built in" }).locator(".skill-group-title", { hasText: "24" }).waitFor({ timeout: 5000 });
+      if (await panel.getByRole("button", { name: "Use", exact: true }).count()) throw new Error("Use buttons still shown");
+      await panel.getByPlaceholder(/Search \d+ skills/).fill("anim");
+      await panel.locator(".skill-row", { hasText: "web-animation" }).waitFor();
+      await page.screenshot({ path: path.join(shots, "skills.png") });
+      await panel.getByRole("button", { name: "Close skills" }).click();
+      const before = fake.requests.length;
+      const box = page.getByLabel("Message the AI");
+      await box.fill("Make the hero section animate on scroll");
+      await box.press("Enter");
+      await page.locator(".mem-note", { hasText: "Using skill: web-animation — matched your request" }).waitFor({ timeout: 15000 });
+      const user = fake.requests.slice(before).find((r: any) => r.messages)?.messages.filter((m: any) => m.role === "user").at(-1);
+      if (!String(user?.content).includes('The skill "web-animation" matches this request')) throw new Error("skill not in the request");
+    });
+
     await step("Settings → Open FreeToken shows the hub: projects, usage, providers and models from the account", async () => {
       fake.projects.set("p-hub", { name: "Hub project", model: "auto-smart", messages: [{ role: "user", content: "made on the web" }] });
       await page.keyboard.press("Control+,");

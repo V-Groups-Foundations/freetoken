@@ -2,12 +2,11 @@
 // a folder with a SKILL.md whose frontmatter has `name` and `description`, plus any files it needs).
 //   ~/.v-run/skills/<name>/          your skills, in every project (learned or installed from GitHub)
 //   <project>/.v-run/skills/<name>/  this project's skills (commit them to share with your team)
-//   built in                         shipped with V-Run (e.g. html-video)
+//   desktop/skills/<name>/           built in, shipped with V-Run (html-video, frontend-ui, …)
 // Only names and descriptions go in the prompt; the agent reads a skill with use_skill when it needs it.
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { BUILTIN_SKILLS } from "./skills-builtin";
 import { getRoot } from "./workspace";
 
 export type SkillScope = "user" | "project" | "builtin";
@@ -18,6 +17,8 @@ const MAX_FILE_BYTES = 200_000;
 const MAX_SKILL_BYTES = 1_500_000;
 const MAX_FILES = 40;
 
+/** Skills that ship with V-Run: desktop/skills (next to dist/ and src/). */
+export const builtinSkillsDir = () => process.env.VRUN_BUILTIN_SKILLS || path.join(__dirname, "..", "..", "skills");
 export const userSkillsDir = () => path.join(process.env.VRUN_HOME || path.join(os.homedir(), ".v-run"), "skills");
 export const projectSkillsDir = () => { const r = getRoot(); return r ? path.join(r, ".v-run", "skills") : null; };
 
@@ -63,7 +64,7 @@ async function skillsIn(root: string | null, scope: SkillScope) {
 /** Every skill, project first, then yours, then built in; a name is only listed once (the first wins). */
 export async function listSkills(): Promise<Skill[]> {
   const [proj, user] = await Promise.all([skillsIn(projectSkillsDir(), "project"), skillsIn(userSkillsDir(), "user")]);
-  const builtin: Skill[] = BUILTIN_SKILLS.map((b) => ({ name: b.name, description: b.description, scope: "builtin", dir: null }));
+  const builtin = (await skillsIn(builtinSkillsDir(), "builtin")).sort((a, b) => a.name.localeCompare(b.name));
   const seen = new Set<string>();
   return [...proj, ...user, ...builtin].filter((s) => (seen.has(s.name.toLowerCase()) ? false : (seen.add(s.name.toLowerCase()), true)));
 }
@@ -92,11 +93,7 @@ export async function loadSkill(name: string, file?: string) {
   const all = await listSkills();
   const s = all.find((x) => x.name.toLowerCase() === name.toLowerCase()) ?? all.find((x) => slug(x.name) === slug(name));
   if (!s) throw new Error(`No skill named "${name}". Available: ${all.map((x) => x.name).join(", ") || "none"}.`);
-  if (!s.dir) {
-    const b = BUILTIN_SKILLS.find((x) => x.name === s.name)!;
-    if (file) throw new Error(`The built-in skill ${s.name} has no extra files.`);
-    return { skill: s, text: b.body, files: [] as string[] };
-  }
+  if (!s.dir) throw new Error(`Skill ${s.name} has no folder.`);
   if (file) {
     const p = path.resolve(s.dir, file);
     if (!p.startsWith(path.resolve(s.dir) + path.sep)) throw new Error("That file is outside the skill's folder.");
@@ -106,6 +103,66 @@ export async function loadSkill(name: string, file?: string) {
   const md = await fsp.readFile(path.join(s.dir, "SKILL.md"), "utf8");
   const files = (await filesUnder(s.dir)).filter((f) => f !== "SKILL.md");
   return { skill: s, text: md.length > MAX_SKILL_CHARS ? `${md.slice(0, MAX_SKILL_CHARS)}\n…(truncated)` : md, files };
+}
+
+const STOP = new Set("the and for with that this from into your you are use using when what which will can should make made build create add new any all some about how need want like just also have has get one two more most very only than then them they its it's our out".split(" "));
+// "animate"/"animation"/"animated" → "animat"; "tests"/"testing" → "test"
+const stem = (w: string) => w.replace(/(?:ations?|ings?|ions?|ed|es|ly|e|s)$/, "").slice(0, 6) || w.slice(0, 6);
+const rawWords = (t: string) => (t.toLowerCase().match(/[a-z0-9][a-z0-9+#.]*/g) ?? []).map((w) => w.replace(/\.+$/, "")).filter((w) => w.length > 1 && !STOP.has(w));
+/** Everyday words that mean a skill's vocabulary: "login" → auth, "slow" → performance, "bug" → debugging. */
+const ALIASES: Record<string, string[]> = {
+  login: ["auth", "authentication"], signin: ["auth"], signup: ["auth", "registration"], password: ["auth"], logout: ["auth"],
+  chart: ["visualization", "chart"], graph: ["visualization", "chart"], plot: ["visualization"],
+  "3d": ["three.js", "3d"], threejs: ["three.js"], webgl: ["three.js"],
+  slow: ["performance"], fast: ["performance"], speed: ["performance"], lag: ["performance"],
+  bug: ["debugging", "bug"], broken: ["debugging"], crash: ["debugging", "crash"], error: ["debugging", "error"], wrong: ["debugging"], fix: ["debugging"],
+  game: ["game"], snake: ["game"], tetris: ["game"], logo: ["svg", "logo"], icon: ["svg", "icons"],
+  deploy: ["deploy", "deployment"], docker: ["docker"], db: ["database"], sql: ["database"], schema: ["database"],
+  animate: ["animation"], motion: ["animation"], scroll: ["scroll", "animation"],
+  commit: ["git"], branch: ["git"], pr: ["git"], endpoint: ["api"], rest: ["api"],
+};
+const words = (t: string, expand = false) => {
+  const out = new Set<string>();
+  for (const w of rawWords(t)) {
+    out.add(stem(w));
+    if (expand) for (const a of ALIASES[w] ?? []) for (const x of rawWords(a)) out.add(stem(x));
+  }
+  return out;
+};
+
+/**
+ * Skills that fit a request, best first (at most `max`): the request's words against each skill's name
+ * and description (its "when to use" line). Rare words count more than words many skills share (like
+ * "page" or "app"); a name word counts double; a weak overlap loads nothing.
+ */
+export async function matchSkills(request: string, max = 2, skip: Set<string> = new Set()) {
+  const req = words(request, true);
+  if (!req.size) return [] as Skill[];
+  const all = (await listSkills()).map((s) => ({ s, name: words(s.name.replace(/-/g, " ")), desc: words(s.description) }));
+  const df = new Map<string, number>();
+  for (const x of all) for (const w of new Set([...x.name, ...x.desc])) df.set(w, (df.get(w) ?? 0) + 1);
+  const weight = (w: string) => Math.log(1 + all.length / (df.get(w) ?? 1));
+  const scored = all.filter((x) => !skip.has(x.s.name)).map((x) => {
+    let score = 0;
+    for (const w of req) score += x.name.has(w) ? 2 * weight(w) : x.desc.has(w) ? weight(w) : 0;
+    return { s: x.s, score };
+  }).filter((x) => x.score >= MATCH_THRESHOLD);
+  scored.sort((a, b) => b.score - a.score);
+  // a second skill only when it's nearly as good a match as the first
+  return scored.filter((x, i) => i === 0 || x.score >= scored[0].score * 0.85).slice(0, max).map((x) => x.s);
+}
+export const MATCH_THRESHOLD = 4.5;
+
+/** Skills the user picked for this message (Use in the Skills panel): their instructions, for the context. */
+export async function pickedSkillsContext(names: string[] = [], auto = false) {
+  const parts: string[] = [];
+  for (const n of names.slice(0, 5)) {
+    try {
+      const r = await loadSkill(n);
+      parts.push(`${auto ? `The skill "${r.skill.name}" matches this request — follow it` : `The user chose the skill "${r.skill.name}" for this message — follow it`}:\n${r.text}${r.files.length ? `\n(Its extra files, readable with use_skill name="${r.skill.name}" file=…: ${r.files.slice(0, 30).join(", ")})` : ""}`);
+    } catch (e) { parts.push(`(The skill "${n}" couldn't be loaded: ${(e as Error).message})`); }
+  }
+  return parts;
 }
 
 const yamlLine = (s: string) => JSON.stringify(s.replace(/\s+/g, " ").trim());
@@ -127,7 +184,7 @@ export async function saveSkill(name: string, description: string, instructions:
 
 export async function removeSkill(name: string) {
   const s = (await listSkills()).find((x) => x.name === name);
-  if (!s?.dir) throw new Error(s ? "Built-in skills can't be removed." : `No skill named ${name}.`);
+  if (!s?.dir || s.scope === "builtin") throw new Error(s ? "Built-in skills can't be removed." : `No skill named ${name}.`);
   await fsp.rm(s.dir, { recursive: true, force: true });
 }
 

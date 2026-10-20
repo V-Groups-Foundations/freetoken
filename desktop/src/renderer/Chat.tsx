@@ -2,7 +2,7 @@
 // exploration), keyboard-driven command approvals, the plan checklist, a live status line, @file mentions,
 // /commands and the "files changed" review bar.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, type AgentEvent, type FtProject, type MemoryStatus, type ToolDetail } from "./api";
+import { api, type AgentEvent, type ChatAttachment, type FtProject, type MemoryStatus, type ToolDetail } from "./api";
 import type { Selection } from "./Editor";
 import { Logo } from "./Logo";
 import { Markdown, OpenFileContext } from "./Markdown";
@@ -12,7 +12,7 @@ import { TeamPanel } from "./Team";
 type ToolItem = { kind: "tool"; id: string; name: string; input: any; status: "running" | "ok" | "error"; summary?: string; detail?: ToolDetail };
 type Mode = "agent" | "team" | "plan" | "ask";
 type Item =
-  | { kind: "user"; text: string; chips: string[]; turn?: number }
+  | { kind: "user"; text: string; chips: string[]; turn?: number; images?: string[] }
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string; start: number; ms?: number }
   | ToolItem
@@ -128,6 +128,24 @@ export function ChatPanel(props: {
   const [mem, setMem] = useState<MemoryStatus | null>(null);
   const [memOpen, setMemOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  // pasted / dropped files and skills picked for the next message
+  const [attach, setAttach] = useState<(ChatAttachment & { id: number; preview?: string })[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const attachSeq = useRef(0);
+  async function addFiles(files: File[]) {
+    for (const f of files) {
+      const id = ++attachSeq.current;
+      const isImage = f.type.startsWith("image/");
+      const preview = isImage ? URL.createObjectURL(f) : undefined;
+      const onDisk = api.pathForFile(f);
+      // a pasted screenshot has no file on disk: send its bytes (with a readable name)
+      const name = !onDisk && isImage && /^image\.\w+$/.test(f.name) ? `screenshot-${new Date().toTimeString().slice(0, 8).replace(/:/g, "")}.${f.type.split("/")[1] ?? "png"}` : f.name;
+      if (onDisk) { setAttach((a) => [...a, { id, name, mime: f.type, path: onDisk, preview }]); continue; }
+      if (f.size > 20 * 1024 * 1024) { setItems((p) => [...p, { kind: "error", text: `${name} is over 20 MB — not attached.` }]); continue; }
+      const data = await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(",")[1] ?? ""); r.onerror = () => reject(r.error); r.readAsDataURL(f); });
+      setAttach((a) => [...a, { id, name, mime: f.type, data, preview }]);
+    }
+  }
   const refreshMem = () => api.memoryStatus().then(setMem).catch(() => {});
   useEffect(() => { refreshMem(); }, []);
   const [busy, setBusy] = useState(false);
@@ -258,6 +276,9 @@ export function ChatPanel(props: {
         case "skill":
           next.push({ kind: "note", text: `Learned skill${e.name.includes(",") ? "s" : ""}: ${e.name}` });
           break;
+        case "skills_used":
+          next.push({ kind: "note", text: `Using skill${e.names.length > 1 ? "s" : ""}: ${e.names.join(", ")}${e.auto ? " — matched your request" : ""}` });
+          break;
         case "progress": {
           const i = next.findIndex((x) => x.kind === "tool" && x.id === e.id);
           if (i >= 0 && (next[i] as ToolItem).status === "running") next[i] = { ...(next[i] as ToolItem), summary: e.text };
@@ -290,7 +311,7 @@ export function ChatPanel(props: {
   }
 
   async function send(raw = input, as: Mode = modeRef.current, run?: "all" | "step") {
-    const text = raw.trim();
+    const text = raw.trim() || (attach.length ? "Have a look at what I attached." : "");
     if (!text) return;
     // typing while the agent works: stop it, then send this as soon as it has stopped
     if (busy) {
@@ -326,13 +347,16 @@ export function ChatPanel(props: {
     histPos.current = -1;
     turn.current = { start: Date.now(), tokens: 0, chars: 0, tools: 0, verb: THINKING[Math.floor(Math.random() * THINKING.length)], mode, waitUntil: 0 };
     stick.current = true;
-    setItems((p) => [...p, { kind: "user", text, chips }]);
-    setInput(""); setMentions([]); props.clearSelection();
+    const files = attach;
+    chips.push(...files.filter((f) => !f.preview).map((f) => `📎 ${f.name}`));
+    setItems((p) => [...p, { kind: "user", text, chips, images: files.filter((f) => f.preview).map((f) => f.preview!) }]);
+    setInput(""); setMentions([]); props.clearSelection(); setAttach([]);
     setBusy(true);
     try {
       await api.chat({ sessionId: sid, mode, text, context: {
         activeFile: (!skipActive && props.activeFile) || undefined, openFiles: props.openFiles, mentionedFiles: mentions,
-        selection: sel && sel.text ? sel : undefined } });
+        selection: sel && sel.text ? sel : undefined },
+        attachments: files.length ? files.map(({ name, mime, data, path }) => ({ name, mime, data, path })) : undefined });
     } catch (e) {
       setBusy(false);
       setItems((p) => [...p, { kind: "error", text: (e as Error).message }]);
@@ -508,7 +532,11 @@ export function ChatPanel(props: {
   const rows = useMemo(() => group(items), [items]);
 
   return (
-    <aside className="chat" aria-label="AI chat">
+    <aside className={`chat${dragging ? " dragging" : ""}`} aria-label="AI chat"
+      onDragOver={(e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; if (!dragging) setDragging(true); } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
+      onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); addFiles([...e.dataTransfer.files]); box.current?.focus(); }}>
+      {dragging && <div className="drop-overlay" aria-hidden><div><b>Drop to attach</b><span>Images, screenshots, code, CSV, PDF… — saved in the project and shared with the AI</span></div></div>}
       <div className="chat-head">
         {project
           ? <button className="chat-title ft-link" onClick={() => api.ftWebsite(`/projects/${project.id}`)} title="This chat continues a FreeToken project — click to open its page on the FreeToken website">✦ {project.name}</button>
@@ -568,7 +596,7 @@ export function ChatPanel(props: {
                 const at = items.indexOf(r);
                 return (
                   <div key={i} className="msg-user-wrap">
-                    <div className="msg-user">{r.chips.length > 0 && <div className="chips">{r.chips.map((c) => <span key={c} className="chip">{c}</span>)}</div>}{r.text}</div>
+                    <div className="msg-user">{r.chips.length > 0 && <div className="chips">{r.chips.map((c) => <span key={c} className="chip">{c}</span>)}</div>}{r.images?.length ? <div className="msg-images">{r.images.map((u) => <img key={u} src={u} alt="Attached" />)}</div> : null}{r.text}</div>
                     {!busy && r.turn !== undefined && confirmRewind !== at && (
                       <div className="msg-actions">
                         <button className="icon-btn" onClick={() => setConfirmRewind(at)} aria-label="Edit this message" title="Edit and resend — undoes everything after this point">✎ Edit</button>
@@ -687,6 +715,16 @@ export function ChatPanel(props: {
           </div>
         )}
         <div className={`composer-box${busy ? " busy" : ""}`} onClick={(e) => e.target === e.currentTarget && box.current?.focus()}>
+          {attach.length > 0 && (
+            <div className="chips attach-chips">
+              {attach.map((a) => (
+                <span key={a.id} className={`chip attach${a.preview ? " img" : ""}`} title={a.path ?? a.name}>
+                  {a.preview ? <img src={a.preview} alt="" /> : <span aria-hidden>📎</span>}{a.name}
+                  <button aria-label={`Remove ${a.name}`} onClick={() => setAttach((x) => x.filter((y) => y.id !== a.id))}>✕</button>
+                </span>
+              ))}
+            </div>
+          )}
           {(mentions.length > 0 || props.pendingSelection || (props.activeFile && !skipActive)) && (
             <div className="chips">
               {props.activeFile && !skipActive && (
@@ -699,7 +737,8 @@ export function ChatPanel(props: {
           )}
           <textarea ref={box} rows={1} aria-label="Message the AI"
             placeholder={busy ? "Type to stop it and do this instead…" : project && mode === "agent" ? `Continue ${project.name}…` : modeInfo.placeholder}
-            value={input} onChange={(e) => onInput(e.target.value)} onKeyDown={onKeyDown} />
+            value={input} onChange={(e) => onInput(e.target.value)} onKeyDown={onKeyDown}
+            onPaste={(e) => { const files = [...e.clipboardData.files]; if (!files.length) return; if (!e.clipboardData.getData("text")) e.preventDefault(); addFiles(files); }} />
           <div className="composer-row">
             <div className={`mode-switch m-${mode}`} role="radiogroup" aria-label="Mode">
               {MODES.map((m) => (

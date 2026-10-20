@@ -482,7 +482,7 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .mem-btn.on { color: #c4b5fd; border-color: #a78bfa55; background: #a78bfa12; }
 .mem-count { background: #a78bfa; color: #120c22; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 700; }
 .mem-panel { position: absolute; top: 40px; right: 8px; left: 8px; z-index: 20; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px;
-  background: #1b1d24f2; border: 1px solid #a78bfa44; box-shadow: 0 16px 40px #000b; backdrop-filter: blur(8px); animation: hub-rise .25s ease-out both; }
+  background: #1b1d24; border: 1px solid #a78bfa44; box-shadow: 0 16px 40px #000b; animation: hub-rise .25s ease-out both; }
 .mem-head { display: flex; align-items: center; }
 .mem-panel p { margin: 0; line-height: 1.5; }
 .mem-file { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; background: #ffffff06; border: 1px solid #ffffff10; }
@@ -560,3 +560,23 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .hub-meter { height: 10px; border-radius: 99px; background: #ffffff12; overflow: hidden; }
 .hub-meter > div { height: 100%; border-radius: 99px; transition: width .7s ease; box-shadow: 0 0 12px #38d6ff55; }
 .hub-overall-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; font-size: 12px; opacity: .7; font-variant-numeric: tabular-nums; }
+
+/* chat attachments: drop overlay, chips with thumbnails, images in sent messages */
+.chat { position: relative; }
+.drop-overlay { position: absolute; inset: 6px; z-index: 40; display: grid; place-items: center; border: 2px dashed var(--accent, #38d6ff); border-radius: 14px;
+  background: color-mix(in srgb, var(--bg, #111) 82%, var(--accent, #38d6ff) 18%); backdrop-filter: blur(2px); pointer-events: none; text-align: center; }
+.drop-overlay > div { display: flex; flex-direction: column; gap: 4px; padding: 16px; }
+.drop-overlay b { font-size: 15px; color: var(--accent, #38d6ff); }
+.drop-overlay span { font-size: 12px; opacity: .75; max-width: 260px; }
+.chip.attach { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; }
+.chip.attach img { width: 22px; height: 22px; object-fit: cover; border-radius: 4px; }
+.chip.attach { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.skill-chip { border-color: color-mix(in srgb, var(--accent, #38d6ff) 50%, transparent); color: var(--accent, #38d6ff); }
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.msg-images img { max-width: 180px; max-height: 140px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border, #333); }
+.skill-use-now { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.skill-search { padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border, #333); background: var(--bg, #111); color: inherit; font: inherit; font-size: 12px; }
+.skill-group { display: flex; flex-direction: column; gap: 4px; }
+.skill-group + .skill-group { margin-top: 8px; }
+.skill-group-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; opacity: .7; padding: 2px 2px 0; }
+.skill-group-title span { margin-left: 4px; padding: 0 6px; border-radius: 99px; background: color-mix(in srgb, var(--accent, #38d6ff) 18%, transparent); color: var(--accent, #38d6ff); }
