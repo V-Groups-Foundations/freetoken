@@ -85,6 +85,8 @@ export function snapshot(supervisor: string): TeamSnapshot {
 }
 
 /** Is this session part of a team (a supervisor with workers, or a worker)? */
+/** Has this supervisor started any agents? */
+export const hasAgents = (supervisor: string) => (teams.get(supervisor)?.workers.size ?? 0) > 0;
 export const inTeam = (sid: string) => { const m = memberOf.get(sid); return !!m && (m.name !== "supervisor" || m.team.workers.size > 0); };
 export const workerInfo = (sid: string) => {
   const m = memberOf.get(sid);

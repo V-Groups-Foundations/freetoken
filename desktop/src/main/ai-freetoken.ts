@@ -118,6 +118,7 @@ const clip = (s: string, n: number) => (s.length > n ? `…(${s.length - n} char
 export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => void) {
   const s = getSession(req.sessionId); // shared: checkpoints, approvals, abort
   s.abort = new AbortController();
+  s.mode = req.worker ? "agent" : req.mode;
   s.seen.clear();
   s.idlePolls = 0;
   let msgs = transcripts.get(req.sessionId);

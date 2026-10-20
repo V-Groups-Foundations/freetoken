@@ -76,6 +76,24 @@ function startServer(): Promise<{ url: string; close: () => void }> {
       && snaps.at(-1).agents.find((x: any) => x.name === "b").files.includes("x.ts") || JSON.stringify({ blockedB, notice, staleB, freshB, blockedSup, afterAssign });
   });
 
+  await check("Team mode: the supervisor can't write or run anything until it has started agents", async () => {
+    team.resetTeams();
+    team.configureTeam({ run: () => new Promise(() => {}), stop: () => {}, getSession: ai.getSession, forward: () => {}, onTeam: () => {} });
+    const s = ai.getSession("sup-guard");
+    s.mode = "team";
+    const write = () => ai.execTool(s, "write_file", { path: "src/solo.ts", contents: "x" }, () => {}, "w1");
+    const before = await write();
+    const blockedOnDisk = !fs.existsSync(path.join(proj, "src", "solo.ts"));
+    const read = await ai.execTool(s, "list_dir", { path: "." }, () => {}, "r1");
+    await ai.execTool(s, "spawn_agent", { name: "ui", task: "Build the UI part of the app.", files: ["src/ui.ts"] }, () => {}, "sp1");
+    const after = await write();
+    const agentMode = ai.getSession("solo-agent");
+    agentMode.mode = "agent";
+    const solo = await ai.execTool(agentMode, "write_file", { path: "src/solo2.ts", contents: "y" }, () => {}, "w2");
+    return before.summary === "Team mode: start agents first" && blockedOnDisk && !read.summary.includes("start agents")
+      && after.summary.startsWith("Created") && solo.summary.startsWith("Created") || JSON.stringify({ before: before.summary, after: after.summary, solo: solo.summary });
+  });
+
   // ---- a whole team through the real agent loop
   team.resetTeams();
   const events = new Map<string, any[]>();

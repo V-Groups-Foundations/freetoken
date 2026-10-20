@@ -204,6 +204,8 @@ export interface Session {
   turns: { provider: "claude" | "ft"; hist: number; files: Map<string, string | null> }[];
   /** skills already loaded into this conversation (not loaded again) */
   skills: Set<string>;
+  /** the mode of the current request (Team mode supervisors must start agents before changing anything) */
+  mode?: ChatRequest["mode"];
 }
 const sessions = new Map<string, Session>();
 export function getSession(id: string): Session {
@@ -418,6 +420,8 @@ export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "
 }
 
 const WRITES = new Set(["edit_file", "write_file", "delete_file"]);
+/** Tools that change things: a Team-mode supervisor may only use them once it has started agents. */
+const ACTS = new Set([...WRITES, "run_terminal_command", "run_app", "export_video"]);
 /** Messages from the team (another agent changed a file this one read, the supervisor wrote…) ride along. */
 function withNotices(s: Session, r: ToolOutput): ToolOutput {
   const n = team.takeNotices(s.id);
@@ -428,6 +432,10 @@ function withNotices(s: Session, r: ToolOutput): ToolOutput {
 
 /** Runs a tool; in Team mode, file changes go through the coordinator (ownership, stale reads, notices). */
 export async function execTool(s: Session, name: ToolName, input: any, emit: (e: AgentEvent) => void, id: string): Promise<ToolOutput> {
+  // Team mode means a team: the supervisor delegates first, and only integrates afterwards
+  if (s.mode === "team" && ACTS.has(name) && !team.hasAgents(s.id)) {
+    return { content: "Not yet: this is Team mode, so the work is done by agents. Split the job into 2-4 parts with separate files and start an agent for each with spawn_agent (a self-contained task each: goal, files it owns, the shared contract, how to verify). You can read files to plan first. Once agents have started, you can edit too (for shared contracts and integration).", summary: "Team mode: start agents first" };
+  }
   let rel: string | null = null;
   if ((WRITES.has(name) || name === "read_file") && typeof input?.path === "string") { try { rel = resolveInRoot(input.path).rel; } catch { /* the tool reports it */ } }
   if (rel && WRITES.has(name)) {
@@ -666,7 +674,7 @@ function recentUserText(messages: { role: string; content: unknown }[]) {
 /** `task` (the request, plus recent ones) switches on task-specific guidance such as the web design brief. */
 const SUPERVISOR_BRIEF = `
 # Team mode — you are the supervisor
-You lead a team of worker agents that work IN PARALLEL on the same project. Use them when the job splits into independent parts; for a small job, just do it yourself.
+You lead a team of worker agents that work IN PARALLEL on the same project. The user chose Team mode because they want the job done by a team: you MUST split it between at least 2 agents with spawn_agent before any code is written. Until you have started agents, you can only read and plan — edits and commands are refused.
 1. Understand first: read the key files and make a todo list (todo_write).
 2. Split the work into 2–${team.MAX_RUNNING} workstreams that touch DIFFERENT files (e.g. api / frontend / tests / docs). If parts depend on each other, settle the contract first — write the shared types/interfaces/API shape yourself, or spell it out identically in every task.
 3. spawn_agent for each workstream: a short role name, the files it owns, and a self-contained task (workers can't see this conversation): goal, context, the contract, constraints, how to verify, what to report.
@@ -718,6 +726,7 @@ export async function systemPrompt(mode: ChatRequest["mode"], task = "", worker?
 export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
   const s = getSession(req.sessionId);
   s.abort = new AbortController();
+  s.mode = req.worker ? "agent" : req.mode;
   s.seen.clear();
   s.idlePolls = 0;
   const allowed = toolNamesFor(req);
