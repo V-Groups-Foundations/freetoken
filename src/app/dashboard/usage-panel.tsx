@@ -4,18 +4,61 @@ import { useEffect, useState } from 'react';
 import type { UsageSummary, ProviderUsage, ModelUsage } from '@/usage/summary';
 import { PageHeader } from '../page-header';
 
-function relReset(iso: string | null, now: number): string {
-  if (!iso) return '';
+/** "4 hr 12 min", "38 min", "less than a minute" until `iso`; empty when unknown, past, or before mount. */
+function countdown(iso: string | null, now: number): string {
+  if (!iso || !now) return '';
   const ms = new Date(iso).getTime() - now;
   if (ms <= 0) return '';
-  const m = Math.round(ms / 60000);
-  if (m < 60) return `resets in ${m}m`;
-  return `resets in ${Math.round(m / 60)}h`;
+  const mins = Math.ceil(ms / 60000);
+  if (mins < 1) return 'less than a minute';
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  if (d) return `${d} day${d > 1 ? 's' : ''}${h ? ` ${h} hr` : ''}`;
+  return h ? `${h} hr${m ? ` ${m} min` : ''}` : `${m} min`;
 }
 
 /** Clock time in the viewer's zone; empty until mounted so server and client markup match. */
 function clock(iso: string | null, now: number): string {
   return iso && now ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+}
+
+const PERIOD: Record<string, string> = { day: 'per day', month: 'per month', minute: 'per minute', window: 'rolling limit' };
+
+/** When this allowance starts over, in words: "Resets in 4 hr 12 min (5:30 AM)", "Resets Nov 1". */
+function resetLine(period: string | null, resetAt: string | null, now: number, live = false): string {
+  if (!now) return '';
+  const left = countdown(resetAt, now);
+  if (!left) return period === 'day' || period === 'month' ? '' : 'Refills as you go';
+  // a provider-reported window (e.g. Groq's daily allowance) refills gradually rather than all at midnight
+  if (live && period !== 'month') return `Back to full in ${left}`;
+  if (period === 'month') return `Resets ${new Date(resetAt!).toLocaleDateString([], { month: 'short', day: 'numeric' })} (in ${left})`;
+  if (period === 'day') return `Resets in ${left} (${clock(resetAt, now)})`;
+  return `Refills in ${left}`;
+}
+
+/** Claude-style meter: "% used" on the right, the bar, then used / left and when it resets. */
+function Meter({ label, used, limit, period, resetAt, note, now, live }: {
+  label: React.ReactNode; used: number; limit: number; period: string | null; resetAt: string | null; note?: string; now: number; live?: boolean;
+}) {
+  const ratio = limit > 0 ? Math.min(1, Math.max(0, used / limit)) : 0;
+  const pct = Math.round(ratio * 100);
+  // plenty left: brand gradient; getting low: amber; nearly spent: red
+  const fill = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : 'var(--grad)';
+  const reset = resetLine(period, resetAt, now, live);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3 text-sm">
+        <span className="min-w-0 truncate">{label}{period && <span className="text-xs text-[var(--faint)]"> · {PERIOD[period] ?? period}</span>}</span>
+        <span className="shrink-0 font-medium tabular-nums">{pct}% used</span>
+      </div>
+      <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-2)]" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`${pct}% used`}>
+        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${used > 0 ? Math.max(2, ratio * 100) : 0}%`, background: fill }} />
+      </div>
+      <div className="flex flex-wrap justify-between gap-x-3 text-xs text-[var(--faint)]">
+        <span className="tabular-nums">{used.toLocaleString()} used · {Math.max(0, limit - used).toLocaleString()} of {limit.toLocaleString()} left{note ? ` · ${note}` : ''}</span>
+        {reset && <span className="tabular-nums">{reset}</span>}
+      </div>
+    </div>
+  );
 }
 
 function sourceNote(m: ModelUsage, now: number): string {
@@ -32,33 +75,22 @@ function tokensText(tokens: number, estimated: number) {
   return `${estimated > 0 ? '≈' : ''}${tokens.toLocaleString()} tokens`;
 }
 
-function Bar({ used, limit }: { used: number; limit: number }) {
-  const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  // Fuel gauge: green with headroom, amber getting low, red nearly spent.
-  const color = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#22c55e';
-  return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--surface-2)]">
-      <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
-    </div>
-  );
-}
-
 function ModelRow({ m, now }: { m: ModelUsage; now: number }) {
   const known = m.limitRequests != null && m.remainingRequests != null;
+  const name = <>{m.displayName} <span className="text-xs text-[var(--faint)]">{m.tier}</span></>;
   return (
-    <div className="space-y-1 py-2">
-      <div className="flex items-baseline justify-between text-sm">
-        <span>{m.displayName} <span className="text-xs text-[var(--faint)]">{m.tier}</span></span>
-        <span className="tabular-nums text-[var(--muted)]">
-          {known
-            ? <>{m.remainingRequests!.toLocaleString()} / {m.limitRequests!.toLocaleString()} left</>
-            : <>{m.requests.toLocaleString()} used today</>}
-        </span>
-      </div>
-      {known && <Bar used={m.limitRequests! - m.remainingRequests!} limit={m.limitRequests!} />}
-      <div className="flex justify-between text-xs text-[var(--faint)]">
-        <span>{tokensText(m.tokens, m.estimatedTokens)} today{sourceNote(m, now)}</span>
-        <span>{relReset(m.resetAt, now)}</span>
+    <div className="space-y-1 py-2.5">
+      {known ? (
+        <Meter label={name} used={m.limitRequests! - m.remainingRequests!} limit={m.limitRequests!} period={m.period} resetAt={m.resetAt} now={now} live={m.source === 'provider'} />
+      ) : (
+        <div className="flex items-baseline justify-between gap-3 text-sm">
+          <span className="min-w-0 truncate">{name}</span>
+          <span className="shrink-0 tabular-nums text-[var(--muted)]">{m.requests.toLocaleString()} today</span>
+        </div>
+      )}
+      <div className="text-xs text-[var(--faint)]">
+        {tokensText(m.tokens, m.estimatedTokens)} today{sourceNote(m, now)}
+        {!known && m.source !== 'shared' && (m.rpm ? ` · limit about ${m.rpm}/min, no daily cap known` : ' · no limit published')}
       </div>
     </div>
   );
@@ -80,12 +112,9 @@ function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
         </div>
       </div>
       {p.account && (
-        <div className="space-y-1 rounded bg-[var(--surface-2)] p-2 text-sm">
-          <div className="flex justify-between">
-            <span>{p.account.label}{p.account.source === 'estimate' && <span className="text-xs text-[var(--faint)]"> · estimated</span>}</span>
-            <span className="tabular-nums">{p.account.remaining.toLocaleString()} / {p.account.limit.toLocaleString()} left</span>
-          </div>
-          <Bar used={p.account.used} limit={p.account.limit} />
+        <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/40 p-3">
+          <Meter label={<>{p.account.label}{p.account.source === 'estimate' && <span className="text-xs text-[var(--faint)]"> · counted by FreeToken</span>}</>}
+            used={p.account.used} limit={p.account.limit} period={p.account.period} resetAt={p.account.resetAt} now={now} />
           <div className="text-xs text-[var(--faint)]">{p.account.note}</div>
         </div>
       )}
@@ -142,7 +171,10 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
         <div className="card card-pad">
           <div className="faint text-xs font-medium">Requests today</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.requests.toLocaleString()}</div>
-          <div className="faint text-xs">successful, since {clock(data.dayStartedAt, now) || 'midnight UTC'}</div>
+          <div className="faint text-xs">
+            successful, since {clock(data.dayStartedAt, now) || 'midnight UTC'}
+            {now > 0 && <> · new day in {countdown(new Date(new Date(data.dayStartedAt).getTime() + 86_400_000).toISOString(), now)}</>}
+          </div>
         </div>
         <div className="card card-pad">
           <div className="faint text-xs font-medium">Tokens today</div>

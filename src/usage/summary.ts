@@ -23,6 +23,10 @@ export interface ModelUsage {
   source: 'provider' | 'estimate' | 'shared' | 'unknown';
   /** when the provider's numbers were last seen (live rows only) */
   asOf: string | null;
+  /** what the request limit is counted over: per day, per month, per minute, or a provider window */
+  period: 'minute' | 'day' | 'month' | 'window' | null;
+  /** the catalog's per-minute limit, shown alongside */
+  rpm: number | null;
 }
 
 export interface AccountUsage {
@@ -31,6 +35,8 @@ export interface AccountUsage {
   limit: number;
   remaining: number;
   period: 'day' | 'month';
+  /** when the allowance starts over */
+  resetAt: string;
   source: 'provider' | 'estimate';
   note: string;
 }
@@ -121,6 +127,8 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
   const catalog = await deps.db.select().from(models).where(eq(models.enabled, true));
   const nowMs = (deps.now ?? Date.now)();
   const started = dayStart(new Date(nowMs));
+  const nextDay = new Date(started.getTime() + 86_400_000).toISOString();
+  const nextMonth = new Date(Date.UTC(started.getUTCFullYear(), started.getUTCMonth() + 1, 1)).toISOString();
   const used = await usageSince(deps.db, userId, started);
   const usedMonth = keyRowsUse(keyRows, 'month') ? await usageSince(deps.db, userId, monthStart(new Date(nowMs))) : used;
   const limitRows = await deps.db.select().from(providerLimits).where(eq(providerLimits.userId, userId));
@@ -155,8 +163,8 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
         .filter((m) => m.provider === key.provider)
         .reduce((n, m) => n + (ledger.get(usageKey(m.provider, m.modelId))?.requests ?? 0), 0);
       account = liveAccount
-        ? { label: pool.label, ...liveAccount, period: pool.period, source: 'provider', note: pool.note }
-        : { label: pool.label, used: counted, limit: pool.limit, remaining: Math.max(0, pool.limit - counted), period: pool.period, source: 'estimate', note: pool.note };
+        ? { label: pool.label, ...liveAccount, period: pool.period, resetAt: pool.period === 'month' ? nextMonth : nextDay, source: 'provider', note: pool.note }
+        : { label: pool.label, used: counted, limit: pool.limit, remaining: Math.max(0, pool.limit - counted), period: pool.period, resetAt: pool.period === 'month' ? nextMonth : nextDay, source: 'estimate', note: pool.note };
       if (account.source === 'provider') liveRemainingRequests += account.remaining;
       else publishedRemainingRequests += account.remaining;
     }
@@ -172,6 +180,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
         let resetAt: string | null = null;
         let asOf: string | null = null;
         let source: ModelUsage['source'] = 'unknown';
+        let period: ModelUsage['period'] = null;
         if (pool) {
           source = 'shared';
         } else if (live && live.remainingRequests != null) {
@@ -184,10 +193,14 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           if (reset != null && reset <= nowMs && live.limitRequests != null) remainingRequests = live.limitRequests;
           else resetAt = reset != null ? new Date(reset).toISOString() : null;
           source = 'provider';
+          // the headers don't say what the window is; match it against the catalog's published limits
+          period = live.limitRequests != null && live.limitRequests === m.rpd ? 'day' : live.limitRequests != null && live.limitRequests === m.rpm ? 'minute' : 'window';
         } else if (m.rpd != null) {
           limitRequests = m.rpd;
           remainingRequests = Math.max(0, m.rpd - u.requests);
           source = 'estimate';
+          period = 'day';
+          resetAt = nextDay; // counted from FreeToken's own records, which start over at 00:00 UTC
         }
         if (remainingRequests != null) {
           if (source === 'provider') liveRemainingRequests += remainingRequests;
@@ -205,6 +218,8 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           resetAt,
           source,
           asOf,
+          period,
+          rpm: m.rpm ?? null,
         };
       });
 
