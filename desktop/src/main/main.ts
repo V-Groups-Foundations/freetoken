@@ -9,6 +9,7 @@ import * as link from "./freetoken-link";
 import * as memory from "./memory";
 import * as runner from "./runner";
 import * as skills from "./skills";
+import * as team from "./team";
 import * as video from "./video";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText } from "./workspace";
@@ -194,6 +195,15 @@ function encodeCall<T>(op: string, payload?: unknown): Promise<T> {
     send("video-encode", { id, op, payload });
   });
 }
+// Team mode: workers run the same agent loop as the chat, under their own session ids
+team.configureTeam({
+  run: (req, emit) => (useFreeToken() ? ft.chatFreeToken(req, emit) : ai.chat(req, emit)),
+  stop: (sid) => ai.stop(sid),
+  getSession: (sid) => ai.getSession(sid),
+  forward: (sid, event) => send("agent-event", { sessionId: sid, event }),
+  onTeam: (_supervisor, snapshot) => send("team-event", snapshot),
+});
+
 video.setEncoderHost({
   begin: (cfg) => encodeCall("begin", cfg),
   frame: (bgra) => encodeCall("frame", bgra),
@@ -463,6 +473,8 @@ function registerIpc() {
   });
   handle("ai:approve", (sid: string, toolId: string, ok: boolean) => ai.approve(sid, toolId, ok));
   handle("ai:stop", (sid: string) => ai.stop(sid));
+  handle("team:snapshot", (sid: string) => team.snapshot(String(sid)));
+  handle("team:stop", (sid: string, name?: string) => team.stopAgent(String(sid), name ? String(name) : undefined));
   handle("ai:reset", (sid: string) => { ai.resetSession(sid); ft.resetFreeTokenSession(sid); });
   handle("ai:pending", (sid: string) => ai.pendingChanges(sid));
   handle("ai:rewind", async (sid: string, index: number) => {

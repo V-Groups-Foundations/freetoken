@@ -200,6 +200,33 @@ async function main() {
       const sent = JSON.stringify(fake.requests.slice(before));
       if (sent.includes("Built the plan")) throw new Error("rewound turn still in the model's transcript");
     });
+    await step("Team mode: a supervisor runs two agents in parallel, shown live in the Team panel; one review for the team", async () => {
+      await page.getByRole("button", { name: "New chat" }).click();
+      await page.getByRole("radio", { name: "Team" }).click();
+      const box = page.getByLabel("Message the AI");
+      await box.fill("Build the user page");
+      await box.press("Enter");
+      await page.getByRole("group", { name: "How should the agent run this task?" }).getByRole("button", { name: /^Step by step/ }).click();
+      const panel = page.getByRole("region", { name: "Team" });
+      await panel.waitFor({ timeout: 15000 });
+      await panel.getByText(/2 agents/).waitFor({ timeout: 15000 });
+      await page.locator(".msg-ai", { hasText: "Team finished" }).waitFor({ timeout: 30000 });
+      await panel.getByText("all finished").waitFor({ timeout: 10000 });
+      await panel.getByRole("button", { name: /web/ }).click();
+      await panel.locator(".team-report", { hasText: "editing api.ts was BLOCKED" }).waitFor({ timeout: 5000 });
+      await page.screenshot({ path: path.join(shots, "team.png") });
+      const sup = fake.requests.find((r: any) => String(r.messages?.[0]?.content).includes("Team mode — you are the supervisor"));
+      if (!sup?.tools.some((t: any) => t.function.name === "spawn_agent")) throw new Error("supervisor had no spawn_agent");
+      const worker = fake.requests.find((r: any) => String(r.messages?.[0]?.content).includes('You are agent "web"'));
+      if (!worker || worker.tools.some((t: any) => t.function.name === "spawn_agent")) throw new Error("worker could spawn agents");
+      if (!fs.readFileSync(path.join(proj, "src/api.ts"), "utf8").includes("async per supervisor")) throw new Error("supervisor's answer didn't reach the api agent");
+      // both agents' changes are in the supervisor chat's review
+      const review = page.getByLabel("Files changed");
+      await review.getByText("2 files changed").waitFor({ timeout: 10000 });
+      if (!(await review.getByText("src/api.ts").count()) || !(await review.getByText("src/web.ts").count())) throw new Error("team changes missing from the review");
+      await review.getByRole("button", { name: "Accept all" }).click();
+    });
+
     await step("Settings → Open FreeToken shows the hub: projects, usage, providers and models from the account", async () => {
       fake.projects.set("p-hub", { name: "Hub project", model: "auto-smart", messages: [{ role: "user", content: "made on the web" }] });
       await page.keyboard.press("Control+,");

@@ -7,9 +7,10 @@ import type { Selection } from "./Editor";
 import { Logo } from "./Logo";
 import { Markdown, OpenFileContext } from "./Markdown";
 import { SkillsPanel } from "./Skills";
+import { TeamPanel } from "./Team";
 
 type ToolItem = { kind: "tool"; id: string; name: string; input: any; status: "running" | "ok" | "error"; summary?: string; detail?: ToolDetail };
-type Mode = "agent" | "plan" | "ask";
+type Mode = "agent" | "team" | "plan" | "ask";
 type Item =
   | { kind: "user"; text: string; chips: string[]; turn?: number }
   | { kind: "text"; text: string }
@@ -44,15 +45,23 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   save_skill: { label: "Learn skill", arg: "name", verb: "Learning skill" },
   install_skills: { label: "Install skills", arg: "source", verb: "Installing skills" },
   export_video: { label: "Export video", arg: "path", verb: "Rendering video" },
+  spawn_agent: { label: "Start agent", arg: "name", verb: "Starting an agent" },
+  agent_status: { label: "Team status", verb: "Checking the agents" },
+  wait_for_agents: { label: "Wait for agents", verb: "Waiting for the agents" },
+  message_agent: { label: "Message agent", arg: "agent", verb: "Messaging an agent" },
+  stop_agent: { label: "Stop agent", arg: "agent", verb: "Stopping" },
+  assign_file: { label: "Assign file", arg: "path", verb: "Assigning a file" },
+  ask_supervisor: { label: "Ask supervisor", arg: "question", verb: "Asking the supervisor" },
 };
 const EXPLORE = new Set(["read_file", "list_dir", "grep_search", "file_search", "codebase_search", "inspect_preview", "app_output"]);
 const FILE_ARG = new Set(["read_file", "edit_file", "write_file"]);
 const THINKING = ["Thinking", "Reasoning", "Working", "Planning", "Considering"];
 const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
-const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
+const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/team", "Switch to Team mode (several agents in parallel)"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
 const SUGGEST = ["Explain how this project is structured", "Run the app and check it works", "Find and fix a bug in the open file", "Write tests for the open file"];
 const MODES: { id: Mode; label: string; hint: string; placeholder: string }[] = [
   { id: "agent", label: "Agent", hint: "Reads, edits and runs things — asks before running commands", placeholder: "Ask the agent to build, fix or run something…" },
+  { id: "team", label: "Team", hint: "A supervisor splits the job between agents that work in parallel — each owns its files", placeholder: "Describe a bigger job — a team of agents will build it in parallel…" },
   { id: "plan", label: "Plan", hint: "Investigates the code and proposes a plan for you to approve — changes nothing yet", placeholder: "Describe what you want — you'll get a plan to approve first…" },
   { id: "ask", label: "Ask", hint: "Answers questions about your code — changes nothing", placeholder: "Ask a question about your code…" },
 ];
@@ -293,14 +302,14 @@ export function ChatPanel(props: {
       return;
     }
     if (/^\/(new|clear)$/.test(text)) { setInput(""); return newChat(); }
-    if (/^\/(ask|agent|plan)$/.test(text)) { setMode(text.slice(1) as Mode); setInput(""); return; }
+    if (/^\/(ask|agent|plan|team)$/.test(text)) { setMode(text.slice(1) as Mode); setInput(""); return; }
     if (text === "/memory") { setInput(""); setMemOpen(true); refreshMem(); return; }
     if (text === "/skills") { setInput(""); setMemOpen(false); setSkillsOpen(true); return; }
     if (text === "/init") { setInput(""); return send(INIT_PROMPT, "agent", run); }
     // "# something" is a note to remember, not a message (Ctrl+Enter: personal memory)
     if (/^#(?!#)\s*\S/.test(text)) { await saveNote(text.replace(/^#\s*/, ""), noteScope.current); noteScope.current = "project"; return; }
     // Agent work can run commands: ask once, up front, whether to run everything or approve each step
-    if (as === "agent") {
+    if (as === "agent" || as === "team") {
       run ??= policy.current ?? undefined;
       if (!run) { setChooser({ text, as }); return; }
       autoRunRef.current = run === "all";
@@ -615,6 +624,7 @@ export function ChatPanel(props: {
         {!atBottom && <button className="jump" onClick={jump}>↓ Jump to latest</button>}
       </OpenFileContext.Provider>
 
+      <TeamPanel sid={sid} autoApprove={() => autoRunRef.current} />
       {pending.length > 0 && !keepChanges.current && (
         <div className="review-bar" aria-label="Files changed">
           <div className="review-title">{pending.length} file{pending.length > 1 ? "s" : ""} changed

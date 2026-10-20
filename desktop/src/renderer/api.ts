@@ -39,7 +39,7 @@ interface Api {
   grep(pattern: string, opts: { caseSensitive?: boolean; fixed?: boolean; glob?: string }): Promise<{ hits: GrepHit[]; truncated: boolean }>;
   reindex(): Promise<void>;
   indexStatus(): Promise<IndexStatus>;
-  chat(req: { sessionId: string; mode: "agent" | "ask" | "plan"; text: string; context?: object }): Promise<boolean>;
+  chat(req: { sessionId: string; mode: "agent" | "ask" | "plan" | "team"; text: string; context?: object }): Promise<boolean>;
   approve(sid: string, toolId: string, ok: boolean): Promise<void>;
   stop(sid: string): Promise<void>;
   resetChat(sid: string): Promise<void>;
@@ -73,6 +73,9 @@ interface Api {
   videoReply(r: { id: number; ok: boolean; value?: unknown; error?: string }): void;
   onVideoEncode(fn: (m: { id: number; op: "begin" | "frame" | "end" | "abort"; payload?: any }) => void): Unsub;
   onVideoProgress(fn: (p: { done: number; total: number }) => void): Unsub;
+  teamSnapshot(sid: string): Promise<TeamSnapshot>;
+  teamStop(sid: string, name?: string): Promise<string>;
+  onTeamEvent(fn: (s: TeamSnapshot) => void): Unsub;
   remember(fact: string, scope: "project" | "user"): Promise<{ file: string; added: boolean; line: string }>;
   openMemory(scope: "project" | "user"): Promise<string | null>;
   ftHub(): Promise<FtHub>;
@@ -107,6 +110,8 @@ export type AppEvent = { type: "start"; command: string } | { type: "data"; data
 export type PreviewState = { url: string; title: string; loading: boolean };
 export type FtProject = { id: string; name: string; model: string; origin: string; messages: { role: "user" | "assistant"; content: string; provider?: string | null }[] };
 type MemoryFile = { file: string | null; exists: boolean; lines: number; entries: number };
+export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string };
+export type TeamSnapshot = { supervisor: string; agents: TeamAgent[] };
 export type SkillInfo = { name: string; description: string; scope: "user" | "project" | "builtin"; dir: string | null; source?: string };
 export type MemoryStatus = { project: MemoryFile; user: MemoryFile };
 export type FtHub = {

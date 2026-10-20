@@ -5,7 +5,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-  READ_ONLY, TOOLS, beginTurn, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
+  READ_ONLY, TOOLS, beginTurn, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
   type AgentEvent, type ChatRequest, type ToolName,
 } from "./ai";
 import { readText } from "./workspace";
@@ -121,7 +121,8 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   s.idlePolls = 0;
   let msgs = transcripts.get(req.sessionId);
   if (!msgs) transcripts.set(req.sessionId, (msgs = []));
-  const tools = req.mode === "agent" ? OA_TOOLS : OA_TOOLS.filter((t) => t.type === "function" && READ_ONLY.has(t.function.name));
+  const allowed = toolNamesFor(req);
+  const tools = OA_TOOLS.filter((t) => t.type === "function" && allowed.has(t.function.name));
 
   const ctx: string[] = [];
   const c = req.context;
@@ -136,7 +137,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   msgs.push({ role: "user", content: ctx.length ? `<context>\n${ctx.join("\n\n")}\n</context>\n\n${req.text}` : req.text });
 
   try {
-    const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"));
+    const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"), req.worker);
     for (let turn = 0; turn < 60; turn++) {
       let text = "";
       let calls: { id: string; name: string; args: string }[] = [];
@@ -209,7 +210,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         const schema = schemas[u.name as ToolName];
         const parsed = input === undefined ? null : schema?.safeParse(input);
         let content: string;
-        if (!schema || (req.mode !== "agent" && !READ_ONLY.has(u.name))) {
+        if (!schema || !allowed.has(u.name)) {
           content = `Unknown or unavailable tool: ${u.name}`;
           emit({ type: "tool_end", id: u.id, ok: false, summary: content });
         } else if (!parsed?.success) {

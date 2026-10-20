@@ -9,8 +9,51 @@ const lastUserText = (body: any) => {
   return "";
 };
 
+/** Team mode: a supervisor and two workers (api, web) — see test/team.test.ts. */
+/** Decide the next reply from the request: which agent (by system prompt) and how far it got. */
+export function teamScript(body: any): Block[] | null {
+  const sys = String(body.messages[0]?.content ?? "");
+  const msgs = body.messages as any[];
+  const lastUser = msgs.map((m) => m.role).lastIndexOf("user");
+  const step = msgs.slice(lastUser).filter((m) => m.role === "assistant").length;
+  const lastTool = [...msgs].reverse().find((m) => m.role === "tool")?.content ?? "";
+  if (sys.includes("Team mode — you are the supervisor")) {
+    const steps: Block[][] = [
+      [{ type: "text", text: "Splitting this in two." },
+        { type: "tool", name: "spawn_agent", args: { name: "api", task: "Create src/api.ts exporting getUser().", files: ["src/api.ts"] } },
+        { type: "tool", name: "spawn_agent", args: { name: "web", task: "Create src/web.ts that calls getUser().", files: ["src/web.ts"] } }],
+      [{ type: "tool", name: "wait_for_agents", args: { timeout_seconds: 60 } }],
+      lastTool.includes("api asks") ? [{ type: "tool", name: "message_agent", args: { agent: "api", message: "Yes, make it async." } }] : [{ type: "text", text: `unexpected: ${lastTool.slice(0, 200)}` }],
+      [{ type: "tool", name: "wait_for_agents", args: { timeout_seconds: 60 } }],
+      [{ type: "text", text: `Team finished. ${lastTool.replace(/\s+/g, " ")}` }],
+    ];
+    return steps[Math.min(step, steps.length - 1)];
+  }
+  if (sys.includes('You are agent "api"')) {
+    const steps: Block[][] = [
+      [{ type: "tool", name: "write_file", args: { path: "src/api.ts", contents: "export function getUser() { return { id: 1 }; }\n" } }],
+      [{ type: "tool", name: "ask_supervisor", args: { question: "Should getUser be async?" } }],
+      [{ type: "tool", name: "write_file", args: { path: "src/api.ts", contents: `// ${lastTool.includes("async") ? "async per supervisor" : "sync"}\nexport async function getUser() { return { id: 1 }; }\n` } }],
+      [{ type: "text", text: "api report: wrote src/api.ts (async getUser)." }],
+    ];
+    return steps[Math.min(step, steps.length - 1)];
+  }
+  if (sys.includes('You are agent "web"')) {
+    const steps: Block[][] = [
+      [{ type: "tool", name: "write_file", args: { path: "src/web.ts", contents: "import { getUser } from './api';\nconsole.log(getUser());\n" } }],
+      [{ type: "tool", name: "edit_file", args: { path: "src/api.ts", old_string: "return { id: 1 }", new_string: "return { id: 2 }" } }],
+      [{ type: "text", text: `web report: wrote src/web.ts; editing api.ts was ${String(lastTool).includes("🔒") ? "BLOCKED" : "allowed"}.` }],
+    ];
+    return steps[Math.min(step, steps.length - 1)];
+  }
+  return null;
+}
+
+
 /** Same scenario as the Claude fake: rename greet → sayHello over several tool turns. */
 export function freeTokenScript(body: any): Block[] {
+  const team = teamScript(body);
+  if (team) return team;
   const sys = String(body.messages[0]?.content ?? "");
   if (sys.includes("code completion")) return [{ type: "text", text: "a + b;" }];
   if (sys.includes("rewrite a selected region")) return [{ type: "text", text: "```ts\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n```" }];

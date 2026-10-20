@@ -514,3 +514,38 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .skill-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-scope { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: color-mix(in srgb, var(--fg, #fff) 8%, transparent); opacity: .85; }
 .skill-scope.builtin { background: color-mix(in srgb, var(--accent, #38d6ff) 18%, transparent); }
+
+/* Team mode (Team.tsx): the supervisor's agents, live */
+.team-panel { margin: 6px 10px; border: 1px solid color-mix(in srgb, var(--accent, #38d6ff) 35%, var(--border, #333)); border-radius: 12px; background: color-mix(in srgb, var(--accent, #38d6ff) 5%, var(--panel, #161616)); font-size: 12.5px; overflow: hidden; }
+.team-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; }
+.team-toggle { display: flex; align-items: center; gap: 6px; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; }
+.team-glyph { color: var(--accent, #38d6ff); }
+.team-list { display: flex; flex-direction: column; border-top: 1px solid var(--border, #333); max-height: 38vh; overflow-y: auto; }
+.team-agent + .team-agent { border-top: 1px solid color-mix(in srgb, var(--border, #333) 60%, transparent); }
+.team-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.team-row:hover { background: color-mix(in srgb, var(--fg, #fff) 5%, transparent); }
+.team-dot { width: 8px; height: 8px; border-radius: 99px; flex-shrink: 0; background: #888; }
+.team-dot.running { background: var(--accent, #38d6ff); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent, #38d6ff) 60%, transparent); animation: team-pulse 1.6s ease-out infinite; }
+.team-dot.waiting { background: #f5b942; }
+.team-dot.queued { background: #8b8b8b; }
+.team-dot.done { background: #3ecf8e; }
+.team-dot.failed { background: #ef4444; }
+.team-dot.stopped { background: #6b7280; }
+@keyframes team-pulse { 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.team-name { flex-shrink: 0; }
+.team-status { flex-shrink: 0; font-size: 11px; opacity: .7; }
+.team-activity { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .85; }
+.team-files { flex-shrink: 0; font-size: 11px; opacity: .75; }
+.team-detail { padding: 2px 10px 10px 26px; display: flex; flex-direction: column; gap: 6px; }
+.team-task { white-space: pre-wrap; max-height: 6.5em; overflow: auto; }
+.team-detail code { margin-right: 4px; font-size: 11px; }
+.team-log { display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow-y: auto; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, #000 30%, transparent); font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
+.team-log-text { white-space: pre-wrap; opacity: .9; }
+.team-log-tool { color: var(--accent, #38d6ff); }
+.team-log-note { opacity: .6; }
+.team-log-error { color: #ef4444; }
+.team-report { padding: 6px 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, #3ecf8e 40%, transparent); white-space: pre-wrap; }
+.team-report b { display: block; margin-bottom: 2px; font-size: 11px; opacity: .8; }
+.team-approval { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--border, #333); background: color-mix(in srgb, #f5b942 10%, transparent); }
+.team-approval > div:first-child { flex: 1; min-width: 0; }
+.team-approval-btns { display: flex; gap: 4px; flex-shrink: 0; }
