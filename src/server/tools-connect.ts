@@ -92,10 +92,14 @@ export function removeBlock(text: string) {
   return text.replace(re, '\n').replace(/\n{3,}/g, '\n\n');
 }
 
+// Codex (0.134+): providers live in config.toml, profiles in their own ~/.codex/<name>.config.toml, and
+// custom providers speak the Responses API (wire_api = "responses" — FreeToken serves /v1/responses).
 const codexPath = (env: ToolEnv) => path.join(env.home, '.codex', 'config.toml');
+const codexProfilePath = (env: ToolEnv) => path.join(env.home, '.codex', 'freetoken.config.toml');
 export function codexBlock(baseUrl: string) {
-  return `${BLOCK_START}\n[model_providers.freetoken]\nname = "FreeToken"\nbase_url = "${baseUrl}"\nenv_key = "FREETOKEN_API_KEY"\nwire_api = "chat"\n\n[profiles.freetoken]\nmodel_provider = "freetoken"\nmodel = "auto-smart"\n${BLOCK_END}\n`;
+  return `${BLOCK_START}\n[model_providers.freetoken]\nname = "FreeToken"\nbase_url = "${baseUrl}"\nenv_key = "FREETOKEN_API_KEY"\nwire_api = "responses"\n${BLOCK_END}\n`;
 }
+export const CODEX_PROFILE = `# ${MARK}: the "freetoken" Codex profile (codex --profile freetoken). Disconnect in FreeToken removes it.\nmodel_provider = "freetoken"\nmodel = "auto-smart"\n`;
 
 const continuePath = (env: ToolEnv) => path.join(env.home, '.continue', 'config.yaml');
 /** Add a FreeToken model under `models:` in Continue's config.yaml (creating the file if needed). */
@@ -121,8 +125,8 @@ export function toolStatus(env: ToolEnv): ToolStatus[] {
   return [
     { id: 'claude-code', name: 'Claude Code', kind: 'auto', installed: env.installed('claude'), connected: hasShim(env, 'claude-free'), command: 'claude-free',
       note: 'Adds a claude-free command: Claude Code on your free models. Your normal claude command is unchanged.' },
-    { id: 'codex', name: 'OpenAI Codex CLI', kind: 'auto', installed: env.installed('codex'), connected: !!codex?.includes('[model_providers.freetoken]') && hasShim(env, 'codex-free'), command: 'codex-free',
-      note: 'Adds a separate "freetoken" profile to ~/.codex/config.toml (your default is unchanged) and a codex-free command.' },
+    { id: 'codex', name: 'OpenAI Codex CLI', kind: 'auto', installed: env.installed('codex'), connected: !!codex?.includes('wire_api = "responses"') && existsSync(codexProfilePath(env)) && hasShim(env, 'codex-free'), command: 'codex-free',
+      note: 'Adds FreeToken as a provider plus a separate "freetoken" profile (~/.codex/freetoken.config.toml — your default is unchanged) and a codex-free command.' },
     { id: 'aider', name: 'Aider', kind: 'auto', installed: env.installed('aider'), connected: hasShim(env, 'aider-free'), command: 'aider-free',
       note: 'Adds an aider-free command that runs Aider on your free models.' },
     { id: 'continue', name: 'Continue', kind: 'auto', installed: existsSync(path.join(env.home, '.continue')) || null, connected: !!cont?.includes(BLOCK_START),
@@ -159,6 +163,7 @@ export function connectTool(id: ToolId, env: ToolEnv, baseUrl: string, token: st
       backup(file);
       const now = removeBlock(read(file) ?? '').replace(/\s*$/, '');
       writeFileSync(file, `${now ? `${now}\n\n` : ''}${codexBlock(baseUrl)}`);
+      writeFileSync(codexProfilePath(env), CODEX_PROFILE);
       writeShim(env, 'codex-free', 'run codex --profile freetoken');
       return { message: 'Done. Open a new terminal and type codex-free (or codex --profile freetoken via freetoken run).', command: 'codex-free' };
     }
@@ -183,6 +188,7 @@ export function disconnectTool(id: ToolId, env: ToolEnv) {
       removeShim(env, 'codex-free');
       const t = read(codexPath(env));
       if (t) writeFileSync(codexPath(env), removeBlock(t));
+      if (read(codexProfilePath(env))?.includes(MARK)) rmSync(codexProfilePath(env), { force: true });
       break;
     }
     case 'continue': {

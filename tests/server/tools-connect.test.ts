@@ -39,12 +39,17 @@ describe('connecting tools', () => {
     const t = readFileSync(file, 'utf8');
     expect(t.startsWith('model = "o4-mini"')).toBe(true);
     expect(t.match(/\[model_providers\.freetoken\]/g)).toHaveLength(1);
-    expect(t).toContain('[profiles.freetoken]\nmodel_provider = "freetoken"');
+    expect(t).toContain('wire_api = "responses"'); // Codex dropped "chat"
+    expect(t).not.toContain('[profiles.freetoken]'); // profiles have their own file now
+    const profile = path.join(env.home, '.codex', 'freetoken.config.toml');
+    expect(readFileSync(profile, 'utf8')).toContain('model_provider = "freetoken"');
     expect(existsSync(`${file}.freetoken-backup`)).toBe(true);
+    expect(toolStatus(env).find((x) => x.id === 'codex')?.connected).toBe(true);
     disconnectTool('codex', env);
     const back = readFileSync(file, 'utf8');
     expect(back).not.toContain('freetoken');
     expect(back).toContain('[profiles.work]');
+    expect(existsSync(profile)).toBe(false);
   });
 
   it('Continue: inserts a model with the right indentation, or creates the config', () => {

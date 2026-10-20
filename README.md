@@ -84,14 +84,14 @@ npm run desktop   # builds and opens V-Run — it starts FreeToken and connects 
 
 ## 🤖 Claude Code, Cursor & Cline — on free models
 
-FreeToken speaks both the **OpenAI** API (`/api/v1/chat/completions`) and the **Anthropic** API (`/api/v1/messages`, with streaming and tool use), so the AI tools you already use run on your free pool.
+FreeToken speaks the **OpenAI** Chat Completions API (`/api/v1/chat/completions`), the OpenAI **Responses** API (`/api/v1/responses`, what the Codex CLI uses) and the **Anthropic** API (`/api/v1/messages`) — all with streaming and tool use — so the AI tools you already use run on your free pool.
 
 **One click:** on the **API** page, press *Connect* next to a tool and FreeToken sets it up on your computer:
 
 | Tool | After one click |
 |---|---|
 | Claude Code | type `claude-free` — Claude Code on your free models (your normal `claude` is untouched) |
-| Codex | type `codex-free` (a separate `freetoken` profile; your default is untouched) |
+| Codex (latest) | type `codex-free` (a separate `freetoken` profile; your default is untouched) |
 | Aider | type `aider-free` |
 | Continue | pick **FreeToken (auto-smart)** in its model list |
 | Cursor · Cline | *Get a key* gives you the base URL, a key and the model to paste |
@@ -125,6 +125,7 @@ Claude model names map to FreeToken automatically (`haiku` → `auto-fast`, ever
 | 🔀 **Smart routing** | `auto-smart` / `auto-fast` pick a provider with quota left; instant fallback on rate limits; images go to a model that can see. |
 | 🔌 **OpenAI-compatible API** | `/api/v1/chat/completions`, streaming and tool calls — works with any OpenAI SDK or tool. |
 | 🤖 **Anthropic-compatible API** | `/api/v1/messages` — Claude Code and Anthropic SDKs on free models. |
+| 🧠 **Responses API** | `/api/v1/responses` — the latest Codex CLI and OpenAI SDK `responses.create` on free models. |
 | 🧩 **One-click tool setup** | Claude Code, Codex, Aider, Continue set up for you; Cursor and Cline in two pastes. |
 | 💬 **Chat** | Markdown, images, voice in/out, attachments, across all your providers. |
 | 📁 **Projects** | One conversation per project — plan it in chat, then **Continue in V-Run** with the whole context. |
