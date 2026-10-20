@@ -144,6 +144,8 @@ describe('getUsageSummary', () => {
     const co = s.providers.find((p) => p.provider === 'cohere')!;
     expect(co.account).toMatchObject({ used: 2, limit: 1000, remaining: 998, period: 'month' });
     expect(s.knownRemainingRequests).toBe(48 + 998); // not 3×50 + 2×1000
+    // the overall bar: OpenRouter's daily pool once; Cohere's monthly pool is left out
+    expect(s.overall).toMatchObject({ limit: 50, used: 2, remaining: 48, limits: 1 });
     expect(s.today.requests).toBe(thisMonthNotToday ? 3 : 4);
   });
 

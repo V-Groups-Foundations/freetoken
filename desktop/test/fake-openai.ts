@@ -146,7 +146,7 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
       }
       if (pathOnly === "/api/usage") {
         res.writeHead(200, { "content-type": "application/json" });
-        return res.end(JSON.stringify({ today: { requests: 42, tokens: 12345 }, knownRemainingRequests: 958, providers: [
+        return res.end(JSON.stringify({ today: { requests: 42, tokens: 12345 }, knownRemainingRequests: 958, overall: { used: 300, limit: 1200, remaining: 900, limits: 3, live: 1, resetAt: new Date(Date.now() + 5 * 3600_000).toISOString() }, providers: [
           { provider: "groq", name: "Groq", status: "ok", account: null, models: [{ requests: 30 }, { requests: 12 }] },
           { provider: "openrouter", name: "OpenRouter", status: "ok", account: { used: 8, limit: 50 }, models: [{ requests: 8 }] },
         ] }));

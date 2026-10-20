@@ -15,6 +15,35 @@ function ago(iso: string | null) {
   return `${Math.floor(s / 86400)} d ago`;
 }
 
+/** "4 hr 12 min" / "38 min" until `iso`. */
+function untilText(iso: string) {
+  const mins = Math.max(1, Math.ceil((new Date(iso).getTime() - Date.now()) / 60000));
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h ? `${h} hr${m ? ` ${m} min` : ""}` : `${m} min`;
+}
+
+/** All daily free allowances combined, as one bar with % used — the same figure as FreeToken's Usage page. */
+function OverallLimit({ o }: { o: { used: number; limit: number; limits: number; resetAt: string } }) {
+  const ratio = o.limit > 0 ? Math.min(1, o.used / o.limit) : 0;
+  const pct = Math.round(ratio * 100);
+  const fill = pct >= 90 ? "#ef4444" : pct >= 70 ? "#f59e0b" : "linear-gradient(90deg, #22d3ee, #60a5fa 48%, #a78bfa)";
+  return (
+    <div className="hub-overall" style={{ animationDelay: "100ms" }}>
+      <div className="hub-overall-top">
+        <div><div className="hub-stat-label">Overall daily limit</div><div className="hub-overall-sub">{o.limits} free daily limit{o.limits > 1 ? "s" : ""} combined</div></div>
+        <div className="hub-overall-pct">{pct}%<span> used</span></div>
+      </div>
+      <div className="hub-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`Overall: ${pct}% used`}>
+        <div style={{ width: `${o.used > 0 ? Math.max(2, ratio * 100) : 0}%`, background: fill }} />
+      </div>
+      <div className="hub-overall-foot">
+        <span>{fmt(o.used)} used · {fmt(Math.max(0, o.limit - o.used))} of {fmt(o.limit)} left</span>
+        <span>Resets in {untilText(o.resetAt)}</span>
+      </div>
+    </div>
+  );
+}
+
 export function FreeTokenHub({ onSignIn, onClose, onToast }: { onSignIn: () => void; onClose: () => void; onToast: (m: string) => void }) {
   const [hub, setHub] = useState<FtHub | null>(null);
   const [loading, setLoading] = useState(true);
@@ -107,6 +136,7 @@ export function FreeTokenHub({ onSignIn, onClose, onToast }: { onSignIn: () => v
               </div>
             ))}
           </div>
+          {hub!.usage?.overall && <OverallLimit o={hub!.usage.overall} />}
 
           <div className="hub-grid">
             <div className="hub-card hub-projects" style={{ animationDelay: "120ms" }}>

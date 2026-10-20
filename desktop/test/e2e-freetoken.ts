@@ -238,6 +238,8 @@ async function main() {
       await hub.getByText("12.3k").waitFor(); // tokens today
       await hub.getByText("Hub project").waitFor();
       await hub.getByText("8 / 50").waitFor(); // OpenRouter account limit
+      await hub.getByRole("progressbar", { name: "Overall: 25% used" }).waitFor(); // all daily limits combined
+      await hub.getByText(/300 used · 900 of 1\.2k left/).waitFor();
       await hub.getByRole("button", { name: "groq/llama-3.3-70b" }).click();
       await page.getByText("FreeToken · groq/llama-3.3-70b").waitFor({ timeout: 5000 });
       await page.screenshot({ path: path.join(shots, "freetoken-hub.png") });

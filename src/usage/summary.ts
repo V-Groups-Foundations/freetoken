@@ -63,6 +63,11 @@ export interface UsageSummary {
   liveRemainingRequests: number;
   /** requests left by published limits FreeToken knows of, not confirmed by the provider */
   publishedRemainingRequests: number;
+  /**
+   * Every daily allowance added up (shared pools counted once): today's overall use. Monthly and
+   * per-minute limits are left out so the total means one thing — what's left today.
+   */
+  overall: { used: number; limit: number; remaining: number; limits: number; live: number; resetAt: string };
   providers: ProviderUsage[];
 }
 
@@ -142,6 +147,10 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
   }
 
   let liveRemainingRequests = 0;
+  const overall = { used: 0, limit: 0, remaining: 0, limits: 0, live: 0 };
+  const addDaily = (limit: number, remaining: number, live: boolean) => {
+    overall.limit += limit; overall.remaining += Math.min(limit, Math.max(0, remaining)); overall.limits++; if (live) overall.live++;
+  };
   let publishedRemainingRequests = 0;
   const providers: ProviderUsage[] = [];
 
@@ -223,6 +232,9 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
         };
       });
 
+    if (account?.period === 'day') addDaily(account.limit, account.remaining, account.source === 'provider');
+    for (const m of modelUsages) if (m.period === 'day' && m.limitRequests != null && m.remainingRequests != null) addDaily(m.limitRequests, m.remainingRequests, m.source === 'provider');
+
     providers.push({
       provider: key.provider,
       name: def.name,
@@ -238,6 +250,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
   return {
     today, dayStartedAt: started.toISOString(),
     knownRemainingRequests: liveRemainingRequests + publishedRemainingRequests, liveRemainingRequests, publishedRemainingRequests,
+    overall: { ...overall, used: overall.limit - overall.remaining, resetAt: nextDay },
     providers,
   };
 }

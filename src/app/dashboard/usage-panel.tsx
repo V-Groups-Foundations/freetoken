@@ -204,6 +204,26 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
           )}
         </div>
       </div>
+      {data.overall.limit > 0 && (
+        <div className="card card-pad neon-frame space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <div className="eyebrow">overall</div>
+              <h2 className="h2 mt-1.5">All your free daily limits</h2>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-semibold tracking-tight tabular-nums">{Math.round((data.overall.used / data.overall.limit) * 100)}%</div>
+              <div className="faint text-xs">used today</div>
+            </div>
+          </div>
+          <Meter label={<>{data.overall.limits} daily limit{data.overall.limits > 1 ? 's' : ''} combined</>}
+            used={data.overall.used} limit={data.overall.limit} period="day" resetAt={data.overall.resetAt} now={now} />
+          <p className="faint text-xs">
+            {data.overall.live} of {data.overall.limits} reported live by the providers, the rest from published limits.
+            Shared allowances are counted once; monthly and per-minute limits (and providers with no daily cap) aren&apos;t included.
+          </p>
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-2">
         {data.providers.map((p) => <ProviderCard key={p.provider} p={p} now={now} />)}
       </div>

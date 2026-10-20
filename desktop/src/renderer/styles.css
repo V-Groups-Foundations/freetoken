@@ -549,3 +549,14 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .team-approval { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--border, #333); background: color-mix(in srgb, #f5b942 10%, transparent); }
 .team-approval > div:first-child { flex: 1; min-width: 0; }
 .team-approval-btns { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* FreeToken hub: all daily limits combined (FreeTokenHub.tsx OverallLimit) */
+.hub-overall { margin-top: 14px; padding: 16px 18px; border-radius: 16px; display: flex; flex-direction: column; gap: 10px; animation: hub-rise .5s cubic-bezier(.2,.8,.2,1) both;
+  background: linear-gradient(#16191f, #16191f) padding-box, linear-gradient(135deg, #3ad1ff66, #a78bfa44, #ffffff10) border-box; border: 1px solid transparent; }
+.hub-overall-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.hub-overall-sub { font-size: 12px; opacity: .65; margin-top: 2px; }
+.hub-overall-pct { font-size: 28px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.hub-overall-pct span { font-size: 12px; font-weight: 500; opacity: .6; margin-left: 4px; }
+.hub-meter { height: 10px; border-radius: 99px; background: #ffffff12; overflow: hidden; }
+.hub-meter > div { height: 100%; border-radius: 99px; transition: width .7s ease; box-shadow: 0 0 12px #38d6ff55; }
+.hub-overall-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; font-size: 12px; opacity: .7; font-variant-numeric: tabular-nums; }
