@@ -99,7 +99,8 @@ const codexProfilePath = (env: ToolEnv) => path.join(env.home, '.codex', 'freeto
 export function codexBlock(baseUrl: string) {
   return `${BLOCK_START}\n[model_providers.freetoken]\nname = "FreeToken"\nbase_url = "${baseUrl}"\nenv_key = "FREETOKEN_API_KEY"\nwire_api = "responses"\n${BLOCK_END}\n`;
 }
-export const CODEX_PROFILE = `# ${MARK}: the "freetoken" Codex profile (codex --profile freetoken). Disconnect in FreeToken removes it.\nmodel_provider = "freetoken"\nmodel = "auto-smart"\n`;
+// Edit files in the folder Codex starts in, and ask (rather than silently refuse) when a command needs more.
+export const CODEX_PROFILE = `# ${MARK}: the "freetoken" Codex profile (codex --profile freetoken). Disconnect in FreeToken removes it.\nmodel_provider = "freetoken"\nmodel = "auto-smart"\nsandbox_mode = "workspace-write"\napproval_policy = "on-request"\n`;
 
 const continuePath = (env: ToolEnv) => path.join(env.home, '.continue', 'config.yaml');
 /** Add a FreeToken model under `models:` in Continue's config.yaml (creating the file if needed). */

@@ -196,6 +196,8 @@ export function streamToResponses(upstream: ReadableStream<Uint8Array>, model: s
           }
         }
         onText(''); // flush a partial tag held back by the think filter
+        // a model that ends its turn with nothing at all leaves the user staring at a blank screen
+        if (!msgId && !calls.size) onText("(The model ended its turn without a reply. Ask again, or say what you'd like it to do next.)");
         const output: any[] = [];
         if (msgId) {
           const item = { type: 'message', id: msgId, role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] };
