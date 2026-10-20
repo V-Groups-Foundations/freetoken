@@ -20,7 +20,11 @@ interface Worker {
   started: number; ended?: number; runs: number;
   question?: { text: string; resolve: (answer: string) => void };
   pendingRun?: string;
+  /** the reviewer: reads and runs checks, never edits; started automatically when the agents finish */
+  reviewer?: boolean;
 }
+export const REVIEWER = "reviewer";
+const MAX_REVIEWS = 2;
 interface Team {
   supervisor: string;
   workers: Map<string, Worker>;
@@ -31,6 +35,9 @@ interface Team {
   versions: Map<string, { n: number; by: string }>;  // bumped on every agent write
   reads: Map<string, Map<string, number>>;           // session id → path → version it last read
   notices: Map<string, string[]>;                    // session id → messages for its next tool result
+  // review: files changed since the last review, and how many reviews this job has had
+  changedSinceReview: Set<string>;
+  reviews: number;
 }
 
 export interface TeamDeps {
@@ -40,7 +47,7 @@ export interface TeamDeps {
   forward(sessionId: string, e: AgentEvent): void;
   onTeam(supervisor: string, snapshot: TeamSnapshot): void;
 }
-export type TeamSnapshot = { supervisor: string; agents: { sid: string; name: string; task: string; status: Status; activity: string; files: string[]; report: string; question?: string }[] };
+export type TeamSnapshot = { supervisor: string; agents: { sid: string; name: string; task: string; status: Status; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean }[] };
 
 let deps: TeamDeps | null = null;
 export const configureTeam = (d: TeamDeps) => { deps = d; };
@@ -55,7 +62,7 @@ const active = (w?: Worker) => !!w && (w.status === "running" || w.status === "w
 function teamOf(supervisor: string) {
   let t = teams.get(supervisor);
   if (!t) {
-    t = { supervisor, workers: new Map(), inbox: [], wake: new Set(), claims: new Map(), versions: new Map(), reads: new Map(), notices: new Map() };
+    t = { supervisor, workers: new Map(), inbox: [], wake: new Set(), claims: new Map(), versions: new Map(), reads: new Map(), notices: new Map(), changedSinceReview: new Set(), reviews: 0 };
     teams.set(supervisor, t);
     memberOf.set(supervisor, { team: t, name: "supervisor" });
   }
@@ -78,7 +85,7 @@ export function snapshot(supervisor: string): TeamSnapshot {
   return {
     supervisor,
     agents: [...t.workers.values()].map((w) => ({
-      sid: w.sid, name: w.name, task: w.task, status: w.status, activity: w.activity, report: w.report,
+      sid: w.sid, name: w.name, task: w.task, status: w.status, activity: w.activity, report: w.report, ...(w.reviewer ? { reviewer: true } : {}),
       files: [...t.claims].filter(([, s]) => s === w.sid).map(([p]) => p), ...(w.question ? { question: w.question.text } : {}),
     })),
   };
@@ -132,6 +139,7 @@ export function noteWrite(sid: string, rel: string, summary: string) {
   const t = m.team;
   const n = (t.versions.get(rel)?.n ?? 0) + 1;
   t.versions.set(rel, { n, by: sid });
+  t.changedSinceReview.add(rel);
   const mine = t.reads.get(sid) ?? new Map<string, number>();
   mine.set(rel, n);
   t.reads.set(sid, mine);
@@ -208,7 +216,7 @@ function run(t: Team, w: Worker, text: string) {
       startQueued(t);
     }
   };
-  deps.run({ sessionId: w.sid, mode: "agent", text, worker: { name: w.name, supervisor: t.supervisor } }, emit)
+  deps.run({ sessionId: w.sid, mode: "agent", text, worker: { name: w.name, supervisor: t.supervisor, ...(w.reviewer ? { reviewer: true } : {}) } }, emit)
     .catch((err) => emit({ type: "error", message: String((err as Error)?.message ?? err) }));
 }
 
@@ -222,6 +230,7 @@ export function spawn(supervisor: string, input: { name: string; task: string; f
   const name = input.name.trim().slice(0, 32);
   if (!/^[\w][\w -]*$/.test(name)) throw new Error("Give the agent a short name (letters, digits, dashes), e.g. frontend.");
   const existing = t.workers.get(key(name));
+  if (key(name) === REVIEWER) throw new Error("\"reviewer\" is reserved — a reviewer checks the work automatically when the agents finish. Give this agent a role name like frontend or api.");
   if (existing && active(existing)) throw new Error(`An agent named ${name} is already working. Pick another name, or message_agent it.`);
   if (!existing && t.workers.size >= MAX_AGENTS) throw new Error(`A team can have at most ${MAX_AGENTS} agents; reuse one with message_agent.`);
   const files = (input.files ?? []).map(normalize);
@@ -249,6 +258,29 @@ export function statusText(supervisor: string) {
   return `Agents:\n${lines.join("\n")}`;
 }
 
+/** Start (or restart) the reviewer on what changed since the last review; returns it. */
+function startReview(t: Team) {
+  const changed = [...t.changedSinceReview].sort();
+  t.changedSinceReview.clear();
+  t.reviews++;
+  const builders = [...t.workers.values()].filter((w) => !w.reviewer);
+  const task = [
+    `Review the team's work (review ${t.reviews} of at most ${MAX_REVIEWS}).`,
+    "",
+    "What each agent was asked to do, and what it reported:",
+    ...builders.map((w) => `### ${w.name}\nTask: ${w.task.split("\n").slice(0, 12).join("\n")}\nReport: ${(w.report || "(none)").replace(/\s+/g, " ").slice(0, 1200)}`),
+    "",
+    `Files changed since the last review:\n${changed.map((f) => `- ${f} (owner: ${(() => { const o = t.claims.get(f) ?? t.versions.get(f)?.by; const w = builders.find((x) => x.sid === o); return w ? w.name : "supervisor"; })()})`).join("\n")}`,
+  ].join("\n");
+  const sid = workerSid(t.supervisor, REVIEWER);
+  const w: Worker = t.workers.get(REVIEWER) ?? { sid, name: REVIEWER, task: "", files: [], status: "queued", activity: "", report: "", text: "", started: Date.now(), runs: 0, reviewer: true };
+  w.task = task; w.report = ""; w.reviewer = true;
+  t.workers.set(REVIEWER, w);
+  memberOf.set(sid, { team: t, name: REVIEWER });
+  run(t, w, task);
+  return w;
+}
+
 /** Wait until the named agents (default: all) finish, one of them asks something, or the timeout. */
 export async function waitFor(supervisor: string, names: string[] | undefined, timeoutSec: number, signal?: AbortSignal) {
   const t = teams.get(supervisor);
@@ -261,7 +293,20 @@ export async function waitFor(supervisor: string, names: string[] | undefined, t
     const questions = [...t.workers.values()].filter((w) => w.question);
     if (questions.length) return `${questions.map((w) => `❓ ${w.name} asks: ${w.question!.text}`).join("\n")}\nAnswer with message_agent (it's waiting), then wait again.\n\n${statusText(supervisor)}`;
     if (targets.every((w) => !active(w))) {
-      return targets.map((w) => `## ${w.name} — ${w.status}\n${w.report || "(no report)"}`).join("\n\n");
+      // the agents are done: a reviewer checks their work before the supervisor wraps up
+      const builders = [...t.workers.values()].filter((w) => !w.reviewer);
+      if (builders.every((w) => !active(w)) && t.changedSinceReview.size && t.reviews < MAX_REVIEWS && !targets.some((w) => w.reviewer && active(w))) {
+        const reviewer = startReview(t);
+        if (reviewer && !targets.includes(reviewer)) targets.push(reviewer);
+        continue;
+      }
+      const reports = targets.map((w) => `## ${w.name}${w.reviewer ? " (review)" : ""} — ${w.status}\n${w.report || "(no report)"}`).join("\n\n");
+      const review = targets.find((w) => w.reviewer && w.status === "done");
+      const next = !review ? ""
+        : /\bAPPROVED\b/.test(review.report) ? "\n\nThe reviewer approved the work. Run the app or tests yourself once more, then give the user your final answer."
+        : t.reviews >= MAX_REVIEWS ? "\n\nThis was the last automatic review. Fix what's left (message the owning agent, or do it yourself), verify, then answer the user — mention anything still open."
+        : "\n\nThe reviewer found issues. Send each fix to the agent that owns the file (message_agent), then wait_for_agents again — another review follows automatically.";
+      return reports + next;
     }
     if (signal?.aborted) return "Stopped waiting.";
     if (Date.now() >= deadline) return `Still working after ${timeoutSec}s.\n\n${statusText(supervisor)}`;

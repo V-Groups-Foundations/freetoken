@@ -5,6 +5,7 @@ type LogLine = { kind: "tool" | "text" | "note" | "error"; text: string };
 type Approval = { sid: string; id: string; command: string; explanation?: string };
 
 const STATUS: Record<TeamAgent["status"], string> = { queued: "Queued", running: "Working", waiting: "Asking", done: "Done", failed: "Failed", stopped: "Stopped" };
+const statusOf = (a: TeamAgent) => (a.reviewer && a.status === "running" ? "Reviewing" : a.reviewer && a.status === "done" ? (/\bAPPROVED\b/.test(a.report) ? "Approved" : "Changes needed") : STATUS[a.status]);
 
 /**
  * Team mode: the supervisor's worker agents, live — what each is doing, the files it owns, its log and
@@ -74,8 +75,8 @@ export function TeamPanel({ sid, autoApprove }: { sid: string; autoApprove: () =
             <div key={a.sid} className={`team-agent ${a.status}`}>
               <button className="team-row" onClick={() => setOpen((o) => (o === a.sid ? null : a.sid))} aria-expanded={open === a.sid}>
                 <span className={`team-dot ${a.status}`} aria-hidden />
-                <b className="team-name">{a.name}</b>
-                <span className="team-status">{STATUS[a.status]}</span>
+                <b className="team-name">{a.reviewer ? "🔍 " : ""}{a.name}</b>
+                <span className="team-status">{statusOf(a)}</span>
                 <span className="team-activity" title={a.activity}>{a.question ? `❓ ${a.question}` : a.activity}</span>
                 {a.files.length > 0 && <span className="team-files" title={a.files.join("\n")}>🔒 {a.files.length}</span>}
               </button>

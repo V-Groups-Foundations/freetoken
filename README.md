@@ -108,7 +108,7 @@ Claude model names map to FreeToken automatically (`haiku` → `auto-fast`, ever
 
 ## 📸 Screenshots
 
-| V-Run Team mode: agents in parallel, one owner per file | V-Run skills: built in, from GitHub, or learned |
+| V-Run Team mode: agents in parallel, one owner per file, a reviewer at the end | V-Run skills: built in, from GitHub, or learned |
 |---|---|
 | ![V-Run Team mode](docs/screenshots/vrun-team.png) | ![V-Run Skills panel](docs/screenshots/vrun-skills.png) |
 | **Paste a screenshot, drop a file — the right skill loads itself** | **Usage: % used, what's left, when it resets** |
@@ -143,7 +143,7 @@ Claude model names map to FreeToken automatically (`haiku` → `auto-fast`, ever
 `desktop/` is **V-Run**, a desktop AI code editor (Electron + Monaco) — a free alternative to Cursor and Claude Code that runs on your FreeToken models (or Claude, with your own key).
 
 - **Agent, Team, Plan and Ask modes** — the agent reads, searches, edits files and runs commands; Plan proposes a plan you approve first; Ask only reads.
-- **Team mode: agents working in parallel** — a supervisor splits a bigger job between up to 4 agents running at once, each owning its own files. A file coordinator keeps them apart: an agent can't edit a file another one owns, everyone who read a file is told when another agent changes it, and nobody edits a stale copy. Questions go up to the supervisor; the **Team panel** shows every agent live, and all their changes land in one review.
+- **Team mode: agents working in parallel** — a supervisor splits a bigger job between up to 4 agents running at once, each owning its own files. A file coordinator keeps them apart: an agent can't edit a file another one owns, everyone who read a file is told when another agent changes it, and nobody edits a stale copy. Questions go up to the supervisor. When the agents finish, a **reviewer agent** checks their work automatically (reads every change, runs the tests, never edits) and either approves or lists fixes for the owning agents — then reviews again. The **Team panel** shows every agent live, and all their changes land in one review.
 - **Skills, picked automatically** — 24 built-in skills (frontend UI, backend APIs, web animation, landing pages, dashboards, React, Next.js, databases, auth, testing, debugging, refactoring, accessibility, performance, SEO, Python, Docker, git, API integrations, charts, SVG, browser games, three.js, HTML video). V-Run matches each request to the right skill and the chat says *“Using skill: …”*. **Install more from any GitHub repo** (any folder with a `SKILL.md`, e.g. `anthropics/skills`), or teach it new ones in the chat.
 - **HTML videos → MP4** — the agent makes animated videos as HTML pages and exports them to real MP4 files, frame-perfect (time is stepped frame by frame, so heavy pages still come out smooth).
 - **Websites that don't all look the same** — each project gets its own design direction (editorial, Swiss grid, neo-brutalist, luxury minimal, retro, dark terminal… 12 in all), and the agent is told to avoid the generic “AI website” look.

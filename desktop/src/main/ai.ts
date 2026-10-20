@@ -166,6 +166,8 @@ export function toolNamesFor(req: Pick<ChatRequest, "mode" | "worker">): Set<str
   return new Set(TOOLS.map((t) => t.name).filter((n) =>
     TEAM_TOOLS.has(n) ? req.mode === "team" && !req.worker
       : WORKER_TOOLS.has(n) ? !!req.worker
+      // the reviewer reads and runs checks (tests, type checker) but changes nothing
+      : req.worker?.reviewer ? (READ_ONLY.has(n) && n !== "save_skill" && n !== "remember") || n === "run_terminal_command"
       : canAct(req.mode) || READ_ONLY.has(n)));
 }
 
@@ -658,7 +660,7 @@ export interface ChatRequest {
   mode: "agent" | "ask" | "plan" | "team";
   text: string;
   /** set when a Team-mode supervisor runs this as one of its worker agents */
-  worker?: { name: string; supervisor: string };
+  worker?: { name: string; supervisor: string; reviewer?: boolean };
   /** files and images pasted or dropped into the chat */
   attachments?: Attachment[];
   /** skills the user picked for this message */
@@ -676,15 +678,29 @@ const SUPERVISOR_BRIEF = `
 # Team mode — you are the supervisor
 You lead a team of worker agents that work IN PARALLEL on the same project. The user chose Team mode because they want the job done by a team: you MUST split it between at least 2 agents with spawn_agent before any code is written. Until you have started agents, you can only read and plan — edits and commands are refused.
 1. Understand first: read the key files and make a todo list (todo_write).
-2. Split the work into 2–${team.MAX_RUNNING} workstreams that touch DIFFERENT files (e.g. api / frontend / tests / docs). If parts depend on each other, settle the contract first — write the shared types/interfaces/API shape yourself, or spell it out identically in every task.
+2. Split the work into 2–${team.MAX_RUNNING} workstreams that touch DIFFERENT files (e.g. api / frontend / tests / docs). If parts depend on each other, settle the contract first — spell out the shared types/interfaces/API shape identically in every task (you may also write shared contract files yourself once the agents have started).
 3. spawn_agent for each workstream: a short role name, the files it owns, and a self-contained task (workers can't see this conversation): goal, context, the contract, constraints, how to verify, what to report.
 4. While they work: wait_for_agents. When an agent asks something, answer with message_agent and wait again. If two agents need the same file, decide who changes it (assign_file) or sequence them. agent_status shows progress.
-5. When they're done: read their reports, check the changed files, integrate (wire things together), and run the tests / the app yourself. Fix integration issues — message the owning agent, or fix it yourself once it has finished.
-6. Final answer: who did what (files), how it fits together, how you verified it, and anything left.
+5. When they're done, a REVIEWER agent checks their work automatically (it reads, runs tests, never edits) — wait_for_agents returns the agents' reports plus the review. If it lists issues, send each fix to the agent that owns the file (message_agent) and wait again; another review follows. Integrate (wire things together) and run the tests / the app yourself.
+6. Final answer: who did what (files), what the reviewer found and how it was fixed, how you verified it, and anything left.
 Rules: never edit a file an active agent owns (you'll be blocked — coordinate instead); read a file again when told another agent changed it.
 `.trim();
 
+const REVIEWER_BRIEF = `
+# You are the reviewer of a team
+Several agents just built parts of this project in parallel. Your job: check their work carefully and report — you do NOT edit files (you have no tools for it). The user message lists each agent's task, its report, and the files that changed.
+How to review:
+1. Read every changed file (and what it imports or links to). Check the work against each task.
+2. Look for: bugs and broken logic; mismatches BETWEEN agents (names, imports, API routes, data shapes, CSS classes, file paths that don't line up); missing pieces the task asked for; broken links/images/scripts in pages; syntax errors; leftovers like TODOs or placeholder text; obvious UX/accessibility problems.
+3. If the project has tests, a type checker or a build, run it (run_terminal_command) and include the result.
+Report format (this is all the supervisor sees):
+- First line: "APPROVED" if it is ready, or "CHANGES NEEDED".
+- Then each issue on its own line: [severity: high/medium/low] path:line — what is wrong — who should fix it (the owning agent's name) — the fix.
+Only report real problems you checked; no style nitpicks. Be specific and brief.
+`.trim();
+
 function workerBrief(worker: NonNullable<ChatRequest["worker"]>) {
+  if (worker.reviewer) return REVIEWER_BRIEF;
   const info = team.workerInfo(team.workerSid(worker.supervisor, worker.name));
   return `
 # You are agent "${worker.name}" in a team

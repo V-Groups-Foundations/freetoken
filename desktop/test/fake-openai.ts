@@ -43,6 +43,13 @@ export function teamScript(body: any): Block[] | null {
     ];
     return steps[Math.min(step, steps.length - 1)];
   }
+  if (sys.includes("You are the reviewer of a team")) {
+    const steps: Block[][] = [
+      [{ type: "tool", name: "read_file", args: { path: "src/api.ts" } }],
+      [{ type: "text", text: "APPROVED — src/api.ts exports an async getUser and src/web.ts imports it; they line up." }],
+    ];
+    return steps[Math.min(step, steps.length - 1)];
+  }
   if (sys.includes('You are agent "web"')) {
     const steps: Block[][] = [
       [{ type: "tool", name: "write_file", args: { path: "src/web.ts", contents: "import { getUser } from './api';\nconsole.log(getUser());\n" } }],

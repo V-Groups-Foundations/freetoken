@@ -12,6 +12,7 @@ async function check(name: string, fn: () => Promise<boolean | string>) {
   catch (e) { failures++; console.log(`FAIL  ${name}: ${(e as Error).stack}`); }
 }
 
+const seen: any[] = [];
 function startServer(): Promise<{ url: string; close: () => void }> {
   let n = 0;
   const server = http.createServer((req, res) => {
@@ -20,6 +21,7 @@ function startServer(): Promise<{ url: string; close: () => void }> {
     req.on("end", async () => {
       if (!req.url?.includes("/chat/completions")) { res.writeHead(404).end(); return; }
       const body = JSON.parse(raw);
+      seen.push(body);
       const blocks = teamScript(body) ?? [{ type: "text" as const, text: "ok" }];
       await new Promise((r) => setTimeout(r, 30)); // let the agents interleave
       const id = `c${++n}`;
@@ -128,6 +130,20 @@ function startServer(): Promise<{ url: string; close: () => void }> {
     const pending = ai.pendingChanges("sup").sort().join(",");
     return pending === "src/api.ts,src/web.ts" || pending;
   });
+  await check("a reviewer checks the work automatically once the agents finish; it can't edit, and its verdict reaches the supervisor", async () => {
+    const reqs = seen.filter((b) => String(b.messages?.[0]?.content).includes("You are the reviewer of a team"));
+    const tools = new Set(reqs.flatMap((b) => (b.tools ?? []).map((t: any) => t.function.name)));
+    const firstReview = seen.findIndex((b) => String(b.messages?.[0]?.content).includes("You are the reviewer of a team"));
+    const lastBuilder = seen.map((b) => String(b.messages?.[0]?.content)).map((sys, i) => (/You are agent "(api|web)"/.test(sys) ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
+    const task = String(reqs[0]?.messages?.find((m: any) => m.role === "user")?.content ?? "");
+    return reqs.length > 0 && firstReview > lastBuilder && tools.has("read_file") && tools.has("run_terminal_command") && !tools.has("write_file") && !tools.has("edit_file")
+      && task.includes("src/api.ts") && task.includes("src/web.ts") && final.includes("APPROVED") && final.includes("reviewer")
+      || JSON.stringify({ reqs: reqs.length, firstReview, lastBuilder, tools: [...tools], final: final.slice(-300) });
+  });
+  await check("the name 'reviewer' is reserved for the automatic reviewer", async () => {
+    try { team.spawn("sup-x", { name: "reviewer", task: "do some reviewing please" }, (p) => p); return false; } catch (e) { return /reserved/.test((e as Error).message); }
+  });
+
   await check("Agent mode has no team tools; workers only get ask_supervisor", async () => {
     const agent = ai.toolNamesFor({ mode: "agent" }), teamMode = ai.toolNamesFor({ mode: "team" }), worker = ai.toolNamesFor({ mode: "agent", worker: { name: "x", supervisor: "s" } });
     return !agent.has("spawn_agent") && !agent.has("ask_supervisor") && teamMode.has("spawn_agent") && teamMode.has("edit_file")
