@@ -21,7 +21,8 @@ type Item =
   | { kind: "error"; text: string }
   | { kind: "turn"; ms: number; tokens: number; estimated: boolean; reason: string; tools: number; mode: Mode; next: string[]; synced?: true | string }
   | { kind: "history"; name: string; messages: FtProject["messages"] }
-  | { kind: "note"; text: string };
+  | { kind: "note"; text: string }
+  | { kind: "skills"; names: string[]; auto: boolean };
 
 // display name, the input field shown in brackets, and the status-line verb
 const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
@@ -277,7 +278,7 @@ export function ChatPanel(props: {
           next.push({ kind: "note", text: `Learned skill${e.name.includes(",") ? "s" : ""}: ${e.name}` });
           break;
         case "skills_used":
-          next.push({ kind: "note", text: `Using skill${e.names.length > 1 ? "s" : ""}: ${e.names.join(", ")}${e.auto ? " — matched your request" : ""}` });
+          next.push({ kind: "skills", names: e.names, auto: e.auto });
           break;
         case "progress": {
           const i = next.findIndex((x) => x.kind === "tool" && x.id === e.id);
@@ -615,6 +616,14 @@ export function ChatPanel(props: {
               case "thinking": return <Thinking key={i} t={r} />;
               case "history": return <History key={i} name={r.name} messages={r.messages} />;
               case "note": return <div key={i} className="mem-note" role="status"><span aria-hidden>◆</span>{r.text}</div>;
+              case "skills": return (
+                <div key={i} className="skill-badge" role="status" aria-label={`Using skill: ${r.names.join(", ")}`}>
+                  <span className="skill-badge-icon" aria-hidden>✦</span>
+                  <span>Using skill{r.names.length > 1 ? "s" : ""}</span>
+                  {r.names.map((n) => <b key={n} className="skill-badge-name">{n}</b>)}
+                  <span className="skill-badge-why">{r.auto ? "matched your request" : "you picked it"}</span>
+                </div>
+              );
               case "text": return <AiText key={i} text={r.text} streaming={busy && i === rows.length - 1} />;
               case "tool": return <ToolRow key={r.id} t={r} waiting={waiting?.id === r.id} />;
               case "approval": return <Approval key={`a${r.id}`} a={r} tool={items.find((x): x is ToolItem => x.kind === "tool" && x.id === r.id)} onDecide={decide} />;

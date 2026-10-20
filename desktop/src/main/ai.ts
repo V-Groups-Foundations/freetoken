@@ -409,7 +409,7 @@ export const toolDetail = (name: string, r: ToolOutput) => r.detail ?? (SHOW_OUT
 export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "skills">, emit: (e: AgentEvent) => void) {
   const picked = (req.skills ?? []).filter((n) => !s.skills.has(n));
   // in a web project, "redesign the app" is web design work: match it as such
-  const ask = isWebTask(req.text, isWebProject(getRoot())) && !isVideoTask(req.text) ? `${req.text} (website UI design, styling, layout)` : req.text;
+  const ask = isWebTask(req.text, isWebProject(getRoot())) && !isVideoTask(req.text) ? `${req.text} (website UI)` : req.text;
   const auto = (await skills.matchSkills(ask, 2, new Set([...s.skills, ...picked])).catch(() => [])).map((x) => x.name);
   const parts = [...(await skills.pickedSkillsContext(picked)), ...(await skills.pickedSkillsContext(auto, true))];
   for (const n of [...picked, ...auto]) s.skills.add(n);

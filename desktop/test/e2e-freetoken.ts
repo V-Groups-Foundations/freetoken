@@ -276,7 +276,7 @@ async function main() {
       const box = page.getByLabel("Message the AI");
       await box.fill("Make the hero section animate on scroll");
       await box.press("Enter");
-      await page.locator(".mem-note", { hasText: "Using skill: web-animation — matched your request" }).waitFor({ timeout: 15000 });
+      await page.getByRole("status", { name: "Using skill: web-animation" }).waitFor({ timeout: 15000 });
       const user = fake.requests.slice(before).find((r: any) => r.messages)?.messages.filter((m: any) => m.role === "user").at(-1);
       if (!String(user?.content).includes('The skill "web-animation" matches this request')) throw new Error("skill not in the request");
     });

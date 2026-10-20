@@ -105,8 +105,9 @@ export async function loadSkill(name: string, file?: string) {
   return { skill: s, text: md.length > MAX_SKILL_CHARS ? `${md.slice(0, MAX_SKILL_CHARS)}\n…(truncated)` : md, files };
 }
 
-const STOP = new Set("the and for with that this from into your you are use using when what which will can should make made build create add new any all some about how need want like just also have has get one two more most very only than then them they its it's our out".split(" "));
+const STOP = new Set("it is be do so to of in on at as by an or no go up we me my us am if the and for with that this from into your you are use using when what which will can should make made build create add new any all some about how need want like just also have has get one two more most very only than then them they its it's our out".split(" "));
 // "animate"/"animation"/"animated" → "animat"; "tests"/"testing" → "test"
+const SHORT = new Set(["ui", "ux", "3d", "ai", "js", "db", "pr", "ci", "qa", "go"]);
 const stem = (w: string) => w.replace(/(?:ations?|ings?|ions?|ed|es|ly|e|s)$/, "").slice(0, 6) || w.slice(0, 6);
 const rawWords = (t: string) => (t.toLowerCase().match(/[a-z0-9][a-z0-9+#.]*/g) ?? []).map((w) => w.replace(/\.+$/, "")).filter((w) => w.length > 1 && !STOP.has(w));
 /** Everyday words that mean a skill's vocabulary: "login" → auth, "slow" → performance, "bug" → debugging. */
@@ -119,13 +120,15 @@ const ALIASES: Record<string, string[]> = {
   game: ["game"], snake: ["game"], tetris: ["game"], logo: ["svg", "logo"], icon: ["svg", "icons"],
   deploy: ["deploy", "deployment"], docker: ["docker"], db: ["database"], sql: ["database"], schema: ["database"],
   animate: ["animation"], motion: ["animation"], scroll: ["scroll", "animation"],
-  redesign: ["redesign", "design", "ui"], restyle: ["redesign", "style"], look: ["design", "ui"], ugly: ["design", "polish"], modern: ["design"], nicer: ["polish", "design"],
+  redesign: ["redesign", "restyle"], restyle: ["redesign", "restyle"], look: ["design", "ui"], ugly: ["design", "polish"], modern: ["design"], nicer: ["polish", "design"],
   commit: ["git"], branch: ["git"], pr: ["git"], endpoint: ["api"], rest: ["api"],
 };
 const words = (t: string, expand = false) => {
   const out = new Set<string>();
   for (const w of rawWords(t)) {
-    if (!STOP.has(stem(w))) out.add(stem(w)); // "adding" becomes "add": still an everyday word
+    const st = stem(w);
+    // "adding" becomes "add": still an everyday word; and 1–2 letter leftovers carry no meaning (but ui, ux, 3d, ai do)
+    if (!STOP.has(st) && (st.length > 2 || SHORT.has(st))) out.add(st);
     if (expand) for (const a of ALIASES[w] ?? []) for (const x of rawWords(a)) out.add(stem(x));
   }
   return out;
@@ -136,7 +139,7 @@ const words = (t: string, expand = false) => {
  * and description (its "when to use" line). Rare words count more than words many skills share (like
  * "page" or "app"); a name word counts double; a weak overlap loads nothing.
  */
-export async function matchSkills(request: string, max = 2, skip: Set<string> = new Set()) {
+export async function matchSkills(request: string, max = 2, skip: Set<string> = new Set(), debug?: (scores: { name: string; score: number; hits: string[] }[]) => void) {
   const req = words(request, true);
   if (!req.size) return [] as Skill[];
   const all = (await listSkills()).map((s) => ({ s, name: words(s.name.replace(/-/g, " ")), desc: words(s.description) }));
@@ -145,12 +148,15 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
   const weight = (w: string) => Math.log(1 + all.length / (df.get(w) ?? 1));
   const scored = all.filter((x) => !skip.has(x.s.name)).map((x) => {
     let score = 0;
-    for (const w of req) score += x.name.has(w) ? 2 * weight(w) : x.desc.has(w) ? weight(w) : 0;
-    return { s: x.s, score };
-  }).filter((x) => x.score >= MATCH_THRESHOLD);
-  scored.sort((a, b) => b.score - a.score);
+    const hits: string[] = [];
+    for (const w of req) { const add = x.name.has(w) ? 2 * weight(w) : x.desc.has(w) ? weight(w) : 0; if (add) { score += add; hits.push(w); } }
+    return { s: x.s, score, hits };
+  });
+  debug?.([...scored].sort((a, b) => b.score - a.score).slice(0, 5).map((x) => ({ name: x.s.name, score: Math.round(x.score * 10) / 10, hits: x.hits })));
+  const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD);
+  strong.sort((a, b) => b.score - a.score);
   // a second skill only when it's nearly as good a match as the first
-  return scored.filter((x, i) => i === 0 || x.score >= scored[0].score * 0.85).slice(0, max).map((x) => x.s);
+  return strong.filter((x, i) => i === 0 || x.score >= strong[0].score * 0.9).slice(0, max).map((x) => x.s);
 }
 export const MATCH_THRESHOLD = 4.5;
 

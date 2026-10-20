@@ -70,12 +70,11 @@ const tmp = (p: string) => fs.mkdtempSync(path.join(os.tmpdir(), p));
     const drop = await page.evaluateHandle(() => { const dt = new DataTransfer(); dt.items.add(new File(["name,price\nTea,3.50\nCoffee,4.00\n"], "prices.csv", { type: "text/csv" })); return dt; });
     await chat.dispatchEvent("dragover", { dataTransfer: drop });
     await page.getByText("Drop to attach").waitFor({ timeout: 3000 });
-    await shot("vrun-drop.png");
     await chat.dispatchEvent("drop", { dataTransfer: drop });
     await page.locator(".chip.attach", { hasText: "prices.csv" }).waitFor();
     await box.fill("Build a landing page like this screenshot, with these prices");
     await box.press("Enter");
-    await page.locator(".mem-note", { hasText: "Using skill" }).waitFor({ timeout: 15000 });
+    await page.locator(".skill-badge").waitFor({ timeout: 15000 });
     await page.locator(".msg-ai").last().waitFor();
     await shot("vrun-attachments.png");
   } finally {

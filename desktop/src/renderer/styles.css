@@ -580,3 +580,11 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .skill-group + .skill-group { margin-top: 8px; }
 .skill-group-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; opacity: .7; padding: 2px 2px 0; }
 .skill-group-title span { margin-left: 4px; padding: 0 6px; border-radius: 99px; background: color-mix(in srgb, var(--accent, #38d6ff) 18%, transparent); color: var(--accent, #38d6ff); }
+
+/* "Using skill" badge under the user's message */
+.skill-badge { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 6px; padding: 7px 12px; border-radius: 10px; font-size: 12.5px;
+  border: 1px solid color-mix(in srgb, #a78bfa 55%, transparent); background: linear-gradient(90deg, color-mix(in srgb, #22d3ee 14%, transparent), color-mix(in srgb, #a78bfa 16%, transparent));
+  box-shadow: 0 0 18px color-mix(in srgb, #a78bfa 22%, transparent); animation: hub-rise .3s ease-out both; }
+.skill-badge-icon { color: #a78bfa; font-size: 14px; }
+.skill-badge-name { padding: 1px 8px; border-radius: 99px; background: color-mix(in srgb, #a78bfa 28%, transparent); color: #e9e3ff; font-weight: 600; }
+.skill-badge-why { opacity: .65; font-size: 11.5px; margin-left: auto; }

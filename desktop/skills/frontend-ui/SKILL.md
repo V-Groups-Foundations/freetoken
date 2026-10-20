@@ -1,6 +1,6 @@
 ---
 name: frontend-ui
-description: "Build polished UI components and pages: layout, spacing and type scales, color tokens, interaction states, forms, responsive breakpoints, dark mode, icons and accessibility basics, in plain HTML + Tailwind CDN or React. Use when the user asks to build, style, redesign or polish a page, component, form, card, navbar, modal or any interface."
+description: "Build and redesign websites and web app interfaces that look professionally designed: visual direction, color palette and theme, layout, spacing and type scales, components and interaction states, forms, responsive breakpoints, dark mode, icons, imagery and accessibility basics, in plain HTML + Tailwind CDN or React. Use when the user asks to build, style, redesign, restyle, modernize or polish a site, app, page, component, form, card, navbar or modal, change its colors or layout, or make it look better, nicer, modern, futuristic or less generic."
 ---
 
 # Frontend UI
