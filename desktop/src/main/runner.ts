@@ -38,6 +38,33 @@ export interface PreviewHost {
   /** Load url in the preview pane; resolves to an error message if it couldn't load. */
   open(url: string): Promise<string | void>;
   inspect(): Promise<PreviewPage | null>;
+  /** Run JavaScript in the page; the result (or the error) as text. */
+  evaluate?(script: string): Promise<string>;
+}
+
+/**
+ * Page-side wrapper for the agent's probe script: evaluates it (await allowed), and turns the value into
+ * readable text — three.js objects and DOM nodes are cyclic and huge, so it's depth- and size-limited.
+ */
+export function probeScript(script: string) {
+  return `(async () => {
+    const show = (v, depth = 0, seen = new WeakSet()) => {
+      if (v === null || typeof v !== "object") return typeof v === "function" ? "[function " + (v.name || "anonymous") + "]" : v;
+      if (seen.has(v)) return "[circular]";
+      seen.add(v);
+      if (v instanceof Element) { const r = v.getBoundingClientRect(); return "<" + v.tagName.toLowerCase() + (v.id ? "#" + v.id : "") + "> " + Math.round(r.width) + "x" + Math.round(r.height) + " at " + Math.round(r.x) + "," + Math.round(r.y); }
+      if (depth > 3) return Array.isArray(v) ? "[array(" + v.length + ")]" : "[" + (v.constructor && v.constructor.name || "object") + "]";
+      if (Array.isArray(v) || ArrayBuffer.isView(v)) return Array.from(v).slice(0, 30).map((x) => show(x, depth + 1, seen));
+      const out = {};
+      for (const k of Object.keys(v).slice(0, 40)) { try { out[k] = show(v[k], depth + 1, seen); } catch (e) { out[k] = "[unreadable]"; } }
+      return out;
+    };
+    try {
+      const value = await (0, eval)(${JSON.stringify(script)});
+      const text = JSON.stringify(show(value), null, 1);
+      return text === undefined ? String(value) : text.length > 6000 ? text.slice(0, 6000) + "…(cut)" : text;
+    } catch (e) { return "Error: " + (e && e.message || e); }
+  })()`;
 }
 
 const MAX_OUT = 400_000;

@@ -1,3 +1,6 @@
+import { learnedAdjustment } from '@/router/quality';
+import { createTestDb, createUser } from '../helpers/db';
+import { learnedScores, recordFeedback, recordUsage } from '@/usage/ledger';
 import { describe, it, expect } from 'vitest';
 import { detectTask, quality } from '@/router/quality';
 import { selectCandidates, type CatalogModel } from '@/router/select';
@@ -57,5 +60,33 @@ describe('auto routing: best model for the task first, weaker ones once those ar
   });
   it('an explicitly chosen model keeps its place', () => {
     expect(selectCandidates({ ...base({ task: 'agent' }), requested: 'cohere/command-a-03-2025' })[0].modelId).toBe('command-a-03-2025');
+  });
+});
+
+describe('auto routing learns from real results', () => {
+  it('scores: little history changes little; unreliable or badly-reviewed models drop, good ones rise a bit', () => {
+    expect(learnedAdjustment({ ok: 2, errors: 2, good: 0, bad: 0 })).toBe(0); // too few runs to judge
+    expect(learnedAdjustment({ ok: 15, errors: 15, good: 0, bad: 0 })).toBe(-16);
+    expect(learnedAdjustment({ ok: 30, errors: 0, good: 6, bad: 0 })).toBe(10);
+    expect(learnedAdjustment({ ok: 30, errors: 0, good: 0, bad: 6 })).toBeLessThan(-5);
+    expect(learnedAdjustment({ ok: 0, errors: 100, good: 0, bad: 100 })).toBe(-20); // capped
+  });
+  it('a model clients keep reporting as bad loses its first place for that task only', () => {
+    const learned = new Map([['groq/qwen/qwen3.8-27b', -12]]);
+    expect(order({ task: 'agent', learned })[0]).not.toBe('groq/qwen/qwen3.8-27b');
+    expect(order({ task: 'agent' })[0]).toBe('groq/qwen/qwen3.8-27b');
+  });
+  it('reads per-task history and feedback from the database', async () => {
+    const db = await createTestDb();
+    const { id } = await createUser(db);
+    const ev = { userId: id, provider: 'groq', modelId: 'q', source: 'api' as const, promptTokens: 1, completionTokens: 1, latencyMs: 1 };
+    for (let i = 0; i < 10; i++) await recordUsage(db, { ...ev, task: 'agent', status: i < 5 ? 'ok' : 'error' });
+    for (let i = 0; i < 10; i++) await recordUsage(db, { ...ev, task: 'chat', status: 'ok' });
+    for (let i = 0; i < 4; i++) await recordUsage(db, { ...ev, task: 'agent', status: 'rate_limited' }); // quota, not quality
+    await recordFeedback(db, { userId: id, provider: 'groq', modelId: 'q', task: 'agent', good: false, reason: 'invalid tool call' });
+    const since = new Date(Date.now() - 86_400_000);
+    const agent = (await learnedScores(db, id, 'agent', since)).get('groq/q')!;
+    expect(agent).toBeLessThan(-5);
+    expect((await learnedScores(db, id, 'chat', since)).get('groq/q')).toBeGreaterThan(0);
   });
 });

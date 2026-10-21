@@ -243,6 +243,7 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .composer textarea { width: 100%; min-height: 22px; max-height: 240px; resize: none; background: none; border: none; padding: 2px 0; color: var(--fg); font: inherit; line-height: 1.5; outline: none; }
 .composer textarea::placeholder { color: #ffffff4a; }
 .composer-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.check-it { color: var(--accent, #7aa2f7); white-space: nowrap; }
 .mode-switch { display: flex; background: #00000040; border-radius: 7px; padding: 2px; }
 .mode-switch button { border: none; background: none; padding: 2px 10px; border-radius: 5px; cursor: pointer; color: var(--fg2); font-size: 11.5px; }
 .mode-switch button.on { background: var(--bg4); color: var(--fg); box-shadow: 0 1px 2px #0006; }

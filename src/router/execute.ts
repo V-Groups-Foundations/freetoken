@@ -4,7 +4,7 @@ import { loadCredentials, markInvalid, touchKey } from '@/keys/service';
 import { callChat } from '@/providers/client';
 import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
-import { estimateTokens, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
+import { estimateTokens, learnedScores, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
 import { detectTask } from './quality';
 
 /** 400s caused by the model or its size limits rather than the request (Groq: "Failed to call a function"). */
@@ -72,6 +72,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   const nowMs = now();
   const exhausted = new Set((await deps.db.select().from(providerLimits).where(and(eq(providerLimits.userId, userId), eq(providerLimits.remainingRequests, 0))))
     .filter((l) => !l.requestsResetAt || l.requestsResetAt.getTime() > nowMs).map((l) => `${l.provider}/${l.modelId}`));
+  const task = detectTask(body);
   const selectInput = {
     requested,
     models: catalog,
@@ -82,7 +83,8 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     needsTools: Array.isArray(body.tools) && body.tools.length > 0,
     needsVision,
     canSee: supportsVision,
-    task: detectTask(body),
+    task,
+    learned: isAuto(requested) ? await learnedScores(deps.db, userId, task, new Date(nowMs - 14 * 86_400_000)) : undefined,
     exhausted,
     recentFailures: await recentFailures(deps.db, userId, new Date(nowMs - 10 * 60_000)),
     keyless,
@@ -111,7 +113,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     if (!def || !c) continue;
 
     const started = now();
-    const usageBase = { userId, provider: m.provider, modelId: m.modelId, source };
+    const usageBase = { userId, provider: m.provider, modelId: m.modelId, source, task };
     const plain = { ...body, model: m.modelId };
     const askUsage = stream && !clientWantsUsage;
     let r = await callChat(def, c.creds, askUsage ? { ...plain, stream_options: { ...(body.stream_options as object), include_usage: true } } : plain, { fetchImpl: deps.fetchImpl });

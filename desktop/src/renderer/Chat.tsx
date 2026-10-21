@@ -9,6 +9,9 @@ import { Markdown, OpenFileContext } from "./Markdown";
 import { SkillsPanel } from "./Skills";
 import { TeamPanel } from "./Team";
 
+/** What the Check button (and /check) asks the agent. */
+const CHECK_TEXT = "Check it: run the app, look at the page (console errors, the text and the screenshot), fix anything broken, missing or misplaced, check again, then tell me what works.";
+
 type ToolItem = { kind: "tool"; id: string; name: string; input: any; status: "running" | "ok" | "error"; summary?: string; detail?: ToolDetail };
 type Mode = "agent" | "team" | "plan" | "ask";
 type Item =
@@ -60,7 +63,7 @@ const EXPLORE = new Set(["read_file", "list_dir", "grep_search", "file_search", 
 const FILE_ARG = new Set(["read_file", "edit_file", "write_file"]);
 const THINKING = ["Thinking", "Reasoning", "Working", "Planning", "Considering"];
 const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
-const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/team", "Switch to Team mode (several agents in parallel)"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
+const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/check", "Have the agent run the app, look at it and fix what is broken"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/team", "Switch to Team mode (several agents in parallel)"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
 const SUGGEST = ["Explain how this project is structured", "Run the app and check it works", "Find and fix a bug in the open file", "Write tests for the open file"];
 const MODES: { id: Mode; label: string; hint: string; placeholder: string }[] = [
   { id: "agent", label: "Agent", hint: "Reads, edits and runs things — asks before running commands", placeholder: "Ask the agent to build, fix or run something…" },
@@ -174,6 +177,8 @@ export function ChatPanel(props: {
   const refreshMem = () => api.memoryStatus().then(setMem).catch(() => {});
   useEffect(() => { refreshMem(); }, []);
   const [busy, setBusy] = useState(false);
+  // the agent has built something in this chat: offer a one-click check of it
+  const built = items.some((x) => x.kind === "tool" && (x.name === "write_file" || x.name === "edit_file") && x.status === "ok");
   const [mentions, setMentions] = useState<string[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionHits, setMentionHits] = useState<string[]>([]);
@@ -348,6 +353,7 @@ export function ChatPanel(props: {
       return;
     }
     if (/^\/(new|clear)$/.test(text)) { setInput(""); return newChat(); }
+    if (text === "/check") return send(CHECK_TEXT, "agent", run);
     if (/^\/(ask|agent|plan|team)$/.test(text)) { setMode(text.slice(1) as Mode); setInput(""); return; }
     if (text === "/memory") { setInput(""); setMemOpen(true); refreshMem(); return; }
     if (text === "/skills") { setInput(""); setMemOpen(false); setSkillsOpen(true); return; }
@@ -781,6 +787,7 @@ export function ChatPanel(props: {
               ))}
             </div>
             <span className="spacer" />
+            {!busy && built && <button className="btn small check-it" onClick={() => send(CHECK_TEXT, "agent")} title="Run the app, look at the page (console, text and a screenshot), fix what's broken, then report what works">✓ Check it</button>}
             {ctxTokens > 0 && <span className="ctx-meter" title={`The model read ${ctxTokens.toLocaleString()} tokens of context on its last step. Start a new chat (/new) when switching to an unrelated task.`}>{fmtTokens(ctxTokens)} context</span>}
             {busy ? <button className={`send stop${stopping ? " stopping" : ""}`} onClick={() => { setStopping(true); api.stop(sid); }} aria-label="Stop the agent" title={stopping ? "Stopping…" : "Stop (Esc) — or just type your next message"}><span /></button>
               : <button className="send" onClick={() => send()} disabled={!input.trim()} aria-label="Send" title="Send (Enter)">↑</button>}

@@ -1,6 +1,7 @@
 import { and, eq, gte, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { usageEvents } from '@/db/schema';
+import { modelFeedback, usageEvents } from '@/db/schema';
+import { learnedAdjustment } from '@/router/quality';
 import { usageKey } from '@/router/select';
 
 export interface UsageEvent {
@@ -14,6 +15,7 @@ export interface UsageEvent {
   latencyMs: number;
   /** token counts are a guess because the provider didn't report them */
   estimated?: boolean;
+  task?: string;
 }
 
 export async function recordUsage(db: DB, e: UsageEvent) {
@@ -37,6 +39,39 @@ export async function recentFailures(db: DB, userId: string, start: Date) {
     .where(and(eq(usageEvents.userId, userId), sql`${usageEvents.status} <> 'ok'`, gte(usageEvents.createdAt, start)))
     .groupBy(usageEvents.provider, usageEvents.modelId);
   return new Map(rows.map((r) => [usageKey(r.provider, r.modelId), r.n]));
+}
+
+/**
+ * What auto routing has learned about each model for one kind of task since `start`: how often its
+ * requests succeed (rate limits don't count — that's quota, not quality) and what clients reported
+ * about its answers. A score adjustment per provider/model; models with little history get ~0.
+ */
+export async function learnedScores(db: DB, userId: string, task: string, start: Date) {
+  const [runs, votes] = await Promise.all([
+    db.select({
+      provider: usageEvents.provider, modelId: usageEvents.modelId,
+      ok: sql<number>`count(*) filter (where ${usageEvents.status} = 'ok')::int`,
+      errors: sql<number>`count(*) filter (where ${usageEvents.status} = 'error')::int`,
+    }).from(usageEvents)
+      .where(and(eq(usageEvents.userId, userId), eq(usageEvents.task, task), gte(usageEvents.createdAt, start)))
+      .groupBy(usageEvents.provider, usageEvents.modelId),
+    db.select({
+      provider: modelFeedback.provider, modelId: modelFeedback.modelId,
+      good: sql<number>`count(*) filter (where ${modelFeedback.good})::int`,
+      bad: sql<number>`count(*) filter (where not ${modelFeedback.good})::int`,
+    }).from(modelFeedback)
+      .where(and(eq(modelFeedback.userId, userId), eq(modelFeedback.task, task), gte(modelFeedback.createdAt, start)))
+      .groupBy(modelFeedback.provider, modelFeedback.modelId),
+  ]);
+  const stats = new Map<string, { ok: number; errors: number; good: number; bad: number }>();
+  const at = (p: string, m: string) => { const k = usageKey(p, m); let v = stats.get(k); if (!v) stats.set(k, (v = { ok: 0, errors: 0, good: 0, bad: 0 })); return v; };
+  for (const r of runs) Object.assign(at(r.provider, r.modelId), { ok: r.ok, errors: r.errors });
+  for (const r of votes) Object.assign(at(r.provider, r.modelId), { good: r.good, bad: r.bad });
+  return new Map([...stats].map(([k, v]) => [k, learnedAdjustment(v)]));
+}
+
+export async function recordFeedback(db: DB, f: { userId: string; provider: string; modelId: string; task: string; good: boolean; reason?: string }) {
+  await db.insert(modelFeedback).values({ ...f, reason: f.reason?.slice(0, 200) ?? null });
 }
 
 /** Successful requests and tokens per provider/model since `start`. */

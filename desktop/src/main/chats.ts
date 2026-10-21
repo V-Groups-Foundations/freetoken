@@ -47,4 +47,8 @@ function withoutImages(messages: unknown[] = []) {
 
 export const saveAgent = (sid: string, mem: AgentMemory) =>
   dir && write(path.join(dir, `agent-${safe(sid)}.json`), { claude: withoutImages(mem.claude), ft: withoutImages(mem.ft), skills: mem.skills ?? [] });
+/** A Team-mode chat's team (agents, reports, file ownership), so it comes back after a restart. */
+export const saveTeam = (sid: string, team: unknown) => dir && write(path.join(dir, `team-${safe(sid)}.json`), team);
+export const loadTeam = <T>(sid: string) => (dir ? read<T>(path.join(dir, `team-${safe(sid)}.json`)) : null);
+
 export const loadAgent = (sid: string) => (dir ? read<AgentMemory>(path.join(dir, `agent-${safe(sid)}.json`)) : null);

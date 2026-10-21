@@ -6,7 +6,8 @@
 //     who changed it and how, with their next tool result;
 //   - no stale edits: an agent can't edit a file that changed (by another agent) since it last read it.
 // Workers can't start agents (one level of hierarchy); questions go up with ask_supervisor and wake the
-// supervisor's wait_for_agents. Everything here is in memory, per supervisor chat.
+// supervisor's wait_for_agents. Everything here is in memory, per supervisor chat; main.ts saves it
+// (exportTeam / importTeam) so a team survives a restart.
 import type { AgentEvent, ChatRequest, Session } from "./ai";
 
 export const MAX_RUNNING = 4;
@@ -374,3 +375,47 @@ export function ask(workerSid: string, question: string, signal?: AbortSignal) {
 
 /** For tests: forget every team. */
 export function resetTeams() { teams.clear(); memberOf.clear(); }
+
+// ---------------------------------------------------------------- surviving a restart
+
+/** What's kept of a team when V-Run closes: who the agents are, what they did, who owns which file. */
+export interface SavedTeam {
+  agents: { name: string; task: string; files: string[]; status: Status; report: string; runs: number; reviewer?: boolean }[];
+  claims: [string, string][]; // path → agent name ("supervisor" for the supervisor)
+  changedSinceReview: string[];
+  reviews: number;
+}
+
+export function exportTeam(supervisor: string): SavedTeam | null {
+  const t = teams.get(supervisor);
+  if (!t?.workers.size) return null;
+  const names = new Map([...t.workers.values()].map((w) => [w.sid, w.name]));
+  return {
+    agents: [...t.workers.values()].map((w) => ({ name: w.name, task: w.task, files: w.files, status: w.status, report: w.report, runs: w.runs, ...(w.reviewer ? { reviewer: true } : {}) })),
+    claims: [...t.claims].map(([p, sid]) => [p, sid === supervisor ? "supervisor" : names.get(sid) ?? ""] as [string, string]).filter(([, n]) => n),
+    changedSinceReview: [...t.changedSinceReview],
+    reviews: t.reviews,
+  };
+}
+
+/** Bring a saved team back (after a restart): agents that were mid-task show as stopped, ready for message_agent. */
+export function importTeam(supervisor: string, saved: SavedTeam) {
+  if (teams.get(supervisor)?.workers.size || !saved?.agents?.length) return false;
+  const t = teamOf(supervisor);
+  for (const a of saved.agents) {
+    const sid = workerSid(supervisor, a.name);
+    const interrupted = a.status === "running" || a.status === "waiting" || a.status === "queued";
+    t.workers.set(key(a.name), {
+      sid, name: a.name, task: a.task, files: a.files ?? [], runs: a.runs ?? 1, text: "", started: Date.now(), ended: Date.now(),
+      status: interrupted ? "stopped" : a.status, report: interrupted ? `${a.report ? `${a.report}\n\n` : ""}(Stopped when V-Run closed — message_agent it to carry on.)` : a.report,
+      activity: interrupted ? "Stopped when V-Run closed" : a.status === "done" ? "Finished" : a.status === "failed" ? "Failed" : "Stopped",
+      ...(a.reviewer ? { reviewer: true } : {}),
+    });
+    memberOf.set(sid, { team: t, name: a.name });
+  }
+  for (const [p, name] of saved.claims ?? []) t.claims.set(p, name === "supervisor" ? supervisor : workerSid(supervisor, name));
+  for (const p of saved.changedSinceReview ?? []) t.changedSinceReview.add(p);
+  t.reviews = saved.reviews ?? 0;
+  publish(t);
+  return true;
+}

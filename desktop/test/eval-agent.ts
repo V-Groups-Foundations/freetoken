@@ -36,13 +36,14 @@ import path from "node:path";
       const jpeg = await page.screenshot({ type: "jpeg", quality: 60 }).catch(() => undefined);
       return { url: page.url(), title: await page.title(), text, console: consoleLines.slice(-40), jpeg } as any;
     },
+    evaluate: (script) => page.evaluate(runner.probeScript(script)).then(String, (e) => `Error: ${(e as Error).message}`),
   });
   const t0 = Date.now();
   let text = "";
   const log = (s: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(0).padStart(4)}s] ${s}`);
   await new Promise<void>((resolve) => ft.chatFreeToken({ sessionId: "eval", mode, text: request }, (e: any) => {
     if (e.type === "text") text += e.delta;
-    else if (e.type === "tool_start") { if (text.trim()) log(`say: ${text.trim().slice(0, 220).replace(/\s+/g, " ")}`); text = ""; log(`tool ${e.name} ${JSON.stringify(e.input).slice(0, 160)}`); }
+    else if (e.type === "tool_start") { if (text.trim()) log(`say: ${text.trim().slice(0, 220).replace(/\s+/g, " ")}`); text = ""; log(`tool ${e.name} ${String(JSON.stringify(e.input) ?? "(arguments were not valid JSON)").slice(0, 160)}`); }
     else if (e.type === "tool_end") log(`  → ${e.ok ? "" : "FAILED "}${e.summary.slice(0, 200)}`);
     else if (e.type === "approval") setTimeout(() => ai.approve("eval", e.id, true), 5);
     else if (e.type === "skills_used") log(`skills: ${e.names.join(", ")}`);

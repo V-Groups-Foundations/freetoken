@@ -5,7 +5,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-  READ_ONLY, TOOLS, beginTurn, buildNudge, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
+  READ_ONLY, TOOLS, MAX_STEPS, beginTurn, buildNudge, startTurnState, stepsLeftNote, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
   type AgentEvent, type ChatRequest, type ToolName,
 } from "./ai";
 import { prepareAttachments, type Prepared } from "./attachments";
@@ -78,13 +78,20 @@ export function truncateFreeToken(id: string, n: number) { const m = transcripts
  * How long to wait before retrying, or null to give up: rate limits (429) up to 6 times, honouring
  * Retry-After; a provider's passing server error (5xx) twice, briefly.
  */
+/** The answer stream broke off mid-way ("Upstream idle timeout exceeded", a reset connection). */
+export function brokeOff(e: unknown) {
+  const status = (e as { status?: number } | null)?.status;
+  return (!status || status === 408) && /idle timeout|timed? ?out|ECONNRESET|socket hang up|terminated|premature close|fetch failed|network error|stream (closed|ended|interrupted)|aborted by the server/i.test(String((e as Error)?.message ?? ""));
+}
+// what usually breaks a stream is one enormous reply (a whole app in a single write_file): ask for parts
+const CUT_OFF = "\n\nIMPORTANT: your last reply was cut off by the provider while you were writing it — it was too long for one step. Write big files in parts: first write_file a skeleton (structure plus the first section, under ~250 lines), then add each further section with edit_file in its own step.";
+
 export function rateLimitWait(e: unknown, waits: number): number | null {
   const err = e as { status?: number; headers?: Headers | Record<string, string> } | null;
   if (err?.status && err.status >= 500 && err.status < 600) return waits < 2 ? 2000 * (waits + 1) : null;
   // a stream that broke off mid-answer ("Upstream idle timeout exceeded", a reset connection): free
   // providers drop long generations now and then — ask again rather than ending the whole task
-  if ((!err?.status || err.status === 408) && /idle timeout|timed? ?out|ECONNRESET|socket hang up|terminated|premature close|fetch failed|network error|stream (closed|ended|interrupted)|aborted by the server/i.test(String((e as Error)?.message ?? "")))
-    return waits < 2 ? 1500 * (waits + 1) : null;
+  if (brokeOff(e)) return waits < 3 ? 1500 * (waits + 1) : null;
   if (err?.status !== 429 || waits >= 6) return null;
   const h = err.headers;
   const raw = h instanceof Headers ? h.get("retry-after") : h?.["retry-after"];
@@ -122,18 +129,46 @@ export function thinkSplitter() {
 
 const clip = (s: string, n: number) => (s.length > n ? `…(${s.length - n} chars omitted)…\n${s.slice(-n)}` : s);
 
+/** Tell FreeToken how a model's answer worked out (fire and forget): auto routing learns from it. */
+export function reportModel(model: string | null, good: boolean, reason: string) {
+  const token = cfg.token();
+  if (!model || !token) return;
+  fetch(`${cfg.url().replace(/\/+$/, "")}/feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ model, task: "agent", good, reason }),
+  }).catch(() => { /* an older FreeToken without /feedback: nothing to learn from */ });
+}
+
+/** Have a vision model look at a screenshot of the page and list what's visibly wrong. */
+export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSignal): Promise<string> {
+  try {
+    const r = await client().chat.completions.create({
+      model: "auto-smart",
+      max_tokens: 600,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: `This is a screenshot of a page an AI agent just built for this request:\n"${request.slice(0, 800)}"\n\nAs a strict QA reviewer, list the concrete problems you can SEE: parts the request asks for that are missing, overlapping or misplaced elements, labels detached from what they label, unreadable text or low contrast, empty or broken areas (a stuck "Loading…", a blank canvas), content cut off. Say where each one is. If it looks right, reply "Looks right:" and one line on what's shown. At most 8 short bullets.` },
+          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${jpeg.toString("base64")}` } },
+        ],
+      }],
+    }, { signal, timeout: 90_000, maxRetries: 0 });
+    const said = r.choices[0]?.message?.content?.trim();
+    return said ? `\n\nWhat the page looks like (a vision model reviewed the screenshot):\n${said}` : "";
+  } catch {
+    return ""; // no vision model connected, or it's busy: the text and console above still count
+  }
+}
+
 export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => void) {
   const s = getSession(req.sessionId); // shared: checkpoints, approvals, abort
   s.abort = new AbortController();
-  s.mode = req.worker ? "agent" : req.mode;
-  s.worker = !!req.worker;
-  s.codeNudges = 0;
-  s.unchecked = false;
-  s.checkNudged = false;
   s.seen.clear();
   s.idlePolls = 0;
   let msgs = transcripts.get(req.sessionId);
   if (!msgs) transcripts.set(req.sessionId, (msgs = []));
+  startTurnState(s, req, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-3).map((m) => String(m.content).slice(-2000)).join("\n"));
   const allowed = toolNamesFor(req);
   const tools = OA_TOOLS.filter((t) => t.type === "function" && allowed.has(t.function.name));
 
@@ -159,21 +194,27 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
 
   try {
     const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"), req.worker);
-    for (let turn = 0; turn < 60; turn++) {
+    let stepModel: string | null = null;
+    const turnModels = new Set<string>();
+    for (let turn = 0; turn < MAX_STEPS; turn++) {
       let text = "";
       let calls: { id: string; name: string; args: string }[] = [];
       let finish: string | null = null;
-      let waits = 0;
+      let waits = 0, cutOff = false;
       for (let attempt = 0; ; attempt++) {
         text = ""; calls = []; finish = null;
         const nudge = attempt ? `\n\nIMPORTANT: call only these tools, by their exact names: ${tools.map((t) => t.type === "function" ? t.function.name : "").join(", ")}. No other tools exist (there is no repo_browser).` : "";
+        const ask = system + nudge + (cutOff ? CUT_OFF : "");
         try {
-          const stream = await client().chat.completions.create({
+          const { data: stream, response } = await client().chat.completions.create({
             model: cfg.model() || "auto-smart",
-            messages: [{ role: "system", content: system + nudge }, ...compact(msgs, userIndex)],
+            messages: [{ role: "system", content: ask }, ...compact(msgs, userIndex)],
             tools,
             stream: true,
-          }, { signal: s.abort.signal, maxRetries: 0 }); // retries happen below, visibly (rateLimitWait)
+          }, { signal: s.abort.signal, maxRetries: 0 }).withResponse(); // retries happen below, visibly (rateLimitWait)
+          // which model FreeToken picked: what it gets right or wrong is reported back so routing learns
+          stepModel = response.headers.get("x-freetoken-provider");
+          if (stepModel) turnModels.add(stepModel);
           let usage: { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
           const split = thinkSplitter();
           for await (const chunk of stream) {
@@ -201,6 +242,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         } catch (e) {
           // free tiers rate-limit often and briefly: wait it out instead of failing the whole task
           const wait = rateLimitWait(e, waits);
+          if (brokeOff(e)) cutOff = true;
           if (wait !== null && !s.abort.signal.aborted) {
             waits++;
             attempt--; // a wait isn't a bad-tool retry
@@ -223,7 +265,12 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
       });
       if (!uses.length) {
         const nudge = buildNudge(s, text, req.text);
-        if (nudge) { msgs.push({ role: "user", content: nudge }); emit({ type: "text", delta: "\n\n*Writing it into the project instead…*\n\n" }); continue; }
+        if (nudge) {
+          if (nudge.kind === "false-claim" || nudge.kind === "code-dump") reportModel(stepModel, false, nudge.kind);
+          msgs.push({ role: "user", content: nudge.prompt }); emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue;
+        }
+        // a task that changed the project and ended cleanly counts for every model that worked on it
+        if (s.turns[s.turns.length - 1]?.files.size && !s.unchecked) for (const m of turnModels) reportModel(m, true, "finished a task");
         return emit({ type: "done", stopReason: finish ?? "stop" });
       }
       if (finish === "length") throw new Error("A tool call was cut off by the output limit. Try a smaller step.");
@@ -238,13 +285,20 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         if (!schema || !allowed.has(u.name)) {
           content = `Unknown or unavailable tool: ${u.name}`;
           emit({ type: "tool_end", id: u.id, ok: false, summary: content });
+          reportModel(stepModel, false, "unknown tool");
         } else if (!parsed?.success) {
           content = `Invalid arguments for ${u.name}: ${parsed ? parsed.error.issues.map((i) => i.message).join("; ") : "not valid JSON"}. Retry with valid JSON matching the schema.`;
           emit({ type: "tool_end", id: u.id, ok: false, summary: "Invalid tool call" });
+          reportModel(stepModel, false, "invalid tool call");
         } else {
           try {
             const r = await execTool(s, u.name as ToolName, parsed.data, emit, u.id);
             content = r.content;
+            // the agent model may not see images: a vision model looks at the page and describes problems
+            if (u.name === "inspect_preview" && r.image) {
+              const look = await lookAtPage(r.image, req.text, s.abort.signal);
+              if (look) { content += look; r.summary += " · screenshot reviewed"; }
+            }
             emit({ type: "tool_end", id: u.id, ok: true, summary: r.summary, detail: toolDetail(u.name, r) });
           } catch (e) {
             content = `Error: ${(e as Error).message}`;
@@ -253,9 +307,11 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         }
         msgs.push({ role: "tool", tool_call_id: u.id, content });
       }
+      const budget = stepsLeftNote(turn);
+      if (budget) msgs.push({ role: "user", content: budget });
       if (s.abort.signal.aborted) return emit({ type: "done", stopReason: "aborted" });
     }
-    emit({ type: "error", message: "Stopped after 60 steps." });
+    emit({ type: "error", message: `Stopped after ${MAX_STEPS} steps.` });
     emit({ type: "done", stopReason: "max_turns" });
   } catch (e) {
     // keep the transcript valid: answer any dangling tool calls; drop an unanswered user turn

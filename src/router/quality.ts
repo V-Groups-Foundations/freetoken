@@ -58,3 +58,16 @@ export function detectTask(body: { messages?: unknown; tools?: unknown }): Task 
   if (/\b(write|story|poem|essay|blog|email|caption|slogan|rewrite|tone|marketing|lyrics|script for)\b/.test(text)) return 'creative';
   return 'chat';
 }
+
+/**
+ * Learning from real results: a model that often fails this kind of request, or whose answers clients
+ * report as bad (broken tool calls, claims of work it didn't do), drops below the estimate; one that
+ * keeps delivering rises a little. Little history → little change, so one bad day can't bury a model.
+ */
+export function learnedAdjustment(s: { ok: number; errors: number; good: number; bad: number }) {
+  const runs = s.ok + s.errors;
+  const reliability = runs >= 5 ? (s.ok / runs - 0.9) * 40 * Math.min(1, runs / 30) : 0; // 50% ok → −16
+  const votes = s.good + s.bad;
+  const verdict = votes ? ((s.good - s.bad) / votes) * 10 * Math.min(1, votes / 6) : 0;
+  return Math.round(Math.max(-20, Math.min(10, reliability + verdict)) * 10) / 10;
+}

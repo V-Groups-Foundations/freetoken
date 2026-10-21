@@ -166,5 +166,20 @@ export const usageEvents = pgTable('usage_events', {
   latencyMs: integer('latency_ms').notNull().default(0),
   /** token counts were guessed (the provider didn't report them) */
   estimated: boolean('estimated').notNull().default(false),
+  /** what kind of request it was (agent, code, reasoning…): auto routing learns per kind */
+  task: text('task'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('usage_user_provider_time').on(t.userId, t.provider, t.createdAt)]);
+
+/** How a model's answer actually worked out, reported by the client (V-Run: a broken tool call, a
+ * false claim, a task finished and verified). Auto routing learns from it. */
+export const modelFeedback = pgTable('model_feedback', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  modelId: text('model_id').notNull(),
+  task: text('task').notNull(),
+  good: boolean('good').notNull(),
+  reason: text('reason'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('feedback_user_task_time').on(t.userId, t.task, t.createdAt)]);

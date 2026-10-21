@@ -223,12 +223,29 @@ function encodeCall<T>(op: string, payload?: unknown): Promise<T> {
   });
 }
 // Team mode: workers run the same agent loop as the chat, under their own session ids
+const saveMemory = (sid: string) => {
+  try { chats.saveAgent(sid, { claude: ai.getSession(sid).messages, ft: ft.getTranscript(sid), skills: [...ai.getSession(sid).skills] }); }
+  catch (e) { console.error("saving the chat failed", e); }
+};
+// the team is saved as it changes (at most once a second per chat), its agents' memories when they finish
+const teamSaves = new Map<string, NodeJS.Timeout>();
+const saveTeamSoon = (supervisor: string) => {
+  if (teamSaves.has(supervisor)) return;
+  teamSaves.set(supervisor, setTimeout(() => {
+    teamSaves.delete(supervisor);
+    const saved = team.exportTeam(supervisor);
+    if (saved) try { chats.saveTeam(supervisor, saved); } catch (e) { console.error("saving the team failed", e); }
+  }, 1000));
+};
 team.configureTeam({
-  run: (req, emit) => (useFreeToken() ? ft.chatFreeToken(req, emit) : ai.chat(req, emit)),
+  run: (req, emit) => {
+    const done = (e: ai.AgentEvent) => { emit(e); if (e.type === "done") saveMemory(req.sessionId); };
+    return useFreeToken() ? ft.chatFreeToken(req, done) : ai.chat(req, done);
+  },
   stop: (sid) => ai.stop(sid),
   getSession: (sid) => ai.getSession(sid),
   forward: (sid, event) => send("agent-event", { sessionId: sid, event }),
-  onTeam: (_supervisor, snapshot) => send("team-event", snapshot),
+  onTeam: (supervisor, snapshot) => { send("team-event", snapshot); saveTeamSoon(supervisor); },
 });
 
 video.setEncoderHost({
@@ -258,6 +275,11 @@ runner.setPreviewHost({
       if (img && !img.isEmpty()) jpeg = (img.getSize().width > 1280 ? img.resize({ width: 1280 }) : img).toJPEG(70);
     }
     return { url: wc.getURL(), title: info.title, text: info.text, console: previewConsole.slice(-40), jpeg };
+  },
+  async evaluate(script) {
+    const wc = preview?.webContents;
+    if (!wc?.getURL()) return "Nothing is open in the preview.";
+    return wc.executeJavaScript(runner.probeScript(script)).then(String, (e: Error) => `Error: ${e.message}`);
   },
 });
 runner.onRunEvent((e) => send("app-event", e));
@@ -396,10 +418,7 @@ function registerIpc() {
     const turnEmit = emit;
     emit = (event) => {
       turnEmit(event);
-      if (event.type === "done") {
-        try { chats.saveAgent(req.sessionId, { claude: ai.getSession(req.sessionId).messages, ft: ft.getTranscript(req.sessionId), skills: [...ai.getSession(req.sessionId).skills] }); }
-        catch (e) { console.error("saving the chat failed", e); }
-      }
+      if (event.type === "done") saveMemory(req.sessionId);
     };
     if (useFreeToken()) ft.chatFreeToken(req, emit); else ai.chat(req, emit);
     return true;
@@ -521,6 +540,14 @@ function registerIpc() {
     if (!ui?.sid) return null;
     const mem = chats.loadAgent(ui.sid);
     if (mem) { ai.restoreSession(ui.sid, mem.claude, mem.skills); ft.restoreTranscript(ui.sid, mem.ft ?? []); }
+    // a Team-mode chat gets its team back: the agents, their reports and memories, who owns which file
+    const saved = chats.loadTeam<team.SavedTeam>(ui.sid);
+    if (saved && team.importTeam(ui.sid, saved)) {
+      for (const a of saved.agents) {
+        const wsid = team.workerSid(ui.sid, a.name), wmem = chats.loadAgent(wsid);
+        if (wmem) { ai.restoreSession(wsid, wmem.claude, wmem.skills); ft.restoreTranscript(wsid, wmem.ft ?? []); }
+      }
+    }
     return ui;
   });
   handle("chat:save", (chat: chats.UiChat) => { const root = getRoot(); if (root && chat?.sid) chats.saveUi(root, chat); });

@@ -150,6 +150,21 @@ function startServer(): Promise<{ url: string; close: () => void }> {
       && worker.has("ask_supervisor") && !worker.has("spawn_agent") && !ai.toolNamesFor({ mode: "ask" }).has("edit_file");
   });
 
+  await check("a team survives a restart: agents, reports and file ownership come back; mid-task agents show as stopped", async () => {
+    team.resetTeams();
+    team.configureTeam({ run: () => new Promise(() => {}), stop: () => {}, getSession: ai.getSession, forward: () => {}, onTeam: () => {} });
+    team.spawn("sup-r", { name: "web", task: "build the page", files: ["index.html"] }, (p) => p);
+    const saved = JSON.parse(JSON.stringify(team.exportTeam("sup-r")));
+    team.resetTeams(); // V-Run closed
+    const before = team.hasAgents("sup-r");
+    const ok = team.importTeam("sup-r", saved);
+    const again = team.importTeam("sup-r", saved); // never over a live team
+    const snap = team.snapshot("sup-r").agents[0];
+    const blocked = team.guardWrite(team.workerSid("sup-r", "other"), "index.html", true);
+    return (!before && ok && !again && team.hasAgents("sup-r") && snap.name === "web" && snap.status === "stopped" && snap.files.includes("index.html")
+      && /message_agent/.test(snap.report) && blocked === null) || JSON.stringify({ before, ok, again, snap, blocked }); // a stopped owner doesn't block others
+  });
+
   fake.close();
   console.log(failures ? `\n${failures} failed` : "\nall team checks passed");
   process.exit(failures ? 1 : 0);

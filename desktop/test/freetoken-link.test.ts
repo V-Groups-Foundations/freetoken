@@ -1,6 +1,7 @@
 // V-Run ⇄ FreeToken: deep links, continuing a project (folder, transcript, seeded agent), writing turns
 // back, plus the runner/agent fixes for quiet servers. Uses the fake FreeToken server; no Electron.
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { startFakeOpenAI } from "./fake-openai";
@@ -272,8 +273,61 @@ async function main() {
     // a false claim of work is caught too
     s.mode = "agent"; s.codeNudges = 0; s.turns[0].files.clear();
     const lie = ai.buildNudge(s, "I've created a 3D model of the building.\n\n**Files Created:**\n- index.html", "can u build it");
-    return !!first?.includes("write the files now") && second === null && question === null && built === null && ask === null
-      && !!lie?.includes("Never claim work that didn't happen");
+    return !!first?.prompt.includes("write the files now") && second === null && question === null && built === null && ask === null
+      && !!lie?.prompt.includes("Never claim work that didn't happen");
+  });
+
+  await check("solo agents review their own changes once; big jobs plan first and verify each step", async () => {
+    const s = ai.getSession("review");
+    ai.startTurnState(s, { sessionId: "review", mode: "agent", text: "build a 3D building tracker app with floors and share links" });
+    s.turns = [{ provider: "ft", hist: 0, files: new Map([["index.html", null], ["app.js", null]]) }];
+    const review = ai.buildNudge(s, "Done! It works.", "build it");
+    const second = ai.buildNudge(s, "Done! It works.", "build it");
+    // a small one-file tweak isn't reviewed
+    ai.startTurnState(s, { sessionId: "review", mode: "agent", text: "make the title blue" });
+    s.turns = [{ provider: "ft", hist: 0, files: new Map([["index.html", null]]) }];
+    const small = ai.buildNudge(s, "Done.", "make the title blue");
+    // workers don't (the team's reviewer does)
+    ai.startTurnState(s, { sessionId: "review", mode: "agent", text: "build the api", worker: { name: "api", supervisor: "x" } });
+    s.turns = [{ provider: "ft", hist: 0, files: new Map([["a.ts", null], ["b.ts", null]]) }];
+    const worker = ai.buildNudge(s, "Done.", "build the api");
+    const big = ai.isBigJob("build a location tracker app for my building") && !ai.isBigJob("make the title blue") && !ai.isBigJob("why does this crash?");
+    return (review?.kind === "review" && review.prompt.includes("index.html, app.js") && second === null && small === null && worker === null && big)
+      || JSON.stringify({ review: review?.kind, second, small, worker, big });
+  });
+
+  await check("\"build it\" after describing an app is a big job; near the step limit the agent is told to wrap up", async () => {
+    const s = ai.getSession("followup");
+    ai.startTurnState(s, { sessionId: "followup", mode: "agent", text: "now can u build it" }, "i want a location tracker app with a 3D model of my building");
+    const follow = s.bigJob;
+    ai.startTurnState(s, { sessionId: "followup", mode: "agent", text: "what does this error mean?" }, "i want a location tracker app with a 3D model of my building");
+    return (follow === true && s.bigJob === false && ai.stepsLeftNote(ai.MAX_STEPS - 9)?.includes("honest summary") && ai.stepsLeftNote(10) === null) || JSON.stringify({ follow, now: s.bigJob });
+  });
+
+  await check("the page probe returns readable values, even for cyclic objects, and reports errors", async () => {
+    const g = globalThis as any;
+    g.Element ??= class {};
+    const cyclic: any = { name: "scene", children: [{ type: "Mesh", position: { x: 0, y: 3, z: 0 } }] };
+    cyclic.children[0].parent = cyclic;
+    g.__probe = cyclic;
+    const ok = JSON.parse(await (0, eval)(runner.probeScript("__probe")));
+    const err = await (0, eval)(runner.probeScript("notDefinedAnywhere.x"));
+    const num = await (0, eval)(runner.probeScript("await Promise.resolve(6 * 7)"));
+    return (ok.children[0].position.y === 3 && ok.children[0].parent === "[circular]" && /^Error: .*notDefinedAnywhere/.test(err) && num === "42") || JSON.stringify({ ok, err, num });
+  });
+
+  await check("FreeToken hears how each model did (bad tool calls, verified finished work)", async () => {
+    const seen: any[] = [];
+    const srv = http.createServer((req, res) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { seen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(b) }); res.end("{}"); }); });
+    await new Promise<void>((r) => srv.listen(0, r));
+    ftAi.configureFreeToken({ url: () => `http://127.0.0.1:${(srv.address() as any).port}/api/v1`, token: () => "ft_test" });
+    ftAi.reportModel("groq/qwen/qwen3.8-27b", false, "invalid tool call");
+    ftAi.reportModel(null, true, "nothing to report");
+    for (let i = 0; i < 50 && !seen.length; i++) await new Promise((r) => setTimeout(r, 20));
+    srv.close();
+    ftAi.configureFreeToken({ url: () => fake.url });
+    const f = seen[0];
+    return (seen.length === 1 && f.url === "/api/v1/feedback" && f.auth === "Bearer ft_test" && f.body.model === "groq/qwen/qwen3.8-27b" && f.body.good === false && f.body.task === "agent") || JSON.stringify(seen);
   });
 
   await check("chats are saved and restored: the transcript, and the agent's memory (images dropped)", async () => {
@@ -340,7 +394,7 @@ async function main() {
       && w({ status: 429 }, 6) === null && w({ status: 502 }, 0) === 2000 && w({ status: 502 }, 2) === null && w({ status: 400 }, 0) === null && w(new Error("x"), 0) === null
       // a stream dropped mid-answer is asked again (twice), not the end of the task
       && w(new Error("FreeToken error : Upstream idle timeout exceeded"), 0) === 1500 && w(new Error("socket hang up"), 1) === 3000
-      && w(new Error("Upstream idle timeout exceeded"), 2) === null;
+      && w(new Error("Upstream idle timeout exceeded"), 2) === 4500 && w(new Error("Upstream idle timeout exceeded"), 3) === null && ftAi.brokeOff(new Error("socket hang up")) && !ftAi.brokeOff({ status: 400, message: "timed out" });
   });
 
   await check("a server listening on all interfaces ([::] / 0.0.0.0) opens as localhost", async () => {

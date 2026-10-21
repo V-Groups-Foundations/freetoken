@@ -29,6 +29,8 @@ export interface SelectInput {
   recentFailures?: Map<string, number>;
   /** providers used without the user's own key: shared, so the user's keys win a close call */
   keyless?: Set<string>;
+  /** what auto routing learned from real results for this task (score adjustment per model) */
+  learned?: Map<string, number>;
 }
 
 const AUTO_TIERS = { 'auto-smart': 'smart', 'auto-fast': 'fast' } as const;
@@ -91,7 +93,10 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
   // back for a few minutes; ties go to the catalog's priority (the user's own order)
   const task = input.task;
   const shared = (m: CatalogModel) => (m.provider === 'starter' ? 40 : input.keyless?.has(m.provider) ? 4 : 0); // the built-in starter is a last resort
-  const rank = (m: CatalogModel) => quality(m.provider, m.modelId, task) - shared(m) - 6 * Math.min(4, input.recentFailures?.get(usageKey(m.provider, m.modelId)) ?? 0);
+  const rank = (m: CatalogModel) => {
+    const k = usageKey(m.provider, m.modelId);
+    return quality(m.provider, m.modelId, task) + (input.learned?.get(k) ?? 0) - shared(m) - 6 * Math.min(4, input.recentFailures?.get(k) ?? 0);
+  };
   const byQuality = (a: CatalogModel, b: CatalogModel) => rank(b) - rank(a) || a.priority - b.priority;
   const main = pool(tier).sort(byQuality);
   // when every strong model is spent or failing, the other tier still answers (smart ⇄ fast)
