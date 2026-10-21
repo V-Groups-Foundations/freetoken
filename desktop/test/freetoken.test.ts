@@ -166,8 +166,10 @@ async function main() {
     const emit = (e: AI.AgentEvent) => { if (e.type === "approval") setTimeout(() => ai.approve("run", e.id, true), 5); };
     const started = await ai.execTool(s, "run_app", { command: "node server.js" }, emit, "a1");
     const url = /http:\/\/localhost:\d+/.exec(started.content)?.[0];
+    s.pageStale = true; // a file changed since the page loaded
     const page = await ai.execTool(s, "inspect_preview", {}, emit, "a2");
-    // every inspect reloads the page first (never judges an edit by the old page), at the address asked for
+    // a stale page is reloaded before it's judged; an up-to-date one keeps its state (clicks made by a script)
+    await ai.execTool(s, "inspect_preview", {}, emit, "a2a");
     const reloaded = opened.length === 2 && opened[1] === opened[0];
     await ai.execTool(s, "inspect_preview", { url: `${url}/about` }, emit, "a2b");
     const followed = opened.at(-1) === `${url}/about`;

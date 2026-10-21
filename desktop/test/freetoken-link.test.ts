@@ -291,8 +291,12 @@ async function main() {
     ai.startTurnState(s, { sessionId: "review", mode: "agent", text: "build the api", worker: { name: "api", supervisor: "x" } });
     s.turns = [{ provider: "ft", hist: 0, files: new Map([["a.ts", null], ["b.ts", null]]) }];
     const worker = ai.buildNudge(s, "Done.", "build the api");
+    // an empty last reply is asked once for the summary
+    ai.startTurnState(s, { sessionId: "review", mode: "agent", text: "fix it" });
+    s.turns = [{ provider: "ft", hist: 0, files: new Map() }];
+    const silent = ai.buildNudge(s, "  ", "fix it")?.kind === "summary" && ai.buildNudge(s, "  ", "fix it") === null;
     const big = ai.isBigJob("build a location tracker app for my building") && !ai.isBigJob("make the title blue") && !ai.isBigJob("why does this crash?");
-    return (review?.kind === "review" && review.prompt.includes("index.html, app.js") && second === null && small === null && worker === null && big)
+    return (review?.kind === "review" && review.prompt.includes("index.html, app.js") && second === null && small === null && worker === null && big && silent)
       || JSON.stringify({ review: review?.kind, second, small, worker, big });
   });
 

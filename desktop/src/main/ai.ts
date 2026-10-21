@@ -229,6 +229,9 @@ export interface Session {
   planned?: boolean;
   planNudged?: boolean;
   doneSteps?: number;
+  /** files changed since the preview last loaded: the next inspect reloads it */
+  pageStale?: boolean;
+  summaryNudged?: boolean;
   /** replies dropped this turn for hitting the output limit */
   lengthRetries?: number;
 }
@@ -457,10 +460,15 @@ export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "
  * Free models often answer "build it" by pasting code for the user to copy. When a turn that could act
  * ends with code in the reply and no file changed, send it back once to actually make the change.
  */
-export type Nudge = { kind: "review" | "check" | "false-claim" | "code-dump"; prompt: string; label: string };
+export type Nudge = { kind: "summary" | "review" | "check" | "false-claim" | "code-dump"; prompt: string; label: string };
 const WRITING = "*Writing it into the project instead…*";
 
 export function buildNudge(s: Session, text: string, request: string): Nudge | null {
+  // never end a task in silence: an empty last reply is asked once for the summary
+  if (!text.trim() && !s.summaryNudged && !s.worker) {
+    s.summaryNudged = true;
+    return { kind: "summary", label: "", prompt: "You ended without saying anything to the user. Reply now with a short summary: what you built or changed (paths), how you checked it and what you saw, and anything that still doesn't work or that they need to do." };
+  }
   if (!canAct(s.mode ?? "agent") || (s.codeNudges ?? 0) >= 3) return null;
   const changed = [...(s.turns[s.turns.length - 1]?.files.keys() ?? [])];
   // solo agents read their own work back against the request once (a team has its reviewer)
@@ -517,6 +525,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.bigJob = canAct(s.mode) && !req.worker && s.mode !== "team" && (isBigJob(req.text) || followUp);
   s.planned = false;
   s.lengthRetries = 0;
+  s.summaryNudged = false;
   s.planNudged = false;
 }
 
@@ -563,6 +572,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
     if (why) return withNotices(s, { content: why, summary: why.startsWith("🔒") ? `Blocked — ${rel} belongs to another agent` : `Re-read needed — ${rel} changed` });
   }
   const r = await runTool(s, name, input, emit, id);
+  if (rel && WRITES.has(name)) s.pageStale = true;
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
   if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) s.unchecked = false;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
@@ -700,8 +710,13 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       // always look at the current files: (re)load the page first — the address asked for, else the one
       // open now — so an edit made a moment ago is never judged by the old page (and its old console)
       const host = runner.previewHost();
-      const target = typeof input?.url === "string" && /^https?:\/\//.test(input.url) ? input.url : (await host?.inspect())?.url;
+      const current = (await host?.inspect())?.url;
+      const asked = typeof input?.url === "string" && /^https?:\/\//.test(input.url) ? input.url : undefined;
+      // reload only when the page is out of date (files changed, or another address): a page you just
+      // clicked through with a script keeps its state between inspects
+      const target = asked && asked.replace(/\/$/, "") !== current?.replace(/\/$/, "") ? asked : s.pageStale ? current : undefined;
       if (host && target && /^https?:/.test(target)) {
+        s.pageStale = false;
         // one try, time-limited: a page that doesn't load is the finding (the server may have stopped)
         const err = await Promise.race([host.open(target), new Promise<string>((r) => setTimeout(() => r("it took longer than 15 seconds"), 15_000))]);
         if (err) return { content: `Couldn't load ${target}: ${err}\n\n${runner.describe()}\n\nStart the app with run_app if it isn't running, then inspect again.`, summary: `Page didn't load: ${target}` };
@@ -973,7 +988,7 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
       if (!uses.length) {
         const said = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
         const nudge = buildNudge(s, said, req.text);
-        if (nudge) { s.messages.push({ role: "user", content: nudge.prompt }); emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue; }
+        if (nudge) { s.messages.push({ role: "user", content: nudge.prompt }); if (nudge.label) emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue; }
         return emit({ type: "done", stopReason: message.stop_reason ?? "end_turn" });
       }
       if (message.stop_reason === "max_tokens") throw new Error("A tool call was cut off by the output limit. Try a smaller step.");

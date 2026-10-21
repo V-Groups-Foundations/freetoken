@@ -276,7 +276,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         const nudge = buildNudge(s, text, req.text);
         if (nudge) {
           if (nudge.kind === "false-claim" || nudge.kind === "code-dump") reportModel(stepModel, false, nudge.kind);
-          msgs.push({ role: "user", content: nudge.prompt }); emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue;
+          msgs.push({ role: "user", content: nudge.prompt }); if (nudge.label) emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue;
         }
         // a task that changed the project and ended cleanly counts for every model that worked on it
         if (s.turns[s.turns.length - 1]?.files.size && !s.unchecked) for (const m of turnModels) reportModel(m, true, "finished a task");
