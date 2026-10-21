@@ -79,10 +79,52 @@ function append(text: string) {
   }
 }
 
-export function startApp(cmd: string) {
+/** Stop the app and wait (up to `ms`) until it has really exited — so the next one gets its port. */
+export function stopAppAndWait(ms = 5000) {
+  const p = proc;
+  if (!p?.pid) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    p.once("close", () => { clearTimeout(timer); setTimeout(resolve, 300); }); // the OS frees the port a moment later
+    stopApp();
+  });
+}
+
+/** "EADDRINUSE … :3000" / "port 5173 is already in use" → 3000 / 5173. */
+export function portInUse(output: string) {
+  const m = output.match(/EADDRINUSE[^\n]*?:(\d{2,5})|address already in use[^\n]*?:(\d{2,5})|port (\d{2,5}) is (?:already )?in use|(\d{2,5}) is already in use/i);
+  return m ? Number(m[1] ?? m[2] ?? m[3] ?? m[4]) : null;
+}
+
+/** Which program holds a TCP port (Windows: netstat + tasklist; elsewhere: lsof). */
+export function portOwner(port: number): Promise<{ pid: number; name: string } | null> {
+  return new Promise((resolve) => {
+    const win = process.platform === "win32";
+    const p = spawn(win ? "netstat" : "lsof", win ? ["-ano", "-p", "tcp"] : ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { windowsHide: true });
+    let out = "";
+    p.stdout?.on("data", (d) => (out += d));
+    p.on("error", () => resolve(null));
+    p.on("close", () => {
+      if (!win) {
+        const pid = Number(out.match(/^p(\d+)/m)?.[1]);
+        return resolve(pid ? { pid, name: out.match(/^c(.+)$/m)?.[1] ?? "?" } : null);
+      }
+      const line = out.split(/\r?\n/).find((l) => new RegExp(`:${port}\\s+\\S+\\s+LISTENING`, "i").test(l));
+      const pid = Number(line?.trim().split(/\s+/).pop());
+      if (!pid) return resolve(null);
+      const t = spawn("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { windowsHide: true });
+      let name = "";
+      t.stdout?.on("data", (d) => (name += d));
+      t.on("close", () => resolve({ pid, name: name.split(",")[0]?.replace(/"/g, "").trim() || "?" }));
+      t.on("error", () => resolve({ pid, name: "?" }));
+    });
+  });
+}
+
+export async function startApp(cmd: string) {
   const root = getRoot();
   if (!root) throw new Error("Open a folder first");
-  stopApp();
+  await stopAppAndWait();
   command = cmd; out = ""; readPos = 0; url = undefined; exitCode = undefined;
   const win = process.platform === "win32";
   const p = spawn(win ? windowsShell() : "/bin/bash", win ? ["-NoProfile", "-NonInteractive", "-Command", cmd] : ["-lc", cmd], {

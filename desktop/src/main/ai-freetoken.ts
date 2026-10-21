@@ -65,6 +65,9 @@ export const resetFreeTokenSession = (id: string) => transcripts.delete(id);
 export function seedFreeToken(id: string, turns: { role: "user" | "assistant"; content: string }[]) {
   transcripts.set(id, turns.map((t) => ({ role: t.role, content: t.content })));
 }
+/** The conversation so far (to save it), and putting a saved one back (after a reload or restart). */
+export const getTranscript = (id: string) => transcripts.get(id) ?? [];
+export function restoreTranscript(id: string, msgs: unknown[]) { if (!transcripts.get(id)?.length && msgs.length) transcripts.set(id, msgs as ChatCompletionMessageParam[]); }
 export function truncateFreeToken(id: string, n: number) { const m = transcripts.get(id); if (m) m.length = Math.min(m.length, n); }
 
 /**

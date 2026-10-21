@@ -281,6 +281,31 @@ async function main() {
       if (!String(user?.content).includes('The skill "web-animation" matches this request')) throw new Error("skill not in the request");
     });
 
+    await step("Ctrl+Shift+R doesn't reload; after a real reload the chat and the agent's memory are still there", async () => {
+      await page.getByRole("button", { name: "New chat" }).click();
+      await page.getByRole("radio", { name: "Ask" }).click();
+      const box = page.getByLabel("Message the AI");
+      await box.fill("Remember the code word pineapple");
+      await box.press("Enter");
+      await page.locator(".msg-ai", { hasText: "FreeToken says: Remember the code word pineapple" }).waitFor({ timeout: 15000 });
+      await page.evaluate(() => { (window as any).__notReloaded = true; });
+      await page.keyboard.press("Control+Shift+R");
+      await page.keyboard.press("F5");
+      await page.waitForTimeout(1500);
+      if (!(await page.evaluate(() => (window as any).__notReloaded))) throw new Error("the window reloaded on Ctrl+Shift+R / F5");
+      await page.waitForTimeout(800); // let the chat save
+      await page.reload();
+      await page.getByRole("button", { name: "src", exact: true }).waitFor({ timeout: 20000 });
+      await page.locator(".msg-user", { hasText: "Remember the code word pineapple" }).waitFor({ timeout: 10000 });
+      await page.locator(".msg-ai", { hasText: "FreeToken says: Remember the code word pineapple" }).waitFor({ timeout: 5000 });
+      const before = fake.requests.length;
+      await page.getByLabel("Message the AI").fill("What was the code word?");
+      await page.getByLabel("Message the AI").press("Enter");
+      await page.locator(".msg-ai", { hasText: "FreeToken says: What was the code word?" }).waitFor({ timeout: 15000 });
+      const sent = JSON.stringify(fake.requests.slice(before).find((r: any) => r.messages)?.messages ?? []);
+      if (!sent.includes("Remember the code word pineapple")) throw new Error("the agent lost the conversation after the reload");
+    });
+
     await step("Settings → Open FreeToken shows the hub: projects, usage, providers and models from the account", async () => {
       fake.projects.set("p-hub", { name: "Hub project", model: "auto-smart", messages: [{ role: "user", content: "made on the web" }] });
       await page.keyboard.press("Control+,");

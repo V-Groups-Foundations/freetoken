@@ -109,6 +109,28 @@ export function ChatPanel(props: {
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("agent");
+  // this project's last chat comes back after a window reload or an app restart
+  const restored = useRef(false);
+  useEffect(() => {
+    let live = true;
+    api.chatRestore().then((c) => {
+      if (!live || !c?.sid || !Array.isArray(c.items) || !c.items.length) return;
+      setSid(c.sid);
+      // tool steps that were running when the window went away: the agent may still finish them
+      setItems((c.items as Item[]).map((x) => (x.kind === "tool" && x.status === "running" ? { ...x, status: "error", summary: "Interrupted (window reloaded)" } : x)));
+      if (c.mode && MODES.some((m) => m.id === c.mode)) setMode(c.mode as Mode);
+    }).catch(() => {}).finally(() => { if (live) restored.current = true; });
+    return () => { live = false; };
+  }, []);
+  useEffect(() => {
+    if (!restored.current) return; // never overwrite the saved chat before it has been restored
+    const t = setTimeout(() => {
+      // pasted-image previews are page-local blob URLs: they can't come back after a reload
+      const keep = items.slice(-400).map((x) => (x.kind === "user" && x.images ? { ...x, images: undefined } : x));
+      api.chatSave({ sid, mode, items: keep }).catch(() => {});
+    }, 600);
+    return () => clearTimeout(t);
+  }, [items, sid, mode]);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const [ctxTokens, setCtxTokens] = useState(0);

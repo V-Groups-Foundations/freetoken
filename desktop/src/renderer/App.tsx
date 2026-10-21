@@ -232,7 +232,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
         {termOpen && <BottomPanel tab={panelTab} onTab={setPanelTab} covered={quickOpen || settingsOpen} onClose={() => { setTermOpen(false); setPanelExpanded(false); }}
           expanded={panelExpanded} onToggleExpand={() => setPanelExpanded((v) => !v)} height={panelHeight} onResize={setPanelHeight} askAI={askAI} />}
       </main>
-      <ChatPanel activeFile={active} openFiles={tabs.map((t) => t.path)} pendingSelection={selection} clearSelection={() => setSelection(null)}
+      <ChatPanel key={root} activeFile={active} openFiles={tabs.map((t) => t.path)} pendingSelection={selection} clearSelection={() => setSelection(null)}
         onFilesChanged={reloadFromDisk} onReview={showReview} onOpenFile={openFile} inject={aiPrompt} pendingVersion={pendingVersion} focusSignal={chatFocus} />
       <footer className="status">
         <button className="linklike" onClick={pickFolder} title={`${root} — click to open another folder (Ctrl+O)`}>{root.split(/[\\/]/).pop()}</button>

@@ -237,6 +237,38 @@ async function main() {
       && vid.includes('use_skill with name "html-video"') && !vid.includes("Building websites and UIs");
   });
 
+  await check("chats are saved and restored: the transcript, and the agent's memory (images dropped)", async () => {
+    const chats = await import("../src/main/chats");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-chats-"));
+    chats.setChatsDir(dir);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-proj-"));
+    chats.saveUi(root, { sid: "chat-1", mode: "agent", items: [{ kind: "user", text: "the cloudflare link" }] });
+    chats.saveAgent("chat-1", { claude: [{ role: "user", content: [{ type: "image", source: {} }, { type: "text", text: "see this" }] }], ft: [{ role: "user", content: "the cloudflare link" }], skills: ["frontend-ui"] });
+    const ui = chats.loadUi(root.toUpperCase()); // same project, path case doesn't matter on Windows
+    const mem = chats.loadAgent("chat-1");
+    const restored = ai.restoreSession("restored-1", mem?.claude, mem?.skills);
+    const again = ai.restoreSession("restored-1", [{ role: "user", content: "other" }], []); // never overwrites a live session
+    chats.setChatsDir(null);
+    const s = ai.getSession("restored-1");
+    return (ui?.items as any[])[0].text === "the cloudflare link" && restored && !again && s.skills.has("frontend-ui")
+      && JSON.stringify(s.messages).includes("an image was attached here") && !JSON.stringify(s.messages).includes('"image"')
+      && (mem?.ft as any[])[0].content === "the cloudflare link";
+  });
+
+  await check("restarting the app waits for the old one, so the new one gets its port; a busy port is reported", async () => {
+    ws.setRoot(tmp);
+    const port = 41000 + Math.floor(Math.random() * 2000);
+    const serve = `node -e "require('http').createServer((q, s) => s.end('v' + process.argv[1])).listen(${port}, () => console.log('listening on http://localhost:${port}'))"`;
+    await runner.startApp(`${serve} 1`);
+    await runner.settle(8000);
+    await runner.startApp(`${serve} 2`); // a restart: same port
+    await runner.settle(8000);
+    const body = await fetch(`http://localhost:${port}`).then((r) => r.text()).catch((e) => String(e));
+    await runner.stopAppAndWait();
+    return body === "v2" && runner.portInUse("Error: listen EADDRINUSE: address already in use :::3000") === 3000
+      && runner.portInUse("Port 5173 is already in use") === 5173 && runner.portInUse("all good") === null || body;
+  });
+
   await check("in a web project, 'redesign the app / fix the images' gets the design brief (and not elsewhere)", async () => {
     const site = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-site-"));
     fs.mkdirSync(path.join(site, "public"));
@@ -273,14 +305,14 @@ async function main() {
     ws.setRoot(tmp);
     const urls: string[] = [];
     runner.onRunEvent((e) => e.type === "url" && urls.push(e.url));
-    runner.startApp(`node -e "console.log('connecting to db at localhost:5432'); console.log('Server started on 0.0.0.0:8501'); setTimeout(() => {}, 4000)"`);
+    await runner.startApp(`node -e "console.log('connecting to db at localhost:5432'); console.log('Server started on 0.0.0.0:8501'); setTimeout(() => {}, 4000)"`);
     await runner.settle(6000);
     runner.stopApp();
     return urls[0] === "http://localhost:8501";
   });
 
   await check("app_output: quiet app gets advice, then polling is refused after 3 empty polls", async () => {
-    runner.startApp(`node -e "console.log('hi'); setTimeout(() => {}, 30000)"`);
+    await runner.startApp(`node -e "console.log('hi'); setTimeout(() => {}, 30000)"`);
     for (let i = 0; i < 100 && !runner.appStatus().output.includes("hi"); i++) await new Promise((r) => setTimeout(r, 100));
     const s = ai.getSession("poll");
     const out = await ai.execTool(s, "app_output", {}, () => {}, "a1"); // has "hi"

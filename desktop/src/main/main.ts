@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, WebContentsView } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, WebContentsView } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,6 +10,7 @@ import * as memory from "./memory";
 import * as runner from "./runner";
 import * as skills from "./skills";
 import * as team from "./team";
+import * as chats from "./chats";
 import * as video from "./video";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText } from "./workspace";
@@ -119,6 +120,7 @@ async function openFolder(dir: string) {
     changedBuf.add(rel);
     clearTimeout(changeTimer);
     changeTimer = setTimeout(() => { send("fs-changed", [...changedBuf]); changedBuf = new Set(); }, 150);
+    if (!rel.startsWith(".v-run/")) schedulePreviewReload();
     clearTimeout(indexTimer);
     indexTimer = setTimeout(() => runIndex(), 2500);
   });
@@ -161,6 +163,17 @@ function termRun(id: string, command: string) {
 // reports the box's bounds, or null while it's hidden or a dialog covers it). It gets its own
 // session partition, so the user's app can't touch the editor's storage.
 let preview: WebContentsView | null = null;
+// a page served from this computer reloads (without cache) when the project's files change, so the
+// preview never shows an outdated version; dev servers with their own hot reload are unaffected
+let previewReloadTimer: ReturnType<typeof setTimeout> | undefined;
+function schedulePreviewReload() {
+  clearTimeout(previewReloadTimer);
+  previewReloadTimer = setTimeout(() => {
+    const wc = preview?.webContents;
+    const url = wc && !wc.isDestroyed() ? wc.getURL() : "";
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:|\/|$)|^file:/i.test(url) && !wc!.isLoading()) wc!.reloadIgnoringCache();
+  }, 700);
+}
 let previewConsole: string[] = [];
 let previewShown = false;
 
@@ -216,7 +229,9 @@ runner.setPreviewHost({
     const v = ensurePreview();
     previewConsole = [];
     send("preview-open", url);
-    try { await v.webContents.loadURL(url); } catch (e) { return (e as Error).message; }
+    // always the latest version: no cached pages, scripts or styles from an earlier run
+    await v.webContents.session.clearCache().catch(() => {});
+    try { await v.webContents.loadURL(url, { extraHeaders: "pragma: no-cache\ncache-control: no-cache\n" }); } catch (e) { return (e as Error).message; }
   },
   async inspect() {
     const wc = preview?.webContents;
@@ -363,6 +378,15 @@ function registerIpc() {
             .catch((e: Error) => raw({ type: "synced", ok: false, error: e.message }));
       };
     }
+    // after every turn, save what the agent remembers so a reload or restart picks up where it was
+    const turnEmit = emit;
+    emit = (event) => {
+      turnEmit(event);
+      if (event.type === "done") {
+        try { chats.saveAgent(req.sessionId, { claude: ai.getSession(req.sessionId).messages, ft: ft.getTranscript(req.sessionId), skills: [...ai.getSession(req.sessionId).skills] }); }
+        catch (e) { console.error("saving the chat failed", e); }
+      }
+    };
     if (useFreeToken()) ft.chatFreeToken(req, emit); else ai.chat(req, emit);
     return true;
   });
@@ -476,6 +500,16 @@ function registerIpc() {
   handle("team:snapshot", (sid: string) => team.snapshot(String(sid)));
   handle("team:stop", (sid: string, name?: string) => team.stopAgent(String(sid), name ? String(name) : undefined));
   handle("ai:reset", (sid: string) => { ai.resetSession(sid); ft.resetFreeTokenSession(sid); });
+  // the open project's last chat: restored on start and after a window reload, saved as it changes
+  handle("chat:restore", () => {
+    const root = getRoot();
+    const ui = root ? chats.loadUi(root) : null;
+    if (!ui?.sid) return null;
+    const mem = chats.loadAgent(ui.sid);
+    if (mem) { ai.restoreSession(ui.sid, mem.claude, mem.skills); ft.restoreTranscript(ui.sid, mem.ft ?? []); }
+    return ui;
+  });
+  handle("chat:save", (chat: chats.UiChat) => { const root = getRoot(); if (root && chat?.sid) chats.saveUi(root, chat); });
   handle("ai:pending", (sid: string) => ai.pendingChanges(sid));
   handle("ai:rewind", async (sid: string, index: number) => {
     const r = await ai.rewind(sid, index);
@@ -540,6 +574,10 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
+  chats.setChatsDir(path.join(app.getPath("userData"), "chats"));
+  // the default menu's hidden shortcuts (Ctrl+R / Ctrl+Shift+R / F5) reload the window mid-work;
+  // without it those keys reach the editor and terminal instead
+  if (process.platform !== "darwin") Menu.setApplicationMenu(null);
   registerIpc();
   createWindow();
   const initial = process.env.CURSOR_REMAKE_OPEN;
