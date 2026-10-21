@@ -5,7 +5,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-  READ_ONLY, TOOLS, MAX_STEPS, beginTurn, buildNudge, startTurnState, stepsLeftNote, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
+  READ_ONLY, TOOLS, MAX_STEPS, beginTurn, buildNudge, regressionGate, startTurnState, stepsLeftNote, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
   type AgentEvent, type ChatRequest, type ToolName,
 } from "./ai";
 import { prepareAttachments, type Prepared } from "./attachments";
@@ -371,6 +371,8 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         ...(uses.length ? { tool_calls: uses.map((u) => ({ id: u.id, type: "function" as const, function: { name: u.name, arguments: u.args || "{}" } })) } : {}),
       });
       if (!uses.length) {
+        const gate = await regressionGate(s, emit);
+        if (gate) { msgs.push({ role: "user", content: gate }); continue; }
         const nudge = buildNudge(s, text, req.text);
         if (nudge) {
           if (nudge.kind === "false-claim" || nudge.kind === "code-dump") reportModel(stepModel, false, nudge.kind);

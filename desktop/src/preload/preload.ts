@@ -32,6 +32,8 @@ const api = {
   resetChat: (sid: string) => call("ai:reset", sid),
   chatRestore: () => call("chat:restore"),
   chatSave: (chat: object) => call("chat:save", chat),
+  chatDismissInterrupted: (sid: string) => call("chat:dismiss-interrupted", sid),
+  notify: (title: string, body: string) => call("app:notify", title, body),
   pending: (sid: string) => call<string[]>("ai:pending", sid),
   rewind: (sid: string, index: number) => call<string[]>("ai:rewind", sid, index),
   accept: (sid: string, rel: string) => call("ai:accept", sid, rel),
@@ -55,6 +57,8 @@ const api = {
   ftOpen: (route?: string) => call("ft:open", route),
   memoryStatus: () => call("memory:status"),
   skillsList: () => call("skills:list"),
+  historyList: () => call("history:list"),
+  historyRestore: (id: string) => call("history:restore", id),
   /** where a dropped file lives on disk ("" for pasted data, which has no file) */
   pathForFile: (f: File) => { try { return webUtils.getPathForFile(f); } catch { return ""; } },
   skillsInstall: (source: string) => call("skills:install", source),

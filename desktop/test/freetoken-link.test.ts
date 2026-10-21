@@ -329,8 +329,50 @@ async function main() {
     const refused = await ai.execTool(s, "run_app", { command: "npm start" }, () => {}, "x");
     const readOk = !(await ai.execTool(s, "list_dir", { path: "." }, () => {}, "y").catch((e) => ({ summary: String(e) }))).summary.startsWith("Stopped");
     const sameMove = ai.actionSig("run_app", { command: "npx serve . -l 5173" }) === ai.actionSig("run_app", { command: "npx serve . -l 8080" });
+    // not loops: a supervisor waiting on its agents; the same probe getting a different answer each time
+    const s2 = ai.getSession("loops-2");
+    ai.startTurnState(s2, { sessionId: "loops-2", mode: "team", text: "build it" });
+    const waits = [1, 2, 3, 4, 5, 6].map(() => ai.noteAction(s2, "wait_for_agents", {}, "Agents still working", false));
+    const probes = ["a", "b", "c", "d"].map((x) => ai.noteAction(s2, "inspect_preview", { script: "app.state" }, `state ${x}`, false));
+    if (waits.some(Boolean) || probes.some(Boolean) || s2.stuck) return JSON.stringify({ waits, probes });
     return (first && progress && pingPong && third.includes("STOP") && s.mustStop === true && refused.summary.includes("going in circles") && readOk && sameMove)
       || JSON.stringify({ first, progress, pingPong, third, refused: refused.summary, readOk, sameMove });
+  });
+
+  await check("saved checks: stored in the project, rerun against the page; a broken feature sends the agent back", async () => {
+    const checks = await import("../src/main/checks");
+    ws.setRoot(tmp);
+    const g = globalThis as any;
+    g.Element ??= class {};
+    g.__app = { dialogOpen: false, link: "" };
+    // a preview whose "page" is __app: actions and expectations run through the real probe wrapper
+    const opened: string[] = [];
+    runner.setPreviewHost({
+      async open(u) { opened.push(u); g.__app = { dialogOpen: false, link: g.__broken ? "" : "pending" }; },
+      async inspect() { return { url: "http://localhost:5173/", title: "t", text: "", console: [] }; },
+      evaluate: (script) => (0, eval)(runner.probeScript(script)),
+    });
+    try {
+      const file = await checks.saveCheck({ name: "Share dialog", steps: [
+        { action: "__app.dialogOpen = true; __app.link = __app.link && 'https://x.test/s/1'", expect: "__app.dialogOpen && __app.link.startsWith('https')", wait_ms: 10 },
+      ] });
+      const { checks: saved } = await checks.loadChecks();
+      const pass = await checks.runChecks(runner.previewHost(), saved, "http://localhost:5173/");
+      // the regression gate: files changed this task → saved checks rerun before "done"
+      const s = ai.getSession("gate");
+      ai.startTurnState(s, { sessionId: "gate", mode: "agent", text: "tweak the header" });
+      s.turns = [{ provider: "ft", hist: 0, files: new Map([["index.html", null]]) }];
+      s.filesSinceGate = true;
+      const events: any[] = [];
+      const okGate = await ai.regressionGate(s, (e) => events.push(e));
+      g.__broken = true; s.filesSinceGate = true;
+      const badGate = await ai.regressionGate(s, (e) => events.push(e));
+      const noNewChanges = await ai.regressionGate(s, () => {}); // nothing changed since: not rerun
+      return (file === ".v-run/checks/share-dialog.json" && saved.length === 1 && pass[0].ok && okGate === null
+        && !!badGate?.includes("✗ Share dialog") && badGate.includes("expected") && noNewChanges === null
+        && events.filter((e) => e.type === "tool_end").map((e) => e.ok).join() === "true,false" && checks.truthy("{\"a\":1}") && !checks.truthy("false") && !checks.truthy("Error: x"))
+        || JSON.stringify({ file, pass, okGate, badGate, events: events.map((e) => e.summary) });
+    } finally { runner.setPreviewHost(null); delete g.__broken; }
   });
 
   await check("thinking goes to a reasoning model: planning a big job, Plan mode, and getting unstuck", async () => {
@@ -400,13 +442,32 @@ async function main() {
     return (seen.length === 1 && f.url === "/api/v1/feedback" && f.auth === "Bearer ft_test" && f.body.model === "groq/qwen/qwen3.8-27b" && f.body.good === false && f.body.task === "agent") || JSON.stringify(seen);
   });
 
+  await check("long-running tasks: no small step limit; a long transcript is saved (big old outputs trimmed) and comes back", async () => {
+    const chats = await import("../src/main/chats");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-long-"));
+    chats.setChatsDir(dir);
+    // 300 steps with 50k-character tool outputs: ~15 MB raw
+    const ft: any[] = [{ role: "user", content: "build the tracker" }];
+    for (let i = 0; i < 300; i++) ft.push({ role: "assistant", content: null, tool_calls: [{ id: `c${i}`, type: "function", function: { name: "read_file", arguments: "{}" } }] }, { role: "tool", tool_call_id: `c${i}`, content: `out ${i} ` + "y".repeat(50_000) });
+    await chats.saveAgent("long-1", { ft, skills: [] });
+    const back = chats.loadAgent("long-1")?.ft as any[] | undefined;
+    const old = back?.[2]?.content as string, recent = back?.at(-1)?.content as string;
+    chats.markRunning("long-1", { text: "build the tracker", mode: "agent", startedAt: 1 });
+    const running = chats.loadRunning("long-1")?.text;
+    chats.markRunning("long-1", null);
+    chats.setChatsDir(null);
+    return (ai.MAX_STEPS >= 1000 && back?.length === ft.length && old.includes("characters cut when saved") && old.startsWith("out 0") && recent.length > 50_000
+      && running === "build the tracker" && chats.loadRunning("long-1") === null)
+      || JSON.stringify({ max: ai.MAX_STEPS, len: back?.length, old: old?.slice(0, 40), recent: recent?.length, running });
+  });
+
   await check("chats are saved and restored: the transcript, and the agent's memory (images dropped)", async () => {
     const chats = await import("../src/main/chats");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-chats-"));
     chats.setChatsDir(dir);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-proj-"));
     chats.saveUi(root, { sid: "chat-1", mode: "agent", items: [{ kind: "user", text: "the cloudflare link" }] });
-    chats.saveAgent("chat-1", { claude: [{ role: "user", content: [{ type: "image", source: {} }, { type: "text", text: "see this" }] }], ft: [{ role: "user", content: "the cloudflare link" }], skills: ["frontend-ui"] });
+    await chats.saveAgent("chat-1", { claude: [{ role: "user", content: [{ type: "image", source: {} }, { type: "text", text: "see this" }] }], ft: [{ role: "user", content: "the cloudflare link" }], skills: ["frontend-ui"] });
     const ui = chats.loadUi(root.toUpperCase()); // same project, path case doesn't matter on Windows
     const mem = chats.loadAgent("chat-1");
     const restored = ai.restoreSession("restored-1", mem?.claude, mem?.skills);

@@ -17,6 +17,8 @@ import * as web from "./web";
 import * as video from "./video";
 import { diffDetail, outputDetail, type ToolDetail } from "./diff";
 import * as runner from "./runner";
+import * as history from "./history";
+import * as checks from "./checks";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, exists, getRoot, listDir, readText, resolveInRoot, writeText } from "./workspace";
 
@@ -65,7 +67,7 @@ export async function loadRules(): Promise<string> {
 
 // ---------------------------------------------------------------- tools
 // read-only as far as the code goes (remember only writes V.md), so they are offered in Ask and Plan too
-export const READ_ONLY = new Set(["read_file", "list_dir", "grep_search", "file_search", "codebase_search", "todo_write", "remember", "use_skill", "save_skill", "web_search", "fetch_url"]);
+export const READ_ONLY = new Set(["list_checkpoints", "read_file", "list_dir", "grep_search", "file_search", "codebase_search", "todo_write", "remember", "use_skill", "save_skill", "web_search", "fetch_url"]);
 
 export const schemas = {
   read_file: z.object({ path: z.string(), start_line: z.number().int().positive().optional(), end_line: z.number().int().positive().optional() }),
@@ -97,6 +99,10 @@ export const schemas = {
   app_output: z.object({ wait_seconds: z.number().min(0).max(60).optional() }),
   app_input: z.object({ text: z.string() }),
   stop_app: z.object({}).passthrough(),
+  list_checkpoints: z.object({}).passthrough(),
+  save_check: checks.checkSchema,
+  run_checks: z.object({ name: z.string().optional() }).passthrough(),
+  restore_checkpoint: z.object({ id: z.string(), reason: z.string().optional() }),
   open_preview: z.object({ url: z.string().regex(/^https?:\/\//i, "url must start with http:// or https://") }),
   inspect_preview: z.object({ url: z.string().optional(), script: z.string().optional() }).passthrough(),
 };
@@ -128,6 +134,22 @@ export const TOOLS: Tool[] = [
   { name: "app_input", description: "Type a line into the running app's standard input (for CLI/chat programs), then return its response.",
     input_schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
   { name: "stop_app", description: "Stop the running app.", input_schema: { type: "object", properties: {} } },
+  { name: "save_check", description: "Save a click-through check for a feature that works now, so V-Run re-verifies it after every later change (saved in .v-run/checks, part of the project). Each step can run an action script (click, type) and must give an expect expression that is truthy when the feature works. Example: {name: \"share dialog\", steps: [{action: \"document.querySelector('#share').click()\", expect: \"document.querySelector('#shareLink').value.startsWith('http')\"}]}. Save one for each important feature once you've verified it.",
+    input_schema: { type: "object", properties: {
+      name: { type: "string", description: "Short name of the feature" },
+      url: { type: "string", description: "Page to load (default: the page open in the preview)" },
+      steps: { type: "array", items: { type: "object", properties: {
+        action: { type: "string", description: "Optional JavaScript to run first (e.g. a click)" },
+        expect: { type: "string", description: "JavaScript expression that must be truthy" },
+        wait_ms: { type: "number", description: "Wait after the action, ms (default 400)" },
+      }, required: ["expect"] } },
+    }, required: ["name", "steps"] } },
+  { name: "run_checks", description: "Run the project's saved click-through checks (all, or one by name) against the running app and report which pass. V-Run also runs them by itself before you finish a task that changed files.",
+    input_schema: { type: "object", properties: { name: { type: "string", description: "Only this check (default: all)" } } } },
+  { name: "list_checkpoints", description: "List the project's snapshots (V-Run takes one before each task, at every finished plan step and after the task), newest first, with ids. Use it when the user wants to undo recent work or when your last changes made things worse.",
+    input_schema: { type: "object", properties: {} } },
+  { name: "restore_checkpoint", description: "Put the project back to a snapshot from list_checkpoints: changed and deleted files come back, files created since are removed. The current state is snapshotted first, so it can be undone. Needs the user's approval.",
+    input_schema: { type: "object", properties: { id: { type: "string", description: "Snapshot id from list_checkpoints" }, reason: { type: "string", description: "One line on why, shown to the user" } }, required: ["id"] } },
   { name: "open_preview", description: "Load a URL (usually the app's localhost address) in the editor's preview pane.",
     input_schema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
   { name: "inspect_preview", description: "Look at the page in the preview pane: URL, title, visible text, console errors and warnings (and a screenshot when supported). Use it after starting or changing a web app. When something renders wrong with no error, debug it with `script` instead of guessing: it runs JavaScript in the page and returns the result.",
@@ -239,6 +261,9 @@ export interface Session {
   loopWarnings?: number;
   stuck?: boolean;
   mustStop?: boolean;
+  /** saved checks were rerun this task (regression gate), and files changed since the last run */
+  checkGates?: number;
+  filesSinceGate?: boolean;
   /** replies dropped this turn for hitting the output limit */
   lengthRetries?: number;
 }
@@ -467,6 +492,29 @@ export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "
  * Free models often answer "build it" by pasting code for the user to copy. When a turn that could act
  * ends with code in the reply and no file changed, send it back once to actually make the change.
  */
+/**
+ * Before a task that changed files is called done: rerun the project's saved checks (no model needed).
+ * Features that worked before and fail now send the agent back — at most twice per task.
+ */
+export async function regressionGate(s: Session, emit: (e: AgentEvent) => void): Promise<string | null> {
+  if ((s.checkGates ?? 0) >= 2 || s.worker || s.mustStop || !canAct(s.mode ?? "agent")) return null;
+  if (!s.turns[s.turns.length - 1]?.files.size || !s.filesSinceGate) return null;
+  const host = runner.previewHost();
+  if (!host?.evaluate) return null;
+  const { checks: saved } = await checks.loadChecks();
+  if (!saved.length) return null;
+  s.checkGates = (s.checkGates ?? 0) + 1;
+  s.filesSinceGate = false;
+  const id = `checks-${Date.now()}`;
+  emit({ type: "tool_start", id, name: "run_checks", input: { saved: saved.length } });
+  const results = await checks.runChecks(host, saved, (await host.inspect())?.url ?? runner.appStatus().url, s.abort?.signal);
+  const failed = results.filter((r) => !r.ok);
+  s.pageStale = true;
+  emit({ type: "tool_end", id, ok: !failed.length, summary: failed.length ? `${failed.length} of ${results.length} saved checks fail` : `All ${results.length} saved checks pass`, detail: outputDetail(checks.describeResults(results)) });
+  if (!failed.length) return null;
+  return `Before you finish: these saved checks — features that worked before — fail now:\n${checks.describeResults(failed)}\n\nFind what your changes broke and fix it (if the feature was meant to change, update its check with save_check instead), then run_checks to confirm.`;
+}
+
 export type Nudge = { kind: "summary" | "review" | "check" | "false-claim" | "code-dump"; prompt: string; label: string };
 const WRITING = "*Writing it into the project instead…*";
 
@@ -509,13 +557,18 @@ export function buildNudge(s: Session, text: string, request: string): Nudge | n
 }
 
 /** What "check your work" means — the verification gate, and the chat's Check button. */
-export const CHECK_PROMPT = "Before you finish, check your work like a careful engineer: make sure the app is running (run_app, e.g. npx serve . for a static site), then call inspect_preview and read the console errors, the page text and what the screenshot shows. Fix every error you find (and anything that looks broken or misplaced), check again, and only then summarise what works — never say it works without having looked.";
+export const CHECK_PROMPT = "Before you finish, check your work like a careful engineer: make sure the app is running (run_app, e.g. npx serve . for a static site), then call inspect_preview and read the console errors, the page text and what the screenshot shows. Fix every error you find (and anything that looks broken or misplaced), check again, and only then summarise what works — never say it works without having looked. For each important feature you verified, save_check it, so it is re-checked after every later change.";
 
 /** A bigger job (a new app, site or feature across several files) gets a plan with checkpoints first. */
 export const isBigJob = (text: string) =>
   text.length > 400 || /\b(build|create|make|develop|implement|write)\b[^.?!\n]{0,60}\b(app|application|website|site|game|dashboard|tracker|platform|system|tool|clone|backend|frontend|api|bot|extension|viewer|editor)\b/i.test(text);
 
-export const MAX_STEPS = 60;
+/**
+ * Tasks are long-running: there's no small step limit. A task ends when it's done, when the user stops
+ * it, or when loop detection finds it stuck (going in circles three times). MAX_STEPS is only a guard
+ * against a runaway agent; long tasks keep their context through compaction / running summaries.
+ */
+export const MAX_STEPS = 1000;
 /** Near the step limit, wrap up honestly instead of being cut off mid-fix. */
 export const stepsLeftNote = (turn: number) => turn === MAX_STEPS - 9
   ? `(You've used ${turn + 1} of ${MAX_STEPS} steps. Wrap up: finish the current fix only if it's one or two steps away; otherwise stop changing things and give the user an honest summary — what works, what doesn't yet and why, and the next step you'd take.)`
@@ -538,6 +591,8 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.loopWarnings = 0;
   s.stuck = false;
   s.mustStop = false;
+  s.checkGates = 0;
+  s.filesSinceGate = false;
   s.planNudged = false;
 }
 
@@ -548,6 +603,11 @@ function planNotes(s: Session, name: string, input: any): string {
     const wasDone = s.doneSteps ?? 0;
     s.planned = true;
     const done = (input?.todos ?? []).filter((t: any) => t.status === "completed").length;
+    if (done > wasDone) {
+      // every finished plan step is a checkpoint the user (or the agent) can go back to
+      const step = (input?.todos ?? []).filter((t: any) => t.status === "completed").at(-1)?.content ?? "a step";
+      history.snapshot(getRoot(), `Step done: ${step}`).catch(() => {});
+    }
     s.doneSteps = done;
     return done > wasDone && s.unchecked
       ? "\n\nCheckpoint: you marked a step done, but the page hasn't been looked at since it changed. Verify this step now (run_app / inspect_preview, or run its test) and fix what's wrong before starting the next one."
@@ -597,7 +657,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   }
   const loop = noteAction(s, name, input, r.summary, !!rel && WRITES.has(name), emit);
   if (loop) r = { ...r, content: r.content + loop };
-  if (rel && WRITES.has(name)) s.pageStale = true;
+  if (rel && WRITES.has(name)) { s.pageStale = true; s.filesSinceGate = true; }
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
   if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) s.unchecked = false;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
@@ -628,14 +688,18 @@ export function actionSig(name: string, input: any) {
 const LOOP_WINDOW = 6;
 /** Record an action; when the agent is going in circles, the warning to add to its result. */
 export function noteAction(s: Session, name: string, input: any, outcome: string, changedFiles: boolean, emit?: (e: AgentEvent) => void): string {
-  if (name === "todo_write" || name === "remember") return "";
+  // bookkeeping, and a team's coordination (waiting for agents repeats by design while they work)
+  if (name === "todo_write" || name === "remember" || TEAM_TOOLS.has(name) || WORKER_TOOLS.has(name)) return "";
   const actions = (s.actions ??= []);
   actions.push({ sig: actionSig(name, input), out: outcome.replace(/\d+/g, "#").slice(0, 160), changed: changedFiles });
   if (changedFiles) { actions.length = 0; return ""; } // a file changed: that's progress
   if (actions.length > 12) actions.splice(0, actions.length - 12);
   const recent = actions.slice(-LOOP_WINDOW);
-  const sameMove = recent.filter((a) => a.sig === recent[recent.length - 1].sig).length;
-  const distinct = new Set(recent.map((a) => a.sig)).size;
+  // a repeat is the same move with the same result — the same move that keeps learning something new isn't a loop
+  const key = (a: { sig: string; out: string }) => `${a.sig}→${a.out}`;
+  const last = key(recent[recent.length - 1]);
+  const sameMove = recent.filter((a) => key(a) === last).length;
+  const distinct = new Set(recent.map(key)).size;
   const looping = sameMove >= 3 || (recent.length >= LOOP_WINDOW && distinct <= 3);
   if (!looping) return "";
   actions.length = 0; // a fresh window: the next warning needs fresh repetition
@@ -773,6 +837,32 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       runner.appInput(input.text);
       await runner.settle(8_000, s.abort?.signal, false);
       return { content: `${runner.describe()}\n\nOutput after input:\n${runner.takeNewOutput() || "(no response yet — try app_output with wait_seconds)"}`, summary: `Typed: ${input.text.slice(0, 40)}` };
+    }
+    case "save_check": {
+      const file = await checks.saveCheck(input);
+      return { content: `Saved ${file}. It runs after every task that changes files (and with run_checks).`, summary: `Saved check: ${input.name}` };
+    }
+    case "run_checks": {
+      const { checks: all, broken } = await checks.loadChecks();
+      const pick = input?.name ? all.filter((c) => c.name.toLowerCase() === String(input.name).toLowerCase()) : all;
+      if (!pick.length) return { content: `${input?.name ? `No saved check named "${input.name}".` : "No saved checks yet — save one with save_check once a feature works."}${broken.length ? ` Unreadable: ${broken.join(", ")}` : ""}`, summary: "No checks to run" };
+      const host = runner.previewHost();
+      const results = await checks.runChecks(host, pick, (await host?.inspect())?.url ?? runner.appStatus().url, s.abort?.signal);
+      const failed = results.filter((r) => !r.ok).length;
+      s.pageStale = true; // the checks clicked around: reload before the next inspect
+      return { content: `${checks.describeResults(results)}${broken.length ? `\n(unreadable check files: ${broken.join(", ")})` : ""}`, summary: failed ? `${failed} of ${results.length} checks fail` : `All ${results.length} checks pass` };
+    }
+    case "list_checkpoints": {
+      const snaps = await history.list(getRoot(), 30);
+      if (!snaps.length) return { content: "No snapshots yet (or git isn't installed, which history needs).", summary: "No snapshots" };
+      return { content: snaps.map((h) => `${h.id.slice(0, 10)}  ${new Date(h.time).toLocaleString()}  ${h.files} file(s)  ${h.label}`).join("\n"), summary: `${snaps.length} snapshots` };
+    }
+    case "restore_checkpoint": {
+      if (!(await askApproval(s, emit, id, `Restore snapshot ${input.id.slice(0, 10)}`, input.reason ?? "Put the project's files back to this snapshot (the current state is saved first):")))
+        return { content: "The user declined the restore.", summary: "Restore declined" };
+      const r = await history.restore(getRoot(), input.id);
+      s.pageStale = true;
+      return { content: `Restored ${r.restored} file(s)${r.removed.length ? `, removed ${r.removed.join(", ")}` : ""}. The state before the restore is snapshot ${r.undo?.slice(0, 10) ?? "(none)"} — restore that to undo.`, summary: `Restored ${input.id.slice(0, 7)}` };
     }
     case "stop_app": {
       const stopped = runner.stopApp();
@@ -1044,6 +1134,9 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
         thinking: { type: "adaptive", display: "summarized" },
         cache_control: { type: "ephemeral" },
         ...FALLBACK,
+        // long tasks: the API summarises earlier context itself when it gets large
+        betas: [...FALLBACK.betas, "compact-2026-01-12"],
+        context_management: { edits: [{ type: "compact_20260112" }] },
       }, { signal: s.abort.signal });
       stream.on("text", (delta) => emit({ type: "text", delta }));
       stream.on("thinking", (delta) => emit({ type: "thinking", delta }));
@@ -1069,6 +1162,8 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
       s.messages.push({ role: "assistant", content: message.content });
       if (!uses.length) {
         const said = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+        const gate = await regressionGate(s, emit);
+        if (gate) { s.messages.push({ role: "user", content: gate }); continue; }
         const nudge = buildNudge(s, said, req.text);
         if (nudge) { s.messages.push({ role: "user", content: nudge.prompt }); if (nudge.label) emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue; }
         return emit({ type: "done", stopReason: message.stop_reason ?? "end_turn" });

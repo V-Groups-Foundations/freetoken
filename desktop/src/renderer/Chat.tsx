@@ -7,6 +7,7 @@ import type { Selection } from "./Editor";
 import { Logo } from "./Logo";
 import { Markdown, OpenFileContext } from "./Markdown";
 import { SkillsPanel } from "./Skills";
+import { HistoryPanel } from "./History";
 import { TeamPanel } from "./Team";
 import { providerOf, shortModel, taskLabel } from "./models";
 
@@ -45,6 +46,10 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   app_output: { label: "App output", verb: "Reading app output" },
   app_input: { label: "App input", arg: "text", verb: "Typing into the app" },
   stop_app: { label: "Stop app", verb: "Stopping the app" },
+  save_check: { label: "Save check", arg: "name", verb: "Saving a check" },
+  run_checks: { label: "Run checks", verb: "Re-running the saved checks" },
+  list_checkpoints: { label: "Checkpoints", verb: "Looking at the history" },
+  restore_checkpoint: { label: "Restore", arg: "id", verb: "Restoring a snapshot" },
   open_preview: { label: "Preview", arg: "url", verb: "Opening the preview" },
   inspect_preview: { label: "Inspect page", verb: "Looking at the page" },
   remember: { label: "Remember", arg: "fact", verb: "Saving to memory" },
@@ -66,7 +71,7 @@ const EXPLORE = new Set(["read_file", "list_dir", "grep_search", "file_search", 
 const FILE_ARG = new Set(["read_file", "edit_file", "write_file"]);
 const THINKING = ["Thinking", "Reasoning", "Working", "Planning", "Considering"];
 const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
-const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/check", "Have the agent run the app, look at it and fix what is broken"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/team", "Switch to Team mode (several agents in parallel)"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
+const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/check", "Have the agent run the app, look at it and fix what is broken"], ["/history", "Snapshots of your project: restore any point"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/team", "Switch to Team mode (several agents in parallel)"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
 const SUGGEST = ["Explain how this project is structured", "Run the app and check it works", "Find and fix a bug in the open file", "Write tests for the open file"];
 const MODES: { id: Mode; label: string; hint: string; placeholder: string }[] = [
   { id: "agent", label: "Agent", hint: "Reads, edits and runs things — asks before running commands", placeholder: "Ask the agent to build, fix or run something…" },
@@ -127,6 +132,7 @@ export function ChatPanel(props: {
       // tool steps that were running when the window went away: the agent may still finish them
       setItems((c.items as Item[]).map((x) => (x.kind === "tool" && x.status === "running" ? { ...x, status: "error", summary: "Interrupted (window reloaded)" } : x)));
       if (c.mode && MODES.some((m) => m.id === c.mode)) setMode(c.mode as Mode);
+      if (c.interrupted) setInterrupted(c.interrupted);
     }).catch(() => {}).finally(() => { if (live) restored.current = true; });
     return () => { live = false; };
   }, []);
@@ -159,6 +165,9 @@ export function ChatPanel(props: {
   const [mem, setMem] = useState<MemoryStatus | null>(null);
   const [memOpen, setMemOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // a task that was running when V-Run closed: offered for resuming
+  const [interrupted, setInterrupted] = useState<{ text: string; mode: string; startedAt: number } | null>(null);
   // pasted / dropped files and skills picked for the next message
   const [attach, setAttach] = useState<(ChatAttachment & { id: number; preview?: string })[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -255,6 +264,7 @@ export function ChatPanel(props: {
   function apply(e: AgentEvent) {
     const auto = e.type === "approval" && autoRunRef.current;
     if (auto) api.approve(sidRef.current, e.id, true);
+    else if (e.type === "approval") api.notify("V-Run needs your approval", e.command).catch(() => {});
     const t = turn.current;
     if (e.type === "text") t.chars += e.delta.length;
     if (e.type === "usage") { t.tokens += e.output; if (e.input) setCtxTokens(e.input); }
@@ -365,6 +375,7 @@ export function ChatPanel(props: {
     if (/^\/(ask|agent|plan|team)$/.test(text)) { setMode(text.slice(1) as Mode); setInput(""); return; }
     if (text === "/memory") { setInput(""); setMemOpen(true); refreshMem(); return; }
     if (text === "/skills") { setInput(""); setMemOpen(false); setSkillsOpen(true); return; }
+    if (text === "/history") { setInput(""); setMemOpen(false); setSkillsOpen(false); setHistoryOpen(true); return; }
     if (text === "/init") { setInput(""); return send(INIT_PROMPT, "agent", run); }
     // "# something" is a note to remember, not a message (Ctrl+Enter: personal memory)
     if (/^#(?!#)\s*\S/.test(text)) { await saveNote(text.replace(/^#\s*/, ""), noteScope.current); noteScope.current = "project"; return; }
@@ -587,8 +598,23 @@ export function ChatPanel(props: {
         </button>
         <button className={`mem-btn${skillsOpen ? " on" : ""}`} onClick={() => { setSkillsOpen((v) => !v); setMemOpen(false); }}
           aria-label="Skills" aria-expanded={skillsOpen} title="Skills (/skills)"><span aria-hidden>✦</span> Skills</button>
+        <button className={`mem-btn${historyOpen ? " on" : ""}`} onClick={() => { setHistoryOpen((v) => !v); setSkillsOpen(false); setMemOpen(false); }}
+          aria-label="History" aria-expanded={historyOpen} title="Snapshots of your project — restore any point (/history)"><span aria-hidden>↺</span> History</button>
         <button className="icon-btn" onClick={newChat} title="New chat (/new)" aria-label="New chat">＋</button>
       </div>
+      {interrupted && !busy && (
+        <div className="resume-bar" role="status">
+          <span><b>A task was interrupted</b> when V-Run closed: <i>{interrupted.text.slice(0, 140)}{interrupted.text.length > 140 ? "…" : ""}</i></span>
+          <span className="spacer" />
+          <button className="btn small primary" onClick={() => {
+            const t = interrupted;
+            setInterrupted(null);
+            send(`Continue the task you were working on when V-Run closed: "${t.text}". First check what's already done (the files, your todo list, the app), then finish the rest.`, (MODES.some((m) => m.id === t.mode) ? t.mode : "agent") as Mode);
+          }}>Resume</button>
+          <button className="btn small" onClick={() => { setInterrupted(null); api.chatDismissInterrupted(sidRef.current).catch(() => {}); }}>Dismiss</button>
+        </div>
+      )}
+      {historyOpen && <HistoryPanel busy={busy} onClose={() => setHistoryOpen(false)} onRestored={(files) => { props.onFilesChanged(files); refreshPending(); }} />}
       {skillsOpen && <SkillsPanel busy={busy} onClose={() => setSkillsOpen(false)} onPrefill={(t) => setInput(t)} onAsk={(t) => send(t)} />}
       {memOpen && (
         <div className="mem-panel" role="dialog" aria-label="Memory">

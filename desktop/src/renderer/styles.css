@@ -595,3 +595,12 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .model-row.switched { color: #e0b45c; }
 .team-model { font-size: 11px; color: var(--fg2); border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
 .composer-row .send, .composer-row .mode-switch, .composer-row .check-it { flex-shrink: 0; }
+/* History: one row per snapshot, newest first */
+.history-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 360px; overflow: auto; }
+.history-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.history-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.history-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-confirm { display: flex; gap: 4px; flex-shrink: 0; }
+/* an interrupted task, offered for resuming after a restart */
+.resume-bar { display: flex; align-items: center; gap: 8px; margin: 8px 12px; padding: 8px 10px; border-radius: 8px; font-size: 12px; background: #e0b45c14; border: 1px solid #e0b45c55; color: var(--fg); }
+.resume-bar i { color: var(--fg2); }

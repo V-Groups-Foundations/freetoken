@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, WebContentsView } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell, Tray, WebContentsView } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +8,7 @@ import * as index from "./indexer";
 import * as link from "./freetoken-link";
 import * as memory from "./memory";
 import * as runner from "./runner";
+import * as history from "./history";
 import * as skills from "./skills";
 import * as team from "./team";
 import * as chats from "./chats";
@@ -106,6 +107,39 @@ const send = (channel: string, payload: unknown) => {
   if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
 };
 
+// ---------------------------------------------------------------- tasks that outlive the window
+// Closing the window while the agent works asks whether to keep going in the background (a tray icon
+// stays; a notification says when it's done). Finished or stuck tasks notify when V-Run isn't in front.
+const runningTasks = new Map<string, string>(); // chat session → its request
+let tray: Tray | null = null;
+let quitting = false;
+const iconPath = () => path.join(__dirname, "../../assets", process.platform === "win32" ? "icon.ico" : "icon.png");
+
+function showWindow() {
+  if (!win) return createWindow();
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+function notify(title: string, body: string) {
+  if (isTest || !Notification.isSupported()) return;
+  const n = new Notification({ title, body: body.slice(0, 240), icon: iconPath(), silent: false });
+  n.on("click", showWindow);
+  n.show();
+}
+const inFront = () => !!win && win.isVisible() && win.isFocused();
+function ensureTray() {
+  if (tray) return;
+  tray = new Tray(iconPath());
+  tray.setToolTip("V-Run");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Show V-Run", click: showWindow },
+    { type: "separator" },
+    { label: "Stop and quit V-Run", click: () => { for (const sid of runningTasks.keys()) ai.stop(sid); quitting = true; app.quit(); } },
+  ]));
+  tray.on("click", showWindow);
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1400, height: 900, minWidth: 800, minHeight: 500,
@@ -114,6 +148,25 @@ function createWindow() {
   });
   win.setMenuBarVisibility(false);
   win.on("closed", () => { win = null; });
+  win.on("close", (e) => {
+    if (quitting || !runningTasks.size || isTest) return;
+    e.preventDefault();
+    const [first] = runningTasks.values();
+    const choice = dialog.showMessageBoxSync(win!, {
+      type: "question", title: "V-Run", message: "The agent is still working",
+      detail: `"${first.slice(0, 160)}"${runningTasks.size > 1 ? ` and ${runningTasks.size - 1} more` : ""}\n\nIt can finish in the background — V-Run stays in the tray and tells you when it's done.`,
+      buttons: ["Keep working in the background", "Stop it and quit", "Cancel"], defaultId: 0, cancelId: 2, noLink: true,
+    });
+    if (choice === 0) {
+      win!.hide();
+      ensureTray();
+      notify("V-Run is still working", "It'll tell you when the task is done. Click the tray icon to open it.");
+    } else if (choice === 1) {
+      for (const sid of runningTasks.keys()) ai.stop(sid);
+      quitting = true;
+      win!.close();
+    }
+  });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e) => e.preventDefault());
   if (process.env.VITE_DEV_SERVER_URL) win.loadURL(process.env.VITE_DEV_SERVER_URL + (isTest ? "?intro=0" : ""));
@@ -442,7 +495,35 @@ function registerIpc() {
       turnEmit(event);
       if (event.type === "done") saveMemory(req.sessionId);
     };
-    if (useFreeToken()) ft.chatFreeToken(req, emit); else ai.chat(req, emit);
+    // a snapshot before the agent changes anything and one after: the History panel can put either back
+    const acts = req.mode === "agent" || req.mode === "team";
+    const root = getRoot();
+    const afterEmit = emit;
+    emit = (event) => {
+      afterEmit(event);
+      if (event.type === "done" && acts) history.snapshot(root, `After: ${req.text}`).catch(() => {});
+      if (event.type === "done") {
+        runningTasks.delete(req.sessionId);
+        chats.markRunning(req.sessionId, null);
+        // tell the user when V-Run isn't in front: done, stopped on an error, or out of steps
+        if (!inFront() && event.stopReason !== "aborted") {
+          const what = req.text.replace(/\s+/g, " ").slice(0, 120);
+          const title = event.stopReason === "error" ? "V-Run stopped on an error" : event.stopReason === "max_turns" ? "V-Run ran out of steps" : "V-Run finished";
+          notify(title, `${what}${!win?.isVisible() && !runningTasks.size ? "\nNothing else is running — click to open V-Run." : ""}`);
+        }
+      }
+    };
+    // long tasks: the agent's memory is saved every few steps, so a crash or restart mid-task loses little
+    let steps = 0;
+    const duringEmit = emit;
+    emit = (event) => {
+      duringEmit(event);
+      if (event.type === "tool_end" && ++steps % 5 === 0) saveMemory(req.sessionId);
+    };
+    runningTasks.set(req.sessionId, req.text);
+    chats.markRunning(req.sessionId, { text: req.text, mode: req.mode, startedAt: Date.now() });
+    (acts ? history.snapshot(root, `Before: ${req.text}`).catch(() => null) : Promise.resolve(null))
+      .then(() => (useFreeToken() ? ft.chatFreeToken(req, emit) : ai.chat(req, emit)));
     return true;
   });
   // the chat panel takes over a project FreeToken handed us: seed the agent with the conversation
@@ -552,6 +633,13 @@ function registerIpc() {
   });
   handle("ai:approve", (sid: string, toolId: string, ok: boolean) => ai.approve(sid, toolId, ok));
   handle("ai:stop", (sid: string) => ai.stop(sid));
+  // the project's snapshots (before / during / after each task) and putting one back
+  handle("history:list", () => history.list(getRoot()));
+  handle("history:restore", async (id: string) => {
+    const r = await history.restore(getRoot(), String(id));
+    const files = r.undo ? (await history.changedSince(getRoot()!, r.undo).catch(() => [])).map((f) => f.path) : [];
+    return { ...r, files };
+  });
   handle("team:snapshot", (sid: string) => team.snapshot(String(sid)));
   handle("team:stop", (sid: string, name?: string) => team.stopAgent(String(sid), name ? String(name) : undefined));
   handle("ai:reset", (sid: string) => { ai.resetSession(sid); ft.resetFreeTokenSession(sid); });
@@ -561,6 +649,8 @@ function registerIpc() {
     const ui = root ? chats.loadUi(root) : null;
     if (!ui?.sid) return null;
     const mem = chats.loadAgent(ui.sid);
+    // a task still marked running means V-Run closed mid-task (and it isn't running now): offer to resume it
+    const interrupted = runningTasks.has(ui.sid) ? null : chats.loadRunning(ui.sid);
     if (mem) { ai.restoreSession(ui.sid, mem.claude, mem.skills); ft.restoreTranscript(ui.sid, mem.ft ?? []); }
     // a Team-mode chat gets its team back: the agents, their reports and memories, who owns which file
     const saved = chats.loadTeam<team.SavedTeam>(ui.sid);
@@ -570,8 +660,12 @@ function registerIpc() {
         if (wmem) { ai.restoreSession(wsid, wmem.claude, wmem.skills); ft.restoreTranscript(wsid, wmem.ft ?? []); }
       }
     }
-    return ui;
+    return interrupted ? { ...ui, interrupted } : ui;
   });
+  // the resume offer was dismissed: forget the interrupted task
+  handle("chat:dismiss-interrupted", (sid: string) => chats.markRunning(String(sid), null));
+  // the renderer asks for a notification (an approval is waiting while V-Run isn't in front)
+  handle("app:notify", (title: string, body: string) => { if (!inFront()) notify(String(title), String(body)); });
   handle("chat:save", (chat: chats.UiChat) => { const root = getRoot(); if (root && chat?.sid) chats.saveUi(root, chat); });
   handle("ai:pending", (sid: string) => ai.pendingChanges(sid));
   handle("ai:rewind", async (sid: string, index: number) => {
@@ -638,6 +732,7 @@ function registerIpc() {
 
 app.whenReady().then(async () => {
   chats.setChatsDir(path.join(app.getPath("userData"), "chats"));
+  history.setHistoryDir(path.join(app.getPath("userData"), "history"));
   // the default menu's hidden shortcuts (Ctrl+R / Ctrl+Shift+R / F5) reload the window mid-work;
   // without it those keys reach the editor and terminal instead
   if (process.platform !== "darwin") Menu.setApplicationMenu(null);
@@ -657,6 +752,7 @@ app.whenReady().then(async () => {
       .catch(() => {});
 });
 app.on("will-quit", () => link.stopServer());
+app.on("before-quit", () => { quitting = true; });
 app.on("window-all-closed", () => {
   watcher?.close(); watcher = null;
   clearTimeout(changeTimer); clearTimeout(indexTimer);

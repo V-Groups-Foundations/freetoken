@@ -41,7 +41,11 @@ async function main() {
   let failures = 0;
   async function step(name: string, fn: () => Promise<unknown>) {
     try { await fn(); console.log(`PASS  ${name}`); }
-    catch (e) { failures++; console.log(`FAIL  ${name}\n      ${String((e as Error).message).split("\n")[0]}`); await page.screenshot({ path: path.join(shots, `fail-${failures}.png`) }).catch(() => {}); }
+    catch (e) {
+      failures++;
+      // the first line, plus which locator it was waiting for
+      const lines = String((e as Error).message).split("\n");
+      console.log(`FAIL  ${name}\n      ${lines[0]}${lines.filter((l) => /waiting for/.test(l)).slice(0, 2).map((l) => `\n      ${l.trim()}`).join("")}`); await page.screenshot({ path: path.join(shots, `fail-${failures}.png`) }).catch(() => {}); }
   }
   try {
     await step("switch provider to FreeToken in Settings and test the connection", async () => {
@@ -79,6 +83,9 @@ async function main() {
       if (await page.getByText("Auto-running commands").count()) throw new Error("auto-run still on after the task finished");
       if (!fs.readFileSync(path.join(proj, "src/hello.ts"), "utf8").includes("sayHello(")) throw new Error("edit not applied");
       await page.getByText("2 files changed").waitFor();
+      // the task isn't over at its first answer: it reviews its changes once more; wait until it's idle
+      // (a message typed while it works is queued and sent without the run-mode question)
+      await page.getByRole("button", { name: "Send" }).waitFor({ timeout: 20000 });
       await page.screenshot({ path: path.join(shots, "freetoken-chat.png") });
     });
     await step("every chat request carried the ft_ token and tools", async () => {
@@ -209,7 +216,10 @@ async function main() {
       await page.getByRole("group", { name: "How should the agent run this task?" }).getByRole("button", { name: /^Step by step/ }).click();
       const panel = page.getByRole("region", { name: "Team" });
       await panel.waitFor({ timeout: 15000 });
-      await panel.getByText(/2 agents/).waitFor({ timeout: 15000 });
+      // both workers are listed (the "2 agents · 2 working" moment can be over before it's sampled, so
+      // the check is on the agents themselves; the reviewer joins after them)
+      await panel.getByRole("button", { name: /^api\b/ }).waitFor({ timeout: 15000 });
+      await panel.getByRole("button", { name: /^web\b/ }).waitFor({ timeout: 15000 });
       await page.locator(".msg-ai", { hasText: "Team finished" }).waitFor({ timeout: 30000 });
       await panel.getByText("all finished").waitFor({ timeout: 10000 });
       await panel.getByRole("button", { name: /web/ }).click();
@@ -408,6 +418,47 @@ async function main() {
       await page.getByRole("button", { name: "Open folder…" }).waitFor();
       await page.getByRole("button", { name: proj }).click();
       await page.getByRole("button", { name: "src", exact: true }).waitFor({ timeout: 10000 });
+    });
+    await step("History: the agent's work has snapshots (before, after); restoring one puts the files back, and it can be undone", async () => {
+      await page.getByRole("button", { name: "History" }).click();
+      const panel = page.getByRole("dialog", { name: "History" });
+      await panel.getByText(/^After: Rename greet to sayHello/).first().waitFor({ timeout: 10000 });
+      await page.screenshot({ path: path.join(shots, "history.png") });
+      const hello = path.join(proj, "src", "hello.ts");
+      const renamed = fs.readFileSync(hello, "utf8");
+      if (!renamed.includes("sayHello")) throw new Error("expected the rename on disk before restoring");
+      const before = panel.locator(".history-item", { hasText: /^Before: Rename greet to sayHello/ }).last();
+      await before.getByRole("button", { name: "Restore…" }).click();
+      await before.getByRole("button", { name: "Restore", exact: true }).click();
+      await panel.getByRole("status").filter({ hasText: /^Restored/ }).waitFor({ timeout: 15000 });
+      if (!fs.readFileSync(hello, "utf8").includes("export function greet(")) throw new Error("the restore didn't put greet back");
+      // undo: the state before the restore is the newest snapshot
+      const undo = panel.locator(".history-item", { hasText: /^Before restoring/ }).first();
+      await undo.getByRole("button", { name: "Restore…" }).click();
+      await undo.getByRole("button", { name: "Restore", exact: true }).click();
+      await page.waitForTimeout(1500);
+      if (fs.readFileSync(hello, "utf8") !== renamed) throw new Error("undoing the restore didn't bring the rename back");
+      await panel.getByRole("button", { name: "Close history" }).click();
+    });
+    await step("a task interrupted by closing V-Run is offered for resuming after a restart", async () => {
+      const ud = (await app.evaluate(({ app }) => app.getPath("userData"))) as string;
+      const dir = path.join(ud, "chats");
+      const ui = fs.readdirSync(dir).filter((f) => f.startsWith("ui-")).map((f) => path.join(dir, f)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+      const sid = JSON.parse(fs.readFileSync(ui, "utf8")).sid as string;
+      // what V-Run leaves behind when it's closed mid-task
+      fs.writeFileSync(path.join(dir, `running-${sid.replace(/[^\w.-]+/g, "_").slice(0, 120)}.json`), JSON.stringify({ text: "Build the floor tracker", mode: "agent", startedAt: Date.now() }));
+      await page.reload();
+      const bar = page.getByRole("status").filter({ hasText: "A task was interrupted" });
+      await bar.waitFor({ timeout: 20000 });
+      await page.screenshot({ path: path.join(shots, "resume.png") });
+      const before = fake.requests.length;
+      await bar.getByRole("button", { name: "Resume" }).click();
+      // resuming in Agent mode asks how to run it, like any agent task
+      await page.getByRole("group", { name: "How should the agent run this task?" }).getByRole("button", { name: /^Step by step/ }).click();
+      await page.locator(".msg-user", { hasText: "Continue the task you were working on" }).waitFor({ timeout: 10000 });
+      await page.getByRole("button", { name: "Send" }).waitFor({ timeout: 20000 });
+      const sent = JSON.stringify(fake.requests.slice(before).map((r: any) => r.messages));
+      if (!sent.includes("Build the floor tracker")) throw new Error("the resumed task wasn't sent to the agent");
     });
   } finally {
     await app.close();

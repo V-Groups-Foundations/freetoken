@@ -46,7 +46,9 @@ interface Api {
   approve(sid: string, toolId: string, ok: boolean): Promise<void>;
   stop(sid: string): Promise<void>;
   resetChat(sid: string): Promise<void>;
-  chatRestore(): Promise<{ sid: string; mode?: string; items: unknown[] } | null>;
+  chatRestore(): Promise<{ sid: string; mode?: string; items: unknown[]; interrupted?: { text: string; mode: string; startedAt: number } } | null>;
+  chatDismissInterrupted(sid: string): Promise<void>;
+  notify(title: string, body: string): Promise<void>;
   chatSave(chat: { sid: string; mode: string; items: unknown[] }): Promise<void>;
   pending(sid: string): Promise<string[]>;
   rewind(sid: string, index: number): Promise<string[]>;
@@ -71,6 +73,8 @@ interface Api {
   ftOpen(route?: string): Promise<void>;
   memoryStatus(): Promise<MemoryStatus>;
   skillsList(): Promise<SkillInfo[]>;
+  historyList(): Promise<HistorySnapshot[]>;
+  historyRestore(id: string): Promise<{ restored: number; removed: string[]; files: string[] }>;
   skillsInstall(source: string): Promise<{ source: string; installed: { name: string; files: number; skipped: number }[]; readme: string }>;
   skillsRemove(name: string): Promise<void>;
   skillsOpen(name: string): Promise<void>;
@@ -118,6 +122,7 @@ type MemoryFile = { file: string | null; exists: boolean; lines: number; entries
 export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean; model?: string };
 export type TeamSnapshot = { supervisor: string; agents: TeamAgent[] };
 export type ChatAttachment = { name: string; mime?: string; data?: string; path?: string };
+export type HistorySnapshot = { id: string; time: number; label: string; files: number };
 export type SkillInfo = { name: string; description: string; scope: "user" | "project" | "builtin"; dir: string | null; source?: string };
 export type MemoryStatus = { project: MemoryFile; user: MemoryFile };
 export type FtHub = {
