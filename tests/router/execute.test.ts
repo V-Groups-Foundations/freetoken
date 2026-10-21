@@ -117,6 +117,16 @@ describe('routeChat', () => {
     expect(out.ok).toBe(true);
   });
 
+  it('routes for the task kind the client names (a planner asks for reasoning)', async () => {
+    await connect('groq', 'gsk_mine');
+    const f = fakeFetch(() => okJson());
+    const out = await routeChat({ userId, source: 'api', task: 'reasoning', body: { model: 'auto-smart', messages: [{ role: 'user', content: 'hi' }] } },
+      { db, kv, fetchImpl: f.fn, vaultKey: TEST_VAULT_KEY });
+    expect(out.ok && out.response.headers.get('x-freetoken-task')).toBe('reasoning');
+    const guessed = await run(() => okJson()).p; // without it, the kind is read from the request
+    expect(guessed.ok && guessed.response.headers.get('x-freetoken-task')).toBe('chat');
+  });
+
   it('does not fall back on a bad request', async () => {
     await connect('groq', 'gsk_mine');
     await connect('gemini', 'AIza_mine');

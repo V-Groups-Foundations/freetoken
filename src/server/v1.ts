@@ -1,3 +1,4 @@
+import { parseTask } from '@/router/quality';
 import { listUserModels } from '@/router/models';
 import { routeChat } from '@/router/execute';
 import { validateChatBody } from './chat-body';
@@ -23,7 +24,8 @@ export async function handleCompletions(req: Request, deps: Deps): Promise<Respo
   }
   const v = validateChatBody(raw, text.length);
   if (!v.ok) return oaiError(400, 'invalid_request', v.message);
-  const out = await routeChat({ userId, source: 'api', body: v.body }, deps);
+  // a client may say what kind of task this is (V-Run asks for a reasoning model to plan and debug)
+  const out = await routeChat({ userId, source: 'api', body: v.body, task: parseTask(req.headers.get('x-freetoken-task')) }, deps);
   return out.ok ? out.response : oaiError(out.status, out.code, out.message);
 }
 

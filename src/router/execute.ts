@@ -5,7 +5,7 @@ import { callChat } from '@/providers/client';
 import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
 import { estimateTokens, learnedScores, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
-import { detectTask } from './quality';
+import { detectTask, type Task } from './quality';
 
 /** 400s caused by the model, its size limits or a gateway's upstream rather than the request (Groq: "Failed to call
  * a function"; OpenRouter / Kilo: "Provider returned error"). Another model can take them. */
@@ -19,6 +19,8 @@ export interface ChatInput {
   userId: string;
   source: 'chat' | 'api';
   body: Record<string, unknown>;
+  /** the kind of task, when the client says (a coding agent asking its planner for a reasoning model) */
+  task?: Task;
 }
 
 export type RouteOutcome =
@@ -73,7 +75,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   const nowMs = now();
   const exhausted = new Set((await deps.db.select().from(providerLimits).where(and(eq(providerLimits.userId, userId), eq(providerLimits.remainingRequests, 0))))
     .filter((l) => !l.requestsResetAt || l.requestsResetAt.getTime() > nowMs).map((l) => `${l.provider}/${l.modelId}`));
-  const task = detectTask(body);
+  const task = input.task ?? detectTask(body);
   const selectInput = {
     requested,
     models: catalog,

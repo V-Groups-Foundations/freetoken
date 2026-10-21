@@ -234,6 +234,11 @@ export interface Session {
   /** files changed since the preview last loaded: the next inspect reloads it */
   pageStale?: boolean;
   summaryNudged?: boolean;
+  /** recent actions, for spotting loops; warnings this turn; stuck → the next step goes to a reasoning model */
+  actions?: { sig: string; out: string; changed: boolean }[];
+  loopWarnings?: number;
+  stuck?: boolean;
+  mustStop?: boolean;
   /** replies dropped this turn for hitting the output limit */
   lengthRetries?: number;
 }
@@ -471,6 +476,7 @@ export function buildNudge(s: Session, text: string, request: string): Nudge | n
     s.summaryNudged = true;
     return { kind: "summary", label: "", prompt: "You ended without saying anything to the user. Reply now with a short summary: what you built or changed (paths), how you checked it and what you saw, and anything that still doesn't work or that they need to do." };
   }
+  if (s.mustStop) return null; // it was told to stop and explain: no more checks or reviews
   if (!canAct(s.mode ?? "agent") || (s.codeNudges ?? 0) >= 3) return null;
   const changed = [...(s.turns[s.turns.length - 1]?.files.keys() ?? [])];
   // solo agents read their own work back against the request once (a team has its reviewer)
@@ -528,6 +534,10 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.planned = false;
   s.lengthRetries = 0;
   s.summaryNudged = false;
+  s.actions = [];
+  s.loopWarnings = 0;
+  s.stuck = false;
+  s.mustStop = false;
   s.planNudged = false;
 }
 
@@ -573,7 +583,20 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
     const why = team.guardWrite(s.id, rel, await exists(rel));
     if (why) return withNotices(s, { content: why, summary: why.startsWith("🔒") ? `Blocked — ${rel} belongs to another agent` : `Re-read needed — ${rel} changed` });
   }
-  const r = await runTool(s, name, input, emit, id);
+  // stuck for good: the agent was told to stop and explain; nothing more gets changed or run
+  if (s.mustStop && ACTS.has(name)) {
+    return { content: "Stopped: you were going in circles. Don't run or change anything else now — reply to the user: what's blocking you, what you tried, and what you need from them.", summary: "Stopped — going in circles" };
+  }
+  let r: ToolOutput;
+  try { r = await runTool(s, name, input, emit, id); }
+  catch (e) {
+    // a failing tool counts as an action too (polling a quiet app, a command that keeps failing)
+    const loop = noteAction(s, name, input, `error: ${(e as Error).message}`, false, emit);
+    if (loop) throw new Error(`${(e as Error).message}${loop}`);
+    throw e;
+  }
+  const loop = noteAction(s, name, input, r.summary, !!rel && WRITES.has(name), emit);
+  if (loop) r = { ...r, content: r.content + loop };
   if (rel && WRITES.has(name)) s.pageStale = true;
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
   if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) s.unchecked = false;
@@ -581,6 +604,50 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   if (rel && WRITES.has(name)) team.noteWrite(s.id, rel, r.summary);
   const plan = planNotes(s, name, input);
   return withNotices(s, plan ? { ...r, content: r.content + plan } : r);
+}
+
+// ---------------------------------------------------------------- going in circles
+// Free models often repeat themselves when stuck: inspecting the same page again and again, polling a
+// quiet app, restarting a server on a new port. Every action gets a signature (ports and counts
+// normalised away); a run of actions with no file change that are mostly repeats is a loop. The agent
+// is told so, its next step goes to a reasoning model (escalation), and the third time it must stop.
+
+/** What an action is, ignoring details that change while it stays the same move (ports, counts). */
+export function actionSig(name: string, input: any) {
+  const i = input ?? {};
+  const norm = (v: unknown) => String(v ?? "").replace(/\b\d{2,5}\b/g, "#").replace(/\s+/g, " ").trim().slice(0, 200);
+  switch (name) {
+    case "inspect_preview": return `inspect:${norm(i.url)}:${norm(i.script).slice(0, 80)}`;
+    case "app_output": return "app_output";
+    case "run_app": case "run_terminal_command": return `run:${norm(i.command)}`;
+    case "read_file": return `read:${i.path}:${i.start_line ?? ""}`;
+    default: return `${name}:${norm(JSON.stringify(i))}`;
+  }
+}
+
+const LOOP_WINDOW = 6;
+/** Record an action; when the agent is going in circles, the warning to add to its result. */
+export function noteAction(s: Session, name: string, input: any, outcome: string, changedFiles: boolean, emit?: (e: AgentEvent) => void): string {
+  if (name === "todo_write" || name === "remember") return "";
+  const actions = (s.actions ??= []);
+  actions.push({ sig: actionSig(name, input), out: outcome.replace(/\d+/g, "#").slice(0, 160), changed: changedFiles });
+  if (changedFiles) { actions.length = 0; return ""; } // a file changed: that's progress
+  if (actions.length > 12) actions.splice(0, actions.length - 12);
+  const recent = actions.slice(-LOOP_WINDOW);
+  const sameMove = recent.filter((a) => a.sig === recent[recent.length - 1].sig).length;
+  const distinct = new Set(recent.map((a) => a.sig)).size;
+  const looping = sameMove >= 3 || (recent.length >= LOOP_WINDOW && distinct <= 3);
+  if (!looping) return "";
+  actions.length = 0; // a fresh window: the next warning needs fresh repetition
+  s.loopWarnings = (s.loopWarnings ?? 0) + 1;
+  s.stuck = true; // the next step goes to a reasoning model
+  const moves = [...new Set(recent.map((a) => a.sig.split(":").slice(0, 2).join(" ").trim()))].join("; ");
+  emit?.({ type: "text", delta: `\n\n*Going in circles — stepping back to rethink${s.loopWarnings >= 3 ? " and stopping" : ""}…*\n\n` });
+  if (s.loopWarnings >= 3) {
+    s.mustStop = true;
+    return `\n\n⚠ STOP. You've been going in circles for the third time (${moves}). Don't try again: reply to the user now — what's blocking you, what you tried, what you think the cause is, and what you need from them.`;
+  }
+  return `\n\n⚠ You're going in circles: your last ${recent.length} actions (${moves}) changed nothing and repeat each other. Don't repeat them. Step back and think it through first: what do you know for certain, what is the most likely root cause, and what one DIFFERENT action would confirm or fix it (read the code that's involved, probe the page with a script, check another part of the system)? State that reasoning in one or two sentences, then act.`;
 }
 
 async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEvent) => void, id: string): Promise<ToolOutput> {

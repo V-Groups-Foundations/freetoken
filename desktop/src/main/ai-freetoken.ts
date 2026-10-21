@@ -40,6 +40,83 @@ export function compact<T extends { role: string }>(msgs: T[], userIndex: number
   return [msgs[userIndex], note, ...msgs.slice(cut)];
 }
 
+// ---------------------------------------------------------------- long tasks: summarise, don't forget
+// Past ~120 messages or ~160k characters of context, the older steps of the task are replaced by a
+// running summary that a fast model writes (goal, decisions, files and what's in them, how to run it,
+// errors fixed, open problems). It's updated in chunks — the kept part shrinks back to ~80 messages /
+// 80k characters — so it isn't rewritten on every step. If summarising fails, compact()'s note is used.
+
+const MAX_CHARS = 160_000, KEEP_CHARS = 80_000;
+type Summary = { userIndex: number; upTo: number; text: string };
+const summaries = new Map<string, Summary>();
+const sizeOf = (m: unknown) => JSON.stringify(m).length;
+const charsOf = (ms: unknown[]) => ms.reduce<number>((n, m) => n + sizeOf(m), 0);
+
+/** Where the kept recent part starts: at most KEEP_RECENT messages / KEEP_CHARS characters, at an assistant turn. */
+export function keepFrom(msgs: { role: string }[], userIndex: number) {
+  let i = msgs.length, chars = 0;
+  while (i > userIndex + 1 && msgs.length - (i - 1) <= KEEP_RECENT && chars + sizeOf(msgs[i - 1]) <= KEEP_CHARS) chars += sizeOf(msgs[--i]);
+  while (i < msgs.length && msgs[i].role !== "assistant") i++; // never start with a tool result that lost its call
+  return i;
+}
+
+/** The steps being dropped, as compact text for the summariser. */
+function transcriptText(ms: ChatCompletionMessageParam[]) {
+  const text = (c: unknown) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p: any) => p?.text ?? "").join(" ") : "");
+  const lines = ms.map((m) => {
+    if (m.role === "tool") return `  → ${text(m.content).slice(0, 500)}`;
+    if (m.role === "assistant") {
+      const calls = ("tool_calls" in m ? m.tool_calls ?? [] : []).map((t: any) => `${t.function?.name}(${String(t.function?.arguments ?? "").slice(0, 300)})`);
+      return `assistant: ${text(m.content).slice(0, 800)}${calls.length ? `\n  calls: ${calls.join("; ")}` : ""}`;
+    }
+    return `${m.role}: ${text(m.content).slice(0, 1500)}`;
+  });
+  const all = lines.join("\n");
+  return all.length > 60_000 ? `…(earliest part cut)…\n${all.slice(-60_000)}` : all;
+}
+
+const SUMMARY_BRIEF = "You keep the working notes of an AI coding agent that is in the middle of a long task. Write the notes it needs to carry on without the steps below: the goal, decisions made, every file created or changed and what is in it (exact paths, key functions, ids, ports, URLs), how to run and test it, errors met and how they were fixed, what is still broken or unverified, and what it was about to do next. Keep names, paths and numbers exact. Plain bullet points, at most 450 words. Update the existing notes if given: keep what still holds, drop what's obsolete.";
+
+async function summarise(previous: string | undefined, dropped: ChatCompletionMessageParam[], signal?: AbortSignal) {
+  const r = await client().chat.completions.create({
+    model: "auto-fast",
+    max_tokens: 1000,
+    messages: [
+      { role: "system", content: SUMMARY_BRIEF },
+      { role: "user", content: `${previous ? `Existing notes:\n${previous}\n\n` : ""}Steps to fold into the notes:\n${transcriptText(dropped)}` },
+    ],
+  }, { signal, timeout: 120_000, maxRetries: 1 });
+  const text = r.choices[0]?.message?.content?.trim();
+  if (!text) throw new Error("empty summary");
+  return text;
+}
+
+/**
+ * What to send for this step: the whole transcript while it's small; once it's long, the task's request,
+ * the running summary of the older steps, and the recent steps.
+ */
+export async function contextFor(id: string, msgs: ChatCompletionMessageParam[], userIndex: number, signal?: AbortSignal, onSummarise?: () => void): Promise<ChatCompletionMessageParam[]> {
+  let sum = summaries.get(id);
+  if (sum && (sum.userIndex !== userIndex || sum.upTo > msgs.length)) { summaries.delete(id); sum = undefined; }
+  const from = sum ? sum.upTo : userIndex + 1;
+  const withSummary = (s: Summary) => [msgs[userIndex], { role: "user" as const, content: `(Earlier steps of this task were summarised to keep the context small. Your notes so far:\n${s.text}\n\nContinue from the latest state below; re-read a file if you need its exact contents.)` }, ...msgs.slice(s.upTo)];
+  const tooBig = msgs.length - from > MAX_MSGS || charsOf(msgs.slice(from)) > MAX_CHARS;
+  if (!tooBig) return sum ? withSummary(sum) : msgs;
+  const upTo = keepFrom(msgs, userIndex);
+  if (upTo <= from) return sum ? withSummary(sum) : compact(msgs, userIndex);
+  // the first summary of a task also folds in the conversation before it
+  const dropped = sum ? msgs.slice(from, upTo) : [...msgs.slice(0, userIndex), ...msgs.slice(userIndex + 1, upTo)];
+  onSummarise?.();
+  try {
+    const next = { userIndex, upTo, text: await summarise(sum?.text, dropped, signal) };
+    summaries.set(id, next);
+    return withSummary(next);
+  } catch {
+    if (signal?.aborted) throw new Error("aborted");
+    return compact(msgs, userIndex); // the summariser is busy: fall back to cutting with a note
+  }
+}
+
 export function describeFreeTokenError(e: unknown): string {
   if (BAD_TOOL_CALL.test(String((e as Error)?.message))) return "The free model kept calling tools that don't exist. Try again, or pick a different model in Settings → FreeToken.";
   if (e instanceof OpenAI.AuthenticationError) return "FreeToken rejected the token. Create a new one in FreeToken → Settings → API tokens.";
@@ -63,7 +140,7 @@ const OA_TOOLS: ChatCompletionTool[] = TOOLS.map((t) => ({
 
 // OpenAI-format transcripts, kept separately from the Claude ones (switching provider starts fresh history).
 const transcripts = new Map<string, ChatCompletionMessageParam[]>();
-export const resetFreeTokenSession = (id: string) => transcripts.delete(id);
+export const resetFreeTokenSession = (id: string) => { summaries.delete(id); return transcripts.delete(id); };
 export function seedFreeToken(id: string, turns: { role: "user" | "assistant"; content: string }[]) {
   transcripts.set(id, turns.map((t) => ({ role: t.role, content: t.content })));
 }
@@ -164,6 +241,14 @@ export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSi
   }
 }
 
+/** Which kind of model this step needs: "reasoning" to plan or get unstuck, else FreeToken's own guess. */
+export function stepRole(s: { stuck?: boolean; bigJob?: boolean; planned?: boolean }, req: Pick<ChatRequest, "mode">, turn: number): "reasoning" | undefined {
+  if (s.stuck) return "reasoning";
+  if (req.mode === "plan") return "reasoning";
+  if (s.bigJob && !s.planned && turn === 0) return "reasoning";
+  return undefined;
+}
+
 export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => void) {
   const s = getSession(req.sessionId); // shared: checkpoints, approvals, abort
   s.abort = new AbortController();
@@ -204,17 +289,21 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
       let calls: { id: string; name: string; args: string }[] = [];
       let finish: string | null = null;
       let waits = 0, cutOff = false;
+      const context = await contextFor(req.sessionId, msgs, userIndex, s.abort.signal, () => emit({ type: "text", delta: "\n\n*Summarising the earlier steps to keep the context small…*\n\n" }));
       for (let attempt = 0; ; attempt++) {
         text = ""; calls = []; finish = null;
         const nudge = attempt ? `\n\nIMPORTANT: call only these tools, by their exact names: ${tools.map((t) => t.type === "function" ? t.function.name : "").join(", ")}. No other tools exist (there is no repo_browser).` : "";
         const ask = system + nudge + (cutOff ? CUT_OFF : "");
+        // thinking and typing go to different models: planning a big job, Plan mode and getting unstuck
+        // ask FreeToken for its best reasoning model; ordinary steps for its best agent/coding model
+        const role = stepRole(s, req, turn);
         try {
           const { data: stream, response } = await client().chat.completions.create({
             model: cfg.model() || "auto-smart",
-            messages: [{ role: "system", content: ask }, ...compact(msgs, userIndex)],
+            messages: [{ role: "system", content: ask }, ...context],
             tools,
             stream: true,
-          }, { signal: s.abort.signal, maxRetries: 0 }).withResponse(); // retries happen below, visibly (rateLimitWait)
+          }, { signal: s.abort.signal, maxRetries: 0, ...(role ? { headers: { "x-freetoken-task": role } } : {}) }).withResponse(); // retries happen below, visibly (rateLimitWait)
           // which model FreeToken picked: what it gets right or wrong is reported back so routing learns
           stepModel = response.headers.get("x-freetoken-provider");
           if (stepModel) turnModels.add(stepModel);
@@ -246,6 +335,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             if (ch.finish_reason) finish = ch.finish_reason;
           }
           if (usage) emit({ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 });
+          if (role && s.stuck) s.stuck = false; // the reasoning model has had its step back
           break;
         } catch (e) {
           // free tiers rate-limit often and briefly: wait it out instead of failing the whole task

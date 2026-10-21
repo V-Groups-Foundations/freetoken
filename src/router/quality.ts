@@ -6,6 +6,9 @@
 // agents; edit them freely — the router only cares about their order.
 
 export type Task = 'agent' | 'code' | 'reasoning' | 'vision' | 'creative' | 'chat';
+export const TASKS: readonly Task[] = ['agent', 'code', 'reasoning', 'vision', 'creative', 'chat'];
+/** A task kind the client asked for (the x-freetoken-task request header), if it's a known one. */
+export const parseTask = (v: string | null | undefined): Task | undefined => (TASKS as readonly string[]).includes(v ?? '') ? (v as Task) : undefined;
 type Scores = Partial<Record<Task, number>> & { base: number };
 
 /** First matching pattern wins (patterns test "provider/modelId"). */

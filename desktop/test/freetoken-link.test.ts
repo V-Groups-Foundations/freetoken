@@ -308,6 +308,38 @@ async function main() {
     return (follow === true && s.bigJob === false && ai.stepsLeftNote(ai.MAX_STEPS - 9)?.includes("honest summary") && ai.stepsLeftNote(10) === null) || JSON.stringify({ follow, now: s.bigJob });
   });
 
+  await check("going in circles is caught: repeats, ping-pong between servers, new ports; the third time it must stop", async () => {
+    const s = ai.getSession("loops");
+    ai.startTurnState(s, { sessionId: "loops", mode: "agent", text: "fix the page" });
+    const act = (name: string, input: object, out = "ok", changed = false) => ai.noteAction(s, name, input, out, changed);
+    // the same inspect three times with nothing changed in between
+    const a = [act("inspect_preview", {}), act("inspect_preview", {}), act("inspect_preview", {})];
+    const first = a[2].includes("going in circles") && s.stuck === true && a[0] === "" && a[1] === "";
+    // a file change in between is progress
+    s.stuck = false;
+    act("inspect_preview", {}); act("edit_file", { path: "a.js" }, "Edited a.js", true); act("inspect_preview", {});
+    const progress = !s.stuck;
+    // frontend/backend ping-pong on changing ports
+    const pp = [
+      act("run_app", { command: "npx serve . -l 5173" }), act("run_app", { command: "node server.js" }), act("run_app", { command: "npx serve . -l 5174" }),
+    ];
+    const pingPong = pp[2].includes("going in circles") || pp.some((x) => x.includes("going in circles")) || (act("run_app", { command: "node server.js" }) + act("run_app", { command: "npx serve . -l 5175" }) + act("run_app", { command: "node server.js" })).includes("going in circles");
+    // third warning: stop, and changing or running anything is refused
+    act("app_output", {}); act("app_output", {}); const third = act("app_output", {});
+    const refused = await ai.execTool(s, "run_app", { command: "npm start" }, () => {}, "x");
+    const readOk = !(await ai.execTool(s, "list_dir", { path: "." }, () => {}, "y").catch((e) => ({ summary: String(e) }))).summary.startsWith("Stopped");
+    const sameMove = ai.actionSig("run_app", { command: "npx serve . -l 5173" }) === ai.actionSig("run_app", { command: "npx serve . -l 8080" });
+    return (first && progress && pingPong && third.includes("STOP") && s.mustStop === true && refused.summary.includes("going in circles") && readOk && sameMove)
+      || JSON.stringify({ first, progress, pingPong, third, refused: refused.summary, readOk, sameMove });
+  });
+
+  await check("thinking goes to a reasoning model: planning a big job, Plan mode, and getting unstuck", async () => {
+    const r = ftAi.stepRole;
+    return r({ stuck: true }, { mode: "agent" }, 9) === "reasoning" && r({}, { mode: "plan" }, 3) === "reasoning"
+      && r({ bigJob: true, planned: false }, { mode: "agent" }, 0) === "reasoning" && r({ bigJob: true, planned: false }, { mode: "agent" }, 1) === undefined
+      && r({ bigJob: true, planned: true }, { mode: "agent" }, 0) === undefined && r({}, { mode: "agent" }, 0) === undefined;
+  });
+
   await check("a frontend and its backend run together; the same command again restarts only that one", async () => {
     ws.setRoot(tmp);
     const server = (name: string) => `node -e "const s=require('http').createServer((q,r)=>r.end('${name}'));s.listen(0,()=>console.log('${name} at http://localhost:'+s.address().port))"`;

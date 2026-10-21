@@ -105,6 +105,16 @@ async function main() {
     return (text.includes("smaller steps") && done.stopReason === "stop" && !events.some((e) => e.type === "error")) || JSON.stringify({ text, done });
   });
 
+  await check("Plan mode asks FreeToken for a reasoning model; ordinary steps don't", async () => {
+    const before = fake.requests.length;
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "role-plan", mode: "plan", text: "what would you change?" }, (e) => { if (e.type === "done") r(); }));
+    const planned = fake.requests.slice(before).map((b: any) => b.task);
+    const mid = fake.requests.length;
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "role-ask", mode: "ask", text: "what is this?" }, (e) => { if (e.type === "done") r(); }));
+    const asked = fake.requests.slice(mid).map((b: any) => b.task);
+    return (planned.length > 0 && planned.every((t) => t === "reasoning") && asked.every((t) => t === undefined)) || JSON.stringify({ planned, asked });
+  });
+
   await check("the chat is told which model works on the task, and when FreeToken switches to another", async () => {
     const events: AI.AgentEvent[] = [];
     await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "models", mode: "agent", text: "switch models: I have created it" }, (e) => { events.push(e); if (e.type === "done") r(); }));
@@ -148,6 +158,25 @@ async function main() {
     await ai.execTool(s, "write_file", { path: "tmp.txt", contents: "x" }, () => {}, "w");
     const after = (await read()).summary;
     return !sums[1].startsWith("Skipped") && sums[2] === "Skipped repeated read_file" && after.startsWith("Read");
+  });
+
+  await check("long tasks: older steps become a running summary, written once per chunk, not every step", async () => {
+    const msgs: any[] = [{ role: "user", content: "earlier question" }, { role: "assistant", content: "earlier answer" }, { role: "user", content: "build the tracker" }];
+    for (let i = 0; i < 70; i++) msgs.push({ role: "assistant", content: `step ${i}`, tool_calls: [{ id: `c${i}`, type: "function", function: { name: "read_file", arguments: `{"path":"f${i}.js"}` } }] }, { role: "tool", tool_call_id: `c${i}`, content: `contents ${i} ` + "x".repeat(2500) });
+    const before = fake.requests.length;
+    let notes = 0;
+    const first = await ft.contextFor("long-task", msgs, 2, undefined, () => notes++);
+    const summariserCalls = fake.requests.length - before;
+    msgs.push({ role: "assistant", content: "one more", tool_calls: [{ id: "z", type: "function", function: { name: "list_dir", arguments: "{}" } }] }, { role: "tool", tool_call_id: "z", content: "ok" });
+    const second = await ft.contextFor("long-task", msgs, 2);
+    const reused = fake.requests.length - before === summariserCalls; // no new summary for one more step
+    const ids = new Set(second.flatMap((m: any) => (m.tool_calls ?? []).map((t: any) => t.id)));
+    const sent = JSON.stringify(first).length;
+    const small = await ft.contextFor("short-task", msgs.slice(0, 10), 2);
+    return (summariserCalls === 1 && notes === 1 && reused && first[0].content === "build the tracker" && String(first[1].content).includes("Your notes so far")
+      && first[2].role === "assistant" && sent < 100_000 && second.at(-1) === msgs.at(-1)
+      && second.filter((m: any) => m.role === "tool").every((m: any) => ids.has(m.tool_call_id)) && small.length === 10)
+      || JSON.stringify({ summariserCalls, notes, reused, len: first.length, sent, head: String(first[1]?.content).slice(0, 80) });
   });
 
   await check("long tasks are trimmed under FreeToken's 200-message limit with tool calls kept paired", () => {
