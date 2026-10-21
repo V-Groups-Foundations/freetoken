@@ -217,6 +217,11 @@ export interface Session {
   mode?: ChatRequest["mode"];
   /** times this turn was sent back for pasting code instead of building it */
   codeNudges?: number;
+  /** a Team-mode worker (its supervisor and the reviewer check the result) */
+  worker?: boolean;
+  /** web files changed since the agent last looked at the page (inspect_preview) */
+  unchecked?: boolean;
+  checkNudged?: boolean;
 }
 const sessions = new Map<string, Session>();
 /** Put a saved conversation back into a session that has none (after a window reload or app restart). */
@@ -444,8 +449,19 @@ export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "
  * ends with code in the reply and no file changed, send it back once to actually make the change.
  */
 export function buildNudge(s: Session, text: string, request: string): string | null {
-  if (!canAct(s.mode ?? "agent") || (s.codeNudges ?? 0) >= 1) return null;
+  if (!canAct(s.mode ?? "agent") || (s.codeNudges ?? 0) >= 3) return null;
+  // web files changed but nobody looked at the result: check it before calling it done
+  if (s.unchecked && runner.previewHost() && !s.checkNudged) {
+    s.checkNudged = true;
+    return "Before you finish, check your work like a careful engineer: make sure the app is running (run_app, e.g. npx serve . for a static site), then call inspect_preview and read the console errors and the page text. Fix every error you find (and anything that looks broken), check again, and only then summarise what works — never say it works without having looked.";
+  }
   if (s.turns[s.turns.length - 1]?.files.size) return null;
+  // claiming work that didn't happen: "I've created index.html" when no file changed this turn
+  if (/\b(I'?ve|I have|I) (just )?(created|built|written|updated|added|implemented|made|changed|fixed|modified)\b|\bFiles? (Created|Changed|Updated|Modified)\b/i.test(text)) {
+    s.codeNudges = (s.codeNudges ?? 0) + 1;
+    return "Your reply says you created or changed files, but no file in the project changed this turn (check your tool results — a write may have been refused). Never claim work that didn't happen. Either do it now with your tools (in Team mode: start agents with spawn_agent first), or tell the user plainly what you did NOT do and why.";
+  }
+  if ((s.codeNudges ?? 0) >= 1) return null;
   const blocks = text.match(/```[\s\S]*?```/g) ?? [];
   const codeLines = blocks.reduce((n, b) => n + b.split("\n").length - 2, 0);
   const asksToPaste = /\b(copy|paste)\b|replace [^.\n]{0,40}(placeholder|in your)|add (this|the following) to your/i.test(text);
@@ -479,6 +495,8 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
     if (why) return withNotices(s, { content: why, summary: why.startsWith("🔒") ? `Blocked — ${rel} belongs to another agent` : `Re-read needed — ${rel} changed` });
   }
   const r = await runTool(s, name, input, emit, id);
+  if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
+  if (name === "inspect_preview" && !/Preview empty|No preview/i.test(r.summary)) s.unchecked = false;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
   if (rel && WRITES.has(name)) team.noteWrite(s.id, rel, r.summary);
   return withNotices(s, r);
@@ -767,9 +785,20 @@ ${info?.others.length ? `Other agents right now:\n${info.others.join("\n")}\n` :
 `.trim();
 }
 
+/** Files the user attached to chats in this project (saved in .v-run/uploads), newest first. */
+async function uploadedFiles() {
+  const root = getRoot();
+  if (!root) return "";
+  const dir = path.join(root, ".v-run", "uploads");
+  const names = await fsp.readdir(dir).catch(() => [] as string[]);
+  if (!names.length) return "";
+  const list = names.sort().reverse().slice(0, 15).map((n) => `- .v-run/uploads/${n}`);
+  return `The user has attached these files in this project (newest first) — they're real project files: read and use them (read_file; for a PDF or image, extract what you need with a script) instead of asking for them again. They're inputs: build the app itself in the project folder, never inside .v-run/:\n${list.join("\n")}`;
+}
+
 export async function systemPrompt(mode: ChatRequest["mode"], task = "", worker?: ChatRequest["worker"]) {
   const teamPart = mode === "team" && !worker ? SUPERVISOR_BRIEF : worker ? workerBrief(worker) : "";
-  const [rules, mem, skillList] = await Promise.all([loadRules(), memory.memoryForPrompt(), skills.skillsForPrompt().catch(() => "")]);
+  const [rules, mem, skillList, uploads] = await Promise.all([loadRules(), memory.memoryForPrompt(), skills.skillsForPrompt().catch(() => ""), uploadedFiles()]);
   return [
     `You are an AI pair programmer inside a code editor, working in the user's project at ${getRoot()} on ${os.platform()}.`,
     canAct(mode) ? `Terminal commands run in ${process.platform === "win32" ? (runner.usingPwsh() ? "PowerShell 7 — use PowerShell syntax (e.g. $env:NAME=\"x\"; Get-ChildItem); && and || work, but not bash-only tools like printf, export or grep" : "Windows PowerShell 5.1 — use PowerShell syntax (e.g. $env:NAME=\"x\"; \"a\",\"b\" | python app.py), not bash (no printf, export or &&; chain commands with ;)") : "bash"}, in the project root, non-interactively, with a 2-minute limit.` : "",
@@ -784,6 +813,7 @@ export async function systemPrompt(mode: ChatRequest["mode"], task = "", worker?
     canAct(mode) ? "Build, don't paste: when the user wants something made or changed, change the project with your tools (write_file / edit_file / run_app). Never answer with whole files or long code for the user to copy-paste. If a key or file you need is missing, build it anyway with a clear placeholder, and say exactly what they must provide and where." : "",
     "Use the conversation: before answering, connect the request to what was said and done earlier in this chat (errors you saw, links, decisions, files you changed). If the user refers to something you can't find in the conversation or the project (\"the link\", \"that error\", \"what we discussed\"), say plainly that you don't see it and ask — don't guess, and don't search the code for words from it repeatedly.",
     teamPart,
+    uploads,
     "Memory: V-Run keeps a V.md memory (project V.md + the user's personal ~/.v-run/V.md), shown below when it exists. Follow it. Save one short line with the remember tool when the user tells you a preference or rule ('always…', 'never…', 'I prefer…' — use scope 'user' when it applies to every project), or when you learned a non-obvious fact that will matter next time. Good: \"Run the dev server with npm run dev (port 5173)\", \"Tests: npx vitest run; the e2e suite needs Chrome\", \"User prefers Tailwind over plain CSS\". Bad: anything describing what you just did (\"Fixed the navbar in 3 files\"), what is obvious from the code, temporary details, secrets. In Agent mode, when you finish a task in which you learned how to run, test or build the project, or hit a pitfall worth avoiding, and it isn't in V.md yet, save it before your final summary.",
     // a video is made as an HTML page too, but follows the html-video skill rather than the website brief
     mode !== "ask" && isVideoTask(task) ? "\nThis looks like a video / animation task: call use_skill with name \"html-video\" first and follow it." : "",
@@ -799,7 +829,10 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
   const s = getSession(req.sessionId);
   s.abort = new AbortController();
   s.mode = req.worker ? "agent" : req.mode;
+  s.worker = !!req.worker;
   s.codeNudges = 0;
+  s.unchecked = false;
+  s.checkNudged = false;
   s.seen.clear();
   s.idlePolls = 0;
   const allowed = toolNamesFor(req);

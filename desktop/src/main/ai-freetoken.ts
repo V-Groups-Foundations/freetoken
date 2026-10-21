@@ -81,6 +81,10 @@ export function truncateFreeToken(id: string, n: number) { const m = transcripts
 export function rateLimitWait(e: unknown, waits: number): number | null {
   const err = e as { status?: number; headers?: Headers | Record<string, string> } | null;
   if (err?.status && err.status >= 500 && err.status < 600) return waits < 2 ? 2000 * (waits + 1) : null;
+  // a stream that broke off mid-answer ("Upstream idle timeout exceeded", a reset connection): free
+  // providers drop long generations now and then — ask again rather than ending the whole task
+  if ((!err?.status || err.status === 408) && /idle timeout|timed? ?out|ECONNRESET|socket hang up|terminated|premature close|fetch failed|network error|stream (closed|ended|interrupted)|aborted by the server/i.test(String((e as Error)?.message ?? "")))
+    return waits < 2 ? 1500 * (waits + 1) : null;
   if (err?.status !== 429 || waits >= 6) return null;
   const h = err.headers;
   const raw = h instanceof Headers ? h.get("retry-after") : h?.["retry-after"];
@@ -122,7 +126,10 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   const s = getSession(req.sessionId); // shared: checkpoints, approvals, abort
   s.abort = new AbortController();
   s.mode = req.worker ? "agent" : req.mode;
+  s.worker = !!req.worker;
   s.codeNudges = 0;
+  s.unchecked = false;
+  s.checkNudged = false;
   s.seen.clear();
   s.idlePolls = 0;
   let msgs = transcripts.get(req.sessionId);
@@ -262,8 +269,14 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
     emit({ type: "error", message: describeFreeTokenError(e) });
     emit({ type: "done", stopReason: "error" });
   } finally {
-    // images are big: later turns keep the text and the saved paths, not the pictures
-    if (att.images.length && msgs[userIndex]?.role === "user") msgs[userIndex] = { role: "user", content: `${userText}\n\n(${att.images.length} image${att.images.length > 1 ? "s were" : " was"} shown with this message; the files are in .v-run/uploads.)` };
+    // attachments are big: later turns keep a note with the saved path instead of pictures and file
+    // contents (sending a 40k-token floor plan with every message made each turn slow and costly)
+    if ((att.images.length || att.texts.length) && msgs[userIndex]?.role === "user") {
+      let light = userText;
+      for (const t of att.texts) light = light.replace(t, `${t.split("\n")[0].replace(/:$/, "")} — contents were shown in this turn; read_file it again if you need them.`);
+      if (att.images.length) light += `\n\n(${att.images.length} image${att.images.length > 1 ? "s were" : " was"} shown with this message; the files are in .v-run/uploads.)`;
+      msgs[userIndex] = { role: "user", content: light };
+    }
   }
 }
 

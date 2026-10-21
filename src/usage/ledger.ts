@@ -29,6 +29,16 @@ export function usageToday(db: DB, userId: string, now = new Date()) {
   return usageSince(db, userId, dayStart(now));
 }
 
+/** Failed or rate-limited attempts per provider/model since `start` (auto routing steps around them). */
+export async function recentFailures(db: DB, userId: string, start: Date) {
+  const rows = await db
+    .select({ provider: usageEvents.provider, modelId: usageEvents.modelId, n: sql<number>`count(*)::int` })
+    .from(usageEvents)
+    .where(and(eq(usageEvents.userId, userId), sql`${usageEvents.status} <> 'ok'`, gte(usageEvents.createdAt, start)))
+    .groupBy(usageEvents.provider, usageEvents.modelId);
+  return new Map(rows.map((r) => [usageKey(r.provider, r.modelId), r.n]));
+}
+
 /** Successful requests and tokens per provider/model since `start`. */
 export async function usageSince(db: DB, userId: string, start: Date) {
   const rows = await db

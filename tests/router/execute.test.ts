@@ -67,8 +67,8 @@ describe('routeChat', () => {
     const handler: Handler = (url) =>
       url.includes(GROQ) ? new Response('{"error":{"message":"model_not_found"}}', { status: 404 }) : okJson();
     await run(handler).p;
-    // Next call must still try groq (not cooled) — contrast with the 429 case which skips it.
-    const second = run(handler);
+    // groq isn't cooled (unlike after a 429): when gemini fails next time, groq is still tried
+    const second = run((url) => (url.includes(GROQ) ? okJson('groq again') : new Response('{}', { status: 500 })));
     await second.p;
     expect(second.f.calls.some((c) => c.url.includes(GROQ))).toBe(true);
   });
@@ -94,6 +94,15 @@ describe('routeChat', () => {
     const out = await run(() => new Response('{}', { status: 429 })).p;
     expect(out).toMatchObject({ ok: false, status: 429, code: 'all_providers_exhausted' });
     expect(!out.ok && out.message).toContain('/connect');
+  });
+
+  it("falls back when the model fumbles a tool call or the request is too long for it (a model-side 400)", async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    const out = await run((url) => (url.includes(GROQ)
+      ? new Response(JSON.stringify({ error: { message: "Failed to call a function. Please adjust your prompt. See 'failed_generation' for more details.", code: 'tool_use_failed' } }), { status: 400 })
+      : okJson('from gemini'))).p;
+    expect(out.ok).toBe(true);
   });
 
   it('does not fall back on a bad request', async () => {

@@ -1,9 +1,14 @@
-import { models } from '@/db/schema';
+import { and, eq } from 'drizzle-orm';
+import { models, providerLimits } from '@/db/schema';
 import { loadCredentials, markInvalid, touchKey } from '@/keys/service';
 import { callChat } from '@/providers/client';
 import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
-import { estimateTokens, recordUsage, usageToday } from '@/usage/ledger';
+import { estimateTokens, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
+import { detectTask } from './quality';
+
+/** 400s caused by the model or its size limits rather than the request (Groq: "Failed to call a function"). */
+const MODEL_SIDE_400 = /failed to call a function|tool_use_failed|failed_generation|invalid tool call|context.{0,12}(length|window)|maximum context|too many tokens|reduce the length|request too large|prompt is too long/i;
 import { tapSseUsage } from '@/usage/tap';
 import { parseRateHeaders, saveLimits } from '@/usage/limits';
 import { isAuto, parseModelRef, selectCandidates, type CatalogModel } from './select';
@@ -33,9 +38,11 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   // Keyless providers (the built-in starter, Kilo, LLM7) need no key of the user's; they're added when
   // their models are in the catalog and sort after the user's own providers (high priority numbers).
   // A user who adds a key for one of them gets their key used instead.
+  const keyless = new Set<string>();
   for (const id of keylessIds()) {
     if (!creds.has(id) && catalog.some((m) => m.provider === id && m.enabled)) {
       creds.set(id, { creds: { key: '', extra: null }, excludedFromAuto: false });
+      keyless.add(id);
     }
   }
   if (creds.size === 0) {
@@ -61,6 +68,10 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
   const needsVision = hasImageContent(body.messages);
   const promptEstimate = estimateTokens(body.messages);
+  // models the provider says are out of requests until their window resets
+  const nowMs = now();
+  const exhausted = new Set((await deps.db.select().from(providerLimits).where(and(eq(providerLimits.userId, userId), eq(providerLimits.remainingRequests, 0))))
+    .filter((l) => !l.requestsResetAt || l.requestsResetAt.getTime() > nowMs).map((l) => `${l.provider}/${l.modelId}`));
   const selectInput = {
     requested,
     models: catalog,
@@ -71,6 +82,10 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     needsTools: Array.isArray(body.tools) && body.tools.length > 0,
     needsVision,
     canSee: supportsVision,
+    task: detectTask(body),
+    exhausted,
+    recentFailures: await recentFailures(deps.db, userId, new Date(nowMs - 10 * 60_000)),
+    keyless,
   };
   const candidates = selectCandidates(selectInput);
   // Empty even with quota ignored: no connected model can serve this request at all.
@@ -105,11 +120,15 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
     if (!r.ok) {
       const e = r.error;
+      console.warn(`[router] ${m.provider}/${m.modelId} failed (${e.kind}${'status' in e && e.status ? ` ${e.status}` : ''}): ${String(e.message).slice(0, 300)}`);
       await recordUsage(deps.db, {
         ...usageBase, promptTokens: 0, completionTokens: 0, latencyMs: now() - started,
         status: e.kind === 'rate_limit' ? 'rate_limited' : 'error',
       });
-      if (e.kind === 'bad_request') return fail(e.status, 'upstream_bad_request', e.message);
+      // a 400 that's really the model's fault (a malformed tool call it generated) or too much for this
+      // model's context: another model can take it. Anything else is the request's fault: report it.
+      if (e.kind === 'bad_request' && !MODEL_SIDE_400.test(String(e.message))) return fail(e.status, 'upstream_bad_request', e.message);
+      if (e.kind === 'bad_request') continue;
       if (e.kind === 'not_found') {
         // Retired/unavailable model: skip just this model, leave the provider's others usable.
         continue;

@@ -269,7 +269,11 @@ async function main() {
     const built = ai.buildNudge(s, dump, "build it");
     s.mode = "ask"; s.turns[0].files.clear();
     const ask = ai.buildNudge(s, dump, "build it");
-    return !!first?.includes("write the files now") && second === null && question === null && built === null && ask === null;
+    // a false claim of work is caught too
+    s.mode = "agent"; s.codeNudges = 0; s.turns[0].files.clear();
+    const lie = ai.buildNudge(s, "I've created a 3D model of the building.\n\n**Files Created:**\n- index.html", "can u build it");
+    return !!first?.includes("write the files now") && second === null && question === null && built === null && ask === null
+      && !!lie?.includes("Never claim work that didn't happen");
   });
 
   await check("chats are saved and restored: the transcript, and the agent's memory (images dropped)", async () => {
@@ -333,7 +337,20 @@ async function main() {
     const w = ftAi.rateLimitWait;
     return w({ status: 429, headers: new Headers({ "retry-after": "3" }) }, 0) === 3000
       && w({ status: 429, headers: {} }, 2) === 16000 && w({ status: 429 }, 5) === 30000
-      && w({ status: 429 }, 6) === null && w({ status: 502 }, 0) === 2000 && w({ status: 502 }, 2) === null && w({ status: 400 }, 0) === null && w(new Error("x"), 0) === null;
+      && w({ status: 429 }, 6) === null && w({ status: 502 }, 0) === 2000 && w({ status: 502 }, 2) === null && w({ status: 400 }, 0) === null && w(new Error("x"), 0) === null
+      // a stream dropped mid-answer is asked again (twice), not the end of the task
+      && w(new Error("FreeToken error : Upstream idle timeout exceeded"), 0) === 1500 && w(new Error("socket hang up"), 1) === 3000
+      && w(new Error("Upstream idle timeout exceeded"), 2) === null;
+  });
+
+  await check("a server listening on all interfaces ([::] / 0.0.0.0) opens as localhost", async () => {
+    ws.setRoot(tmp);
+    const urls: string[] = [];
+    runner.onRunEvent((e) => e.type === "url" && urls.push(e.url));
+    await runner.startApp(`node -e "console.log('Serving HTTP on :: port 8080 (http://[::]:8080/) ...'); setTimeout(() => {}, 3000)"`);
+    await runner.settle(5000);
+    await runner.stopAppAndWait();
+    return urls.includes("http://localhost:8080/") || JSON.stringify(urls);
   });
 
   await check("runner finds a server address printed without http:// (\"started on 0.0.0.0:8501\")", async () => {

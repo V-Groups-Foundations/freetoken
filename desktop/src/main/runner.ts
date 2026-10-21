@@ -73,7 +73,8 @@ function append(text: string) {
   if (!url) {
     const m = URL_RE.exec(out);
     const bare = m ? null : BARE_RE.exec(out);
-    if (m) url = m[0].replace("0.0.0.0", "localhost").replace(/[.,;:]+$/, "");
+    // "all interfaces" addresses (0.0.0.0, [::]) aren't something a browser can open: use localhost
+    if (m) url = m[0].replace(/0\.0\.0\.0|\[::\]/, "localhost").replace(/[.,;:]+$/, "");
     else if (bare) url = `http://localhost:${bare[1]}`;
     if (url) listener({ type: "url", url });
   }
