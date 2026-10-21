@@ -5,7 +5,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-  READ_ONLY, TOOLS, beginTurn, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
+  READ_ONLY, TOOLS, beginTurn, buildNudge, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
   type AgentEvent, type ChatRequest, type ToolName,
 } from "./ai";
 import { prepareAttachments, type Prepared } from "./attachments";
@@ -122,6 +122,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   const s = getSession(req.sessionId); // shared: checkpoints, approvals, abort
   s.abort = new AbortController();
   s.mode = req.worker ? "agent" : req.mode;
+  s.codeNudges = 0;
   s.seen.clear();
   s.idlePolls = 0;
   let msgs = transcripts.get(req.sessionId);
@@ -213,7 +214,11 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         content: text || null,
         ...(uses.length ? { tool_calls: uses.map((u) => ({ id: u.id, type: "function" as const, function: { name: u.name, arguments: u.args || "{}" } })) } : {}),
       });
-      if (!uses.length) return emit({ type: "done", stopReason: finish ?? "stop" });
+      if (!uses.length) {
+        const nudge = buildNudge(s, text, req.text);
+        if (nudge) { msgs.push({ role: "user", content: nudge }); emit({ type: "text", delta: "\n\n*Writing it into the project instead…*\n\n" }); continue; }
+        return emit({ type: "done", stopReason: finish ?? "stop" });
+      }
       if (finish === "length") throw new Error("A tool call was cut off by the output limit. Try a smaller step.");
 
       for (const u of uses) {

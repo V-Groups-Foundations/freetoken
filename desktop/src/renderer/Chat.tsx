@@ -43,6 +43,8 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   inspect_preview: { label: "Inspect page", verb: "Looking at the page" },
   remember: { label: "Remember", arg: "fact", verb: "Saving to memory" },
   use_skill: { label: "Skill", arg: "name", verb: "Loading skill" },
+  web_search: { label: "Search the web", arg: "query", verb: "Searching the web" },
+  fetch_url: { label: "Read", arg: "url", verb: "Reading the page" },
   save_skill: { label: "Learn skill", arg: "name", verb: "Learning skill" },
   install_skills: { label: "Install skills", arg: "source", verb: "Installing skills" },
   export_video: { label: "Export video", arg: "path", verb: "Rendering video" },

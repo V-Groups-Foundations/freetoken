@@ -237,6 +237,41 @@ async function main() {
       && vid.includes('use_skill with name "html-video"') && !vid.includes("Building websites and UIs");
   });
 
+  await check("web tools: search results are parsed; APIs are read directly, pages through the reader", async () => {
+    const web = await import("../src/main/web");
+    const ddg = `<table><tr><td><a rel="nofollow" href="https://skyscraperpage.com/b130572" class='result-link'>Sumitomo Fudosan Akihabara Building &amp; more</a></td></tr>
+      <tr><td class='result-snippet'>19 floors, <b>completed</b> 2009</td></tr></table>`;
+    const calls: string[] = [];
+    const fake = (async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes("duckduckgo")) return new Response(ddg, { headers: { "content-type": "text/html" } });
+      if (String(url).includes("nominatim")) return Response.json([{ lat: "35.7", lon: "139.77", display_name: "Sumitomo Fudosan Akihabara Building" }]);
+      if (String(url).startsWith("https://r.jina.ai/")) return Response.json({ data: { title: "Leasing page", content: "# Typical floor\n1,069 m²" } });
+      return new Response("<html><title>x</title><body>page</body></html>", { headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+    const hits = await web.webSearch("sumitomo akihabara", 5, fake);
+    const api = await web.fetchUrl("https://nominatim.openstreetmap.org/search?format=json&q=akihabara", 0, fake);
+    const page = await web.fetchUrl("office.sumitomo-rd.co.jp/building", 0, fake);
+    return hits[0]?.url === "https://skyscraperpage.com/b130572" && hits[0].title.includes("& more") && hits[0].snippet === "19 floors, completed 2009"
+      && api.via === "direct" && api.text.includes("139.77") && page.via === "reader" && page.text.includes("1,069 m²") && page.url.startsWith("https://")
+      && ai.READ_ONLY.has("web_search") && ai.toolNamesFor({ mode: "ask" }).has("fetch_url") || JSON.stringify({ hits, api: api.via, page: page.via });
+  });
+
+  await check("code pasted instead of building: sent back once to write the files (not for questions or once files changed)", async () => {
+    const s = ai.getSession("nudge");
+    s.mode = "agent"; s.codeNudges = 0; s.turns = [{ provider: "ft", hist: 0, files: new Map() }];
+    const dump = "Here's the code:\n```html\n" + Array.from({ length: 20 }, (_, i) => `<p>${i}</p>`).join("\n") + "\n```\nCopy this into your index.html.";
+    const first = ai.buildNudge(s, dump, "yes start building it");
+    const second = ai.buildNudge(s, dump, "yes start building it");
+    s.codeNudges = 0;
+    const question = ai.buildNudge(s, dump, "what is a floor plan?");
+    s.turns[0].files.set("index.html", null);
+    const built = ai.buildNudge(s, dump, "build it");
+    s.mode = "ask"; s.turns[0].files.clear();
+    const ask = ai.buildNudge(s, dump, "build it");
+    return !!first?.includes("write the files now") && second === null && question === null && built === null && ask === null;
+  });
+
   await check("chats are saved and restored: the transcript, and the agent's memory (images dropped)", async () => {
     const chats = await import("../src/main/chats");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-chats-"));

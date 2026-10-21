@@ -105,7 +105,7 @@ export async function loadSkill(name: string, file?: string) {
   return { skill: s, text: md.length > MAX_SKILL_CHARS ? `${md.slice(0, MAX_SKILL_CHARS)}\n…(truncated)` : md, files };
 }
 
-const STOP = new Set("it is be do so to of in on at as by an or no go up we me my us am if the and for with that this from into your you are use using when what which will can should make made build create add new any all some about how need want like just also have has get one two more most very only than then them they its it's our out".split(" "));
+const STOP = new Set("ask asks asked other others user users provide provides good great such call calls case cases give gives given guide please thanks thank help helps let lets now later first last next same different something anything thing things way ways really still even every each where there here then them their they those these would could should might will shall must want wants need needs like using used use make made able want also just only very much many more most some any all it is be do so to of in on at as by an or no go up we me my us am if the and for with that this from into your you are use using when what which will can should make made build create add new any all some about how need want like just also have has get one two more most very only than then them they its it's our out".split(" "));
 // "animate"/"animation"/"animated" → "animat"; "tests"/"testing" → "test"
 const SHORT = new Set(["ui", "ux", "3d", "ai", "js", "db", "pr", "ci", "qa", "go"]);
 const stem = (w: string) => w.replace(/(?:ations?|ings?|ions?|ed|es|ly|e|s)$/, "").slice(0, 6) || w.slice(0, 6);
@@ -140,7 +140,9 @@ const words = (t: string, expand = false) => {
  * "page" or "app"); a name word counts double; a weak overlap loads nothing.
  */
 export async function matchSkills(request: string, max = 2, skip: Set<string> = new Set(), debug?: (scores: { name: string; score: number; hits: string[] }[]) => void) {
-  const req = words(request, true);
+  // links, code and coordinates say nothing about which skill fits ("!3d35.70" in a Maps link isn't 3D)
+  const plain = request.replace(/```[\s\S]*?```/g, " ").replace(/https?:\/\/\S+/g, " ").replace(/[-+]?\d+\.\d{3,}/g, " ");
+  const req = words(plain, true);
   if (!req.size) return [] as Skill[];
   const all = (await listSkills()).map((s) => ({ s, name: words(s.name.replace(/-/g, " ")), desc: words(s.description) }));
   const df = new Map<string, number>();
@@ -153,7 +155,8 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
     return { s: x.s, score, hits };
   });
   debug?.([...scored].sort((a, b) => b.score - a.score).slice(0, 5).map((x) => ({ name: x.s.name, score: Math.round(x.score * 10) / 10, hits: x.hits })));
-  const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD);
+  // at least two different meaningful words must match: one shared word ("api") isn't a reason
+  const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD && new Set(x.hits).size >= 2);
   strong.sort((a, b) => b.score - a.score);
   // a second skill only when it's nearly as good a match as the first
   return strong.filter((x, i) => i === 0 || x.score >= strong[0].score * 0.9).slice(0, max).map((x) => x.s);

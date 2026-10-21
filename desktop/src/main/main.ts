@@ -12,6 +12,7 @@ import * as skills from "./skills";
 import * as team from "./team";
 import * as chats from "./chats";
 import * as video from "./video";
+import * as web from "./web";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText } from "./workspace";
 
@@ -73,6 +74,19 @@ const ftToken = () => decrypt(settings.ftTokenEnc) || process.env.FREETOKEN_API_
 ai.configure({ apiKey: () => storedKey() || process.env.ANTHROPIC_API_KEY || "", model: () => settings.model || ai.DEFAULT_MODEL });
 /** The FreeToken API base (…/api/v1): env override, else Settings. Everything FreeToken-related uses this. */
 const ftBase = () => process.env.FREETOKEN_URL || settings.ftUrl || ft.FREETOKEN_DEFAULT_URL;
+// the agent's web_search goes through FreeToken's Tavily search when the user connected a key there
+web.setFreeTokenSearch(async (query) => {
+  const token = ftToken();
+  if (!token) return null;
+  const res = await fetch(`${new URL(ftBase()).origin}/api/web/search`, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ query }), signal: AbortSignal.timeout(20_000),
+  }).catch(() => null);
+  if (!res?.ok) return null; // no Tavily key connected (400) or FreeToken not running: other engines take over
+  const j = (await res.json()) as { answer?: string | null; hits?: { title: string; url: string; snippet: string }[] };
+  const hits = j.hits ?? [];
+  return j.answer ? [{ title: "Summary", url: hits[0]?.url ?? "", snippet: j.answer }, ...hits] : hits;
+});
 ft.configureFreeToken({ url: ftBase, token: ftToken, model: () => settings.ftModel || "auto-smart" });
 const useFreeToken = () => (process.env.CURSOR_REMAKE_PROVIDER ?? settings.provider) === "freetoken";
 const errorText = (e: unknown) => (useFreeToken() ? ft.describeFreeTokenError(e) : ai.describeError(e));

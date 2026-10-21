@@ -1,13 +1,14 @@
 import { z } from 'zod';
 import { loadCredentials } from '@/keys/service';
-import { sessionUserId } from '@/lib/session';
+import { resolveUserId } from '@/server/identity';
 import { getDeps } from '@/server/deps';
 import { searchWeb } from '@/web/search';
 
 const schema = z.object({ query: z.string().trim().min(1).max(400) });
 
+/** Browser session or an ft_ token (V-Run's agent searches through here when you've connected Tavily). */
 export async function POST(req: Request) {
-  const uid = await sessionUserId();
+  const uid = await resolveUserId(req);
   if (!uid) return Response.json({ error: 'Sign in first.' }, { status: 401 });
 
   const parsed = schema.safeParse(await req.json().catch(() => null));
