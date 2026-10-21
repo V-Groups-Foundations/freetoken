@@ -98,7 +98,7 @@ export const schemas = {
   app_input: z.object({ text: z.string() }),
   stop_app: z.object({}).passthrough(),
   open_preview: z.object({ url: z.string().regex(/^https?:\/\//i, "url must start with http:// or https://") }),
-  inspect_preview: z.object({}).passthrough(),
+  inspect_preview: z.object({ url: z.string().optional(), script: z.string().optional() }).passthrough(),
 };
 export type ToolName = keyof typeof schemas;
 
@@ -131,7 +131,7 @@ export const TOOLS: Tool[] = [
   { name: "open_preview", description: "Load a URL (usually the app's localhost address) in the editor's preview pane.",
     input_schema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
   { name: "inspect_preview", description: "Look at the page in the preview pane: URL, title, visible text, console errors and warnings (and a screenshot when supported). Use it after starting or changing a web app. When something renders wrong with no error, debug it with `script` instead of guessing: it runs JavaScript in the page and returns the result.",
-    input_schema: { type: "object", properties: { script: { type: "string", description: "Optional JavaScript to run in the page; the value of its last expression is returned (async is fine). E.g. `[innerWidth, innerHeight, document.querySelector('canvas')?.getBoundingClientRect()]`. Variables inside a <script type=module> aren't global: expose what you need first (window.app = { scene, camera }) and read it here." } } } },
+    input_schema: { type: "object", properties: { url: { type: "string", description: "Optional address to load (default: the page open now). The page is always reloaded first, so you see your latest changes." }, script: { type: "string", description: "Optional JavaScript to run in the page; the value of its last expression is returned (async is fine). E.g. `[innerWidth, innerHeight, document.querySelector('canvas')?.getBoundingClientRect()]`. Variables inside a <script type=module> aren't global: expose what you need first (window.app = { scene, camera }) and read it here." } } } },
   { name: "remember", description: "Save one lasting fact to V-Run's memory (V.md), which is read at the start of every future chat. Use it when the user states a preference or rule ('always…', 'never…', 'we use…'), or when you learn a non-obvious project fact worth keeping (how to run/test/build it, a gotcha). One short self-contained line. scope 'project' (default) = this project's V.md; 'user' = the user's personal memory for all projects. Never store secrets or keys.",
     input_schema: { type: "object", properties: { fact: { type: "string" }, scope: { type: "string", enum: ["project", "user"] } }, required: ["fact"] } },
   { name: "web_search", description: "Search the web. Returns titles, links and snippets. Use it to research anything you don't know or that may have changed: library docs and versions, APIs, error messages, facts about a place, company or building, free services. Then read the best pages with fetch_url.",
@@ -229,6 +229,8 @@ export interface Session {
   planned?: boolean;
   planNudged?: boolean;
   doneSteps?: number;
+  /** replies dropped this turn for hitting the output limit */
+  lengthRetries?: number;
 }
 const sessions = new Map<string, Session>();
 /** Put a saved conversation back into a session that has none (after a window reload or app restart). */
@@ -514,6 +516,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   const followUp = /(build|make|create|do|start|implement|go ahead)/i.test(req.text) && isBigJob(earlier);
   s.bigJob = canAct(s.mode) && !req.worker && s.mode !== "team" && (isBigJob(req.text) || followUp);
   s.planned = false;
+  s.lengthRetries = 0;
   s.planNudged = false;
 }
 
@@ -561,7 +564,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   }
   const r = await runTool(s, name, input, emit, id);
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
-  if (name === "inspect_preview" && !/Preview empty|No preview/i.test(r.summary)) s.unchecked = false;
+  if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) s.unchecked = false;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
   if (rel && WRITES.has(name)) team.noteWrite(s.id, rel, r.summary);
   const plan = planNotes(s, name, input);
@@ -694,7 +697,16 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       return { content: `Opened ${input.url} in the preview pane — use inspect_preview to see it.`, summary: `Preview: ${input.url}` };
     }
     case "inspect_preview": {
-      const page = await runner.previewHost()?.inspect();
+      // always look at the current files: (re)load the page first — the address asked for, else the one
+      // open now — so an edit made a moment ago is never judged by the old page (and its old console)
+      const host = runner.previewHost();
+      const target = typeof input?.url === "string" && /^https?:\/\//.test(input.url) ? input.url : (await host?.inspect())?.url;
+      if (host && target && /^https?:/.test(target)) {
+        // one try, time-limited: a page that doesn't load is the finding (the server may have stopped)
+        const err = await Promise.race([host.open(target), new Promise<string>((r) => setTimeout(() => r("it took longer than 15 seconds"), 15_000))]);
+        if (err) return { content: `Couldn't load ${target}: ${err}\n\n${runner.describe()}\n\nStart the app with run_app if it isn't running, then inspect again.`, summary: `Page didn't load: ${target}` };
+      }
+      const page = await host?.inspect();
       if (!page) return { content: "Nothing is open in the preview pane. Start the app with run_app or use open_preview.", summary: "Preview empty" };
       const errors = page.console.filter((l) => /^\[(error|warning)\]/.test(l)).length;
       // a probe: run JavaScript in the page and see the result (camera position, scene contents, DOM sizes…)

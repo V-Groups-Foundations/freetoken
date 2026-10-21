@@ -33,6 +33,13 @@ describe('tapSseUsage', () => {
     expect(out).toBe(chunks.join(''));
     expect(result).toEqual({ usage: { promptTokens: 7, completionTokens: 2 }, completionChars: 5, failed: false });
   });
+  it('an error event mid-stream counts as a failure (so routing steps around that model)', async () => {
+    let result: { failed: boolean; error?: string } | undefined;
+    const chunks = ['data: {"choices":[{"delta":{"content":"<html>"}}]}\n\n', 'data: {"error":{"message":"Upstream idle timeout exceeded","code":502}}\n\n'];
+    const out = await drain(tapSseUsage(sse(chunks).body!, (r) => { result = r; }));
+    expect(out).toBe(chunks.join('')); // the client still sees the error
+    expect(result).toMatchObject({ failed: true, error: 'Upstream idle timeout exceeded' });
+  });
   it('counts characters when there is no usage chunk, across split lines', async () => {
     let result: { usage: unknown; completionChars: number } | undefined;
     await drain(tapSseUsage(sse(['data: {"choices":[{"delta":{"con', 'tent":"abcd"}}]}\n\n']).body!, (r) => { result = r; }));

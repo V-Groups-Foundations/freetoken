@@ -97,6 +97,14 @@ async function main() {
     return !!waited && Date.now() - t0 >= 900 && text.includes("FreeToken says") && !events.some((e) => e.type === "error");
   });
 
+  await check("a reply cut off by the output limit is dropped and asked again in smaller steps", async () => {
+    const events: AI.AgentEvent[] = [];
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "toolong", mode: "ask", text: "too long test" }, (e) => { events.push(e); if (e.type === "done") r(); }));
+    const text = events.filter((e) => e.type === "text").map((e: any) => e.delta).join("");
+    const done = events.find((e) => e.type === "done") as any;
+    return (text.includes("smaller steps") && done.stopReason === "stop" && !events.some((e) => e.type === "error")) || JSON.stringify({ text, done });
+  });
+
   await check("<think> reasoning is split from the answer even when tags are cut across chunks", async () => {
     const { thinkSplitter } = await import("../src/main/ai-freetoken");
     const split = thinkSplitter();
@@ -159,6 +167,10 @@ async function main() {
     const started = await ai.execTool(s, "run_app", { command: "node server.js" }, emit, "a1");
     const url = /http:\/\/localhost:\d+/.exec(started.content)?.[0];
     const page = await ai.execTool(s, "inspect_preview", {}, emit, "a2");
+    // every inspect reloads the page first (never judges an edit by the old page), at the address asked for
+    const reloaded = opened.length === 2 && opened[1] === opened[0];
+    await ai.execTool(s, "inspect_preview", { url: `${url}/about` }, emit, "a2b");
+    const followed = opened.at(-1) === `${url}/about`;
     const res = url ? await fetch(url).then((r) => r.text()) : "";
     await ai.execTool(s, "run_app", { command: "node echo.js" }, emit, "a3"); // replaces (stops) the server
     const serverDown = url ? await fetch(url).then(() => false, () => true) : false;
@@ -167,7 +179,7 @@ async function main() {
     runner.setPreviewHost(null);
     if (!url || opened[0] !== url || !res.includes("hi")) throw new Error(started.content);
     return page.content.includes("Hello from test app") && page.content.includes("[error] boom") && page.summary.includes("1 console")
-      && serverDown && typed.content.includes("echo:hello") && stopped.summary === "Stopped the app";
+      && reloaded && followed && serverDown && typed.content.includes("echo:hello") && stopped.summary === "Stopped the app";
   });
 
   await check("bad token → clear message, transcript stays usable", async () => {

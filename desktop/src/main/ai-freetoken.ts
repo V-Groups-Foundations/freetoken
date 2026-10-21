@@ -258,6 +258,15 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
 
       // GPT-OSS models sometimes leak their channel markup into the name ("write_file<|channel|>commentary")
       const uses = calls.filter(Boolean).map((cl, i) => ({ ...cl, name: cl.name.split("<|")[0].trim(), id: cl.id || `call_${turn}_${i}` }));
+      // the reply hit the output limit (a whole app in one write, or all the budget spent thinking):
+      // drop it and ask again for a smaller step, instead of ending the task
+      if (finish === "length" && (s.lengthRetries ?? 0) < 2) {
+        s.lengthRetries = (s.lengthRetries ?? 0) + 1;
+        reportModel(stepModel, false, "hit the output limit");
+        msgs.push({ role: "user", content: "Your last reply hit the output limit before it finished, so it was discarded. Work in smaller steps: think briefly, then make one change per tool call — write a big file as a skeleton first and add each section with edit_file (under ~250 lines per call)." });
+        emit({ type: "text", delta: "\n\n*That reply was too long — continuing in smaller steps…*\n\n" });
+        continue;
+      }
       msgs.push({
         role: "assistant",
         content: text || null,

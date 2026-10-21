@@ -7,8 +7,9 @@ import type { Deps } from '@/server/deps';
 import { estimateTokens, learnedScores, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
 import { detectTask } from './quality';
 
-/** 400s caused by the model or its size limits rather than the request (Groq: "Failed to call a function"). */
-const MODEL_SIDE_400 = /failed to call a function|tool_use_failed|failed_generation|invalid tool call|context.{0,12}(length|window)|maximum context|too many tokens|reduce the length|request too large|prompt is too long/i;
+/** 400s caused by the model, its size limits or a gateway's upstream rather than the request (Groq: "Failed to call
+ * a function"; OpenRouter / Kilo: "Provider returned error"). Another model can take them. */
+const MODEL_SIDE_400 = /failed to call a function|tool_use_failed|failed_generation|invalid tool call|context.{0,12}(length|window)|maximum context|too many tokens|reduce the length|request too large|prompt is too long|provider returned error|upstream (error|request failed)/i;
 import { tapSseUsage } from '@/usage/tap';
 import { parseRateHeaders, saveLimits } from '@/usage/limits';
 import { isAuto, parseModelRef, selectCandidates, type CatalogModel } from './select';
@@ -157,7 +158,8 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     };
 
     if (stream && r.response.body) {
-      const tapped = tapSseUsage(r.response.body, ({ usage, completionChars, failed }) => {
+      const tapped = tapSseUsage(r.response.body, ({ usage, completionChars, failed, error }) => {
+        if (failed) console.warn(`[router] ${m.provider}/${m.modelId} broke off mid-stream: ${error ?? 'connection lost'}`);
         recordUsage(deps.db, {
           ...usageBase,
           promptTokens: usage?.promptTokens ?? promptEstimate,

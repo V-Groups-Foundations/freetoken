@@ -183,6 +183,13 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
         res.writeHead(400, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: { message: "Tool call validation failed: attempted to call tool 'repo_browser.print_tree' which was not in request.tools", type: "invalid_request_error", code: "tool_use_failed" } }));
       }
+      // mimic a model spending its whole output budget (finish_reason "length") until told to take smaller steps
+      if (/too long test/i.test(lastUserText(body)) && !body.messages.some((m: any) => /hit the output limit/.test(String(m.content)))) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({ id: "len", object: "chat.completion.chunk", created: 0, model: "fake/model", choices: [{ index: 0, delta: { role: "assistant", content: "Let me write everything at on" }, finish_reason: "length" }] })}\n\n`);
+        res.write("data: [DONE]\n\n");
+        return res.end();
+      }
       const blocks = freeTokenScript(body);
       const id = `chatcmpl-${++n}`;
       const base = { id, object: "chat.completion.chunk", created: 0, model: "fake/model" };

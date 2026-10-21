@@ -105,6 +105,15 @@ describe('routeChat', () => {
     expect(out.ok).toBe(true);
   });
 
+  it("falls back on a gateway's vague 400 (OpenRouter / Kilo: 'Provider returned error' means its upstream failed)", async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    const out = await run((url) => (url.includes(GROQ)
+      ? new Response(JSON.stringify({ error: { message: 'Provider returned error', code: 400 } }), { status: 400 })
+      : okJson('from gemini'))).p;
+    expect(out.ok).toBe(true);
+  });
+
   it('does not fall back on a bad request', async () => {
     await connect('groq', 'gsk_mine');
     await connect('gemini', 'AIza_mine');

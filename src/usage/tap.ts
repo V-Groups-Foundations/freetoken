@@ -2,6 +2,8 @@ export interface TapResult {
   usage: { promptTokens: number; completionTokens: number } | null;
   completionChars: number;
   failed: boolean;
+  /** the provider reported an error inside the stream (e.g. "Upstream idle timeout exceeded") */
+  error?: string;
 }
 
 /** OpenAI's stream_options.include_usage adds a last chunk with no choices, only usage. */
@@ -25,11 +27,12 @@ export function tapSseUsage(
   let usage: TapResult['usage'] = null;
   let completionChars = 0;
   let finished = false;
+  let streamError: string | undefined; // an error event mid-stream: the answer broke off, so it failed
 
   const finish = (failed: boolean) => {
     if (finished) return;
     finished = true;
-    onDone({ usage, completionChars, failed });
+    onDone({ usage, completionChars, failed: failed || !!streamError, ...(streamError ? { error: streamError } : {}) });
   };
 
   /** Reads one line; returns true when it's the usage-only chunk. */
@@ -39,6 +42,7 @@ export function tapSseUsage(
     if (!data || data === '[DONE]') return false;
     try {
       const j = JSON.parse(data);
+      if (j.error) streamError ??= String(j.error.message ?? j.error).slice(0, 300);
       const u = j.usage ?? j.x_groq?.usage;
       if (u?.prompt_tokens != null) usage = { promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens ?? 0 };
       const delta = j.choices?.[0]?.delta;
