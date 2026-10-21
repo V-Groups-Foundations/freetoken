@@ -277,7 +277,7 @@ async function main() {
       await box.fill("Make the hero section animate on scroll");
       await box.press("Enter");
       await page.getByRole("status", { name: "Using skill: web-animation" }).waitFor({ timeout: 15000 });
-      const user = fake.requests.slice(before).find((r: any) => r.messages)?.messages.filter((m: any) => m.role === "user").at(-1);
+      const user = fake.requests.slice(before).find((r: any) => JSON.stringify(r.messages ?? "").includes("animate on scroll") && !String(r.messages?.[0]?.content).includes("code completion"))?.messages.filter((m: any) => m.role === "user").at(-1);
       if (!String(user?.content).includes('The skill "web-animation" matches this request')) throw new Error("skill not in the request");
     });
 

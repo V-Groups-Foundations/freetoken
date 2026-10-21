@@ -8,6 +8,7 @@ import { Logo } from "./Logo";
 import { Markdown, OpenFileContext } from "./Markdown";
 import { SkillsPanel } from "./Skills";
 import { TeamPanel } from "./Team";
+import { providerOf, shortModel, taskLabel } from "./models";
 
 /** What the Check button (and /check) asks the agent. */
 const CHECK_TEXT = "Check it: run the app, look at the page (console errors, the text and the screenshot), fix anything broken, missing or misplaced, check again, then tell me what works.";
@@ -22,10 +23,12 @@ type Item =
   | { kind: "approval"; id: string; command: string; explanation?: string; decided?: boolean | null; auto?: boolean }
   | { kind: "todos"; todos: { content: string; status: string }[] }
   | { kind: "error"; text: string }
-  | { kind: "turn"; ms: number; tokens: number; estimated: boolean; reason: string; tools: number; mode: Mode; next: string[]; synced?: true | string }
+  | { kind: "turn"; ms: number; tokens: number; estimated: boolean; reason: string; tools: number; mode: Mode; next: string[]; synced?: true | string; models?: string[] }
   | { kind: "history"; name: string; messages: FtProject["messages"] }
   | { kind: "note"; text: string }
-  | { kind: "skills"; names: string[]; auto: boolean };
+  | { kind: "skills"; names: string[]; auto: boolean }
+  // which model is working on this; a switch says what it moved away from
+  | { kind: "model"; model: string; task?: string; fallbacks?: string; switched: boolean };
 
 // display name, the input field shown in brackets, and the status-line verb
 const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
@@ -189,7 +192,7 @@ export function ChatPanel(props: {
   const autoRunRef = useRef(autoRun);
   autoRunRef.current = autoRun;
   const [atBottom, setAtBottom] = useState(true);
-  const turn = useRef({ start: 0, tokens: 0, chars: 0, tools: 0, verb: THINKING[0], mode: "agent" as Mode, waitUntil: 0 });
+  const turn = useRef({ start: 0, tokens: 0, chars: 0, tools: 0, verb: THINKING[0], mode: "agent" as Mode, waitUntil: 0, models: [] as string[] });
   const history = useRef<string[]>([]);
   const histPos = useRef(-1);
   const list = useRef<HTMLDivElement>(null);
@@ -256,6 +259,8 @@ export function ChatPanel(props: {
     if (e.type === "text") t.chars += e.delta.length;
     if (e.type === "usage") { t.tokens += e.output; if (e.input) setCtxTokens(e.input); }
     if (e.type === "tool_start") t.tools++;
+    const switched = e.type === "model" && t.models.length > 0;
+    if (e.type === "model") { window.dispatchEvent(new CustomEvent("vrun-model", { detail: e.model })); if (!t.models.includes(e.model)) t.models.push(e.model); }
     if (e.type === "waiting") t.waitUntil = Date.now() + e.seconds * 1000;
     else if (e.type === "text" || e.type === "tool_start" || e.type === "thinking") t.waitUntil = 0;
     setItems((prev) => {
@@ -306,6 +311,9 @@ export function ChatPanel(props: {
         case "skill":
           next.push({ kind: "note", text: `Learned skill${e.name.includes(",") ? "s" : ""}: ${e.name}` });
           break;
+        case "model":
+          next.push({ kind: "model", model: e.model, task: e.task, fallbacks: e.fallbacks, switched });
+          break;
         case "skills_used":
           next.push({ kind: "skills", names: e.names, auto: e.auto });
           break;
@@ -324,7 +332,7 @@ export function ChatPanel(props: {
         {
           const since = next.map((x) => x.kind).lastIndexOf("user");
           const m = turn.current.mode;
-          next.push({ kind: "turn", ms: Date.now() - t.start, tokens: t.tokens || Math.round(t.chars / 4), estimated: !t.tokens, reason: e.stopReason, tools: t.tools,
+          next.push({ kind: "turn", ms: Date.now() - t.start, tokens: t.tokens || Math.round(t.chars / 4), estimated: !t.tokens, reason: e.stopReason, tools: t.tools, models: [...t.models],
             mode: m, next: m === "plan" && e.stopReason !== "error" ? [] : followUps(next.slice(since + 1), m, e.stopReason) });
           break;
         }
@@ -376,7 +384,7 @@ export function ChatPanel(props: {
     const chips = [...mentions.map((m) => `@${m}`), ...(sel ? [`${sel.path}:${sel.start}-${sel.end}`] : [])];
     history.current = [text, ...history.current.filter((h) => h !== text)].slice(0, 50);
     histPos.current = -1;
-    turn.current = { start: Date.now(), tokens: 0, chars: 0, tools: 0, verb: THINKING[Math.floor(Math.random() * THINKING.length)], mode, waitUntil: 0 };
+    turn.current = { start: Date.now(), tokens: 0, chars: 0, tools: 0, verb: THINKING[Math.floor(Math.random() * THINKING.length)], mode, waitUntil: 0, models: [] };
     stick.current = true;
     const files = attach;
     chips.push(...files.filter((f) => !f.preview).map((f) => `📎 ${f.name}`));
@@ -646,6 +654,14 @@ export function ChatPanel(props: {
               case "thinking": return <Thinking key={i} t={r} />;
               case "history": return <History key={i} name={r.name} messages={r.messages} />;
               case "note": return <div key={i} className="mem-note" role="status"><span aria-hidden>◆</span>{r.text}</div>;
+              case "model": return (
+                <div key={i} className={`model-row${r.switched ? " switched" : ""}`} title={`${r.model}${r.fallbacks ? `\nTried first: ${r.fallbacks}` : ""}`}>
+                  <span aria-hidden>{r.switched ? "↪" : "◇"}</span>
+                  {r.switched ? "Switched to " : ""}<b>{shortModel(r.model)}</b><span className="muted"> · {providerOf(r.model)}</span>
+                  {r.task && <span className="muted"> — picked for {taskLabel(r.task)}</span>}
+                  {r.fallbacks && <span className="muted"> (unavailable: {r.fallbacks.split(", ").map((f) => f.replace(/^([^/]+)\/(\S+)/, (_m, _p, id) => shortModel(id))).join(", ")})</span>}
+                </div>
+              );
               case "skills": return (
                 <div key={i} className="skill-badge" role="status" aria-label={`Using skill: ${r.names.join(", ")}`}>
                   <span className="skill-badge-icon" aria-hidden>✦</span>
@@ -665,7 +681,7 @@ export function ChatPanel(props: {
                   <div key={i} className="turn-wrap">
                     <div className="turn-end">
                       {r.reason === "aborted" ? "Interrupted" : r.reason === "error" ? "Stopped on an error" : "Done"} · {fmtTime(r.ms)}
-                      {r.tools > 0 && ` · ${plural(r.tools, "step")}`}{r.tokens > 0 && ` · ${r.estimated ? "~" : ""}${fmtTokens(r.tokens)} tokens`}
+                      {r.tools > 0 && ` · ${plural(r.tools, "step")}`}{r.models && r.models.length > 0 && <span title={r.models.join("\n")}> · {r.models.map(shortModel).join(" → ")}</span>}{r.tokens > 0 && ` · ${r.estimated ? "~" : ""}${fmtTokens(r.tokens)} tokens`}
                       {r.synced === true && <span className="synced" title="This turn was added to the FreeToken project"> · ✓ saved to FreeToken</span>}
                       {typeof r.synced === "string" && <span className="synced err" title={r.synced}> · not saved to FreeToken</span>}
                       {latest && <button className="icon-btn retry" onClick={retryLast} title="Undo this answer and its file changes, and ask again">↻ Retry</button>}
@@ -787,7 +803,7 @@ export function ChatPanel(props: {
               ))}
             </div>
             <span className="spacer" />
-            {!busy && built && <button className="btn small check-it" onClick={() => send(CHECK_TEXT, "agent")} title="Run the app, look at the page (console, text and a screenshot), fix what's broken, then report what works">✓ Check it</button>}
+            {!busy && built && <button className="btn small check-it" onClick={() => send(CHECK_TEXT, "agent")} title="Run the app, look at the page (console, text and a screenshot), fix what's broken, then report what works">✓ Check</button>}
             {ctxTokens > 0 && <span className="ctx-meter" title={`The model read ${ctxTokens.toLocaleString()} tokens of context on its last step. Start a new chat (/new) when switching to an unrelated task.`}>{fmtTokens(ctxTokens)} context</span>}
             {busy ? <button className={`send stop${stopping ? " stopping" : ""}`} onClick={() => { setStopping(true); api.stop(sid); }} aria-label="Stop the agent" title={stopping ? "Stopping…" : "Stop (Esc) — or just type your next message"}><span /></button>
               : <button className="send" onClick={() => send()} disabled={!input.trim()} aria-label="Send" title="Send (Enter)">↑</button>}

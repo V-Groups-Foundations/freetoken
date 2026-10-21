@@ -105,6 +105,14 @@ async function main() {
     return (text.includes("smaller steps") && done.stopReason === "stop" && !events.some((e) => e.type === "error")) || JSON.stringify({ text, done });
   });
 
+  await check("the chat is told which model works on the task, and when FreeToken switches to another", async () => {
+    const events: AI.AgentEvent[] = [];
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "models", mode: "agent", text: "switch models: I have created it" }, (e) => { events.push(e); if (e.type === "done") r(); }));
+    const models = events.filter((e): e is Extract<AI.AgentEvent, { type: "model" }> => e.type === "model");
+    return (models.length === 2 && models[0].model === "groq/qwen/qwen3.8-27b" && models[0].task === "agent"
+      && models[1].model === "kilo/nvidia/nemotron-3-ultra" && models[1].fallbacks === "groq/qwen/qwen3.8-27b (rate limit)") || JSON.stringify(models);
+  });
+
   await check("<think> reasoning is split from the answer even when tags are cut across chunks", async () => {
     const { thinkSplitter } = await import("../src/main/ai-freetoken");
     const split = thinkSplitter();
@@ -174,14 +182,16 @@ async function main() {
     await ai.execTool(s, "inspect_preview", { url: `${url}/about` }, emit, "a2b");
     const followed = opened.at(-1) === `${url}/about`;
     const res = url ? await fetch(url).then((r) => r.text()) : "";
-    await ai.execTool(s, "run_app", { command: "node echo.js" }, emit, "a3"); // replaces (stops) the server
-    const serverDown = url ? await fetch(url).then(() => false, () => true) : false;
+    const cli = await ai.execTool(s, "run_app", { command: "node echo.js" }, emit, "a3"); // the server keeps running alongside
+    const serverStill = url ? await fetch(url).then(() => true, () => false) : false;
     const typed = await ai.execTool(s, "app_input", { text: "hello" }, emit, "a4");
-    const stopped = await ai.execTool(s, "stop_app", {}, emit, "a5");
+    const stopped = await ai.execTool(s, "stop_app", {}, emit, "a5"); // stops both
+    await new Promise((r) => setTimeout(r, 1500));
+    const serverDown = url ? await fetch(url).then(() => false, () => true) : false;
     runner.setPreviewHost(null);
     if (!url || opened[0] !== url || !res.includes("hi")) throw new Error(started.content);
     return page.content.includes("Hello from test app") && page.content.includes("[error] boom") && page.summary.includes("1 console")
-      && reloaded && followed && serverDown && typed.content.includes("echo:hello") && stopped.summary === "Stopped the app";
+      && reloaded && followed && serverStill && cli.content.includes("Also running: node server.js") && serverDown && typed.content.includes("echo:hello") && stopped.summary === "Stopped the app";
   });
 
   await check("bad token → clear message, transcript stays usable", async () => {

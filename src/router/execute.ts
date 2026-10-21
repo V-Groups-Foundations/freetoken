@@ -107,6 +107,8 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   // already did; the extra chunk is then stripped so the client sees what it asked for.
   const clientWantsUsage = !!(body.stream_options as { include_usage?: boolean } | undefined)?.include_usage;
 
+  // models tried before the one that answered, and why they didn't (shown to the user by clients)
+  const skipped: string[] = [];
   for (const m of candidates) {
     if (cooling.has(m.provider)) continue; // a model of this provider failed earlier in this loop
     const def = getProvider(m.provider);
@@ -123,6 +125,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
     if (!r.ok) {
       const e = r.error;
+      skipped.push(`${m.provider}/${m.modelId} (${e.kind.replace('_', ' ')})`);
       console.warn(`[router] ${m.provider}/${m.modelId} failed (${e.kind}${'status' in e && e.status ? ` ${e.status}` : ''}): ${String(e.message).slice(0, 300)}`);
       await recordUsage(deps.db, {
         ...usageBase, promptTokens: 0, completionTokens: 0, latencyMs: now() - started,
@@ -155,6 +158,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     const headers = {
       'content-type': r.response.headers.get('content-type') ?? (stream ? 'text/event-stream' : 'application/json'),
       'x-freetoken-provider': `${m.provider}/${m.modelId}`,
+      // which kind of task auto routing saw, and what it fell back from (clients show which model did what)
+      'x-freetoken-task': task,
+      ...(skipped.length ? { 'x-freetoken-fallbacks': skipped.join(', ') } : {}),
     };
 
     if (stream && r.response.body) {

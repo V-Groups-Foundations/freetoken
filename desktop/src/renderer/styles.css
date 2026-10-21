@@ -497,7 +497,7 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 
 /* first chat in a project without V.md: offer /init */
 .init-offer { display: flex; align-items: center; gap: 10px; max-width: 560px; margin: 4px auto 12px; padding: 10px 12px; text-align: left;
-  border: 1px solid color-mix(in srgb, var(--accent, #38d6ff) 35%, var(--border, #333)); border-radius: 10px; background: color-mix(in srgb, var(--accent, #38d6ff) 7%, transparent); font-size: 12.5px; line-height: 1.45; }
+  border: 1px solid color-mix(in srgb, var(--accent, #38d6ff) 35%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent, #38d6ff) 7%, transparent); font-size: 12.5px; line-height: 1.45; }
 .init-offer > span { color: var(--accent, #38d6ff); }
 .init-offer > div { flex: 1; }
 .init-offer .btn { flex-shrink: 0; }
@@ -505,24 +505,24 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 /* skills panel (Skills.tsx) */
 .skills-panel { max-height: 70vh; }
 .skill-install { display: flex; gap: 6px; }
-.skill-install input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border, #333); background: var(--bg, #111); color: inherit; font: inherit; font-size: 12px; }
+.skill-install input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg, #111); color: inherit; font: inherit; font-size: 12px; }
 .skill-state { font-size: 12px; padding: 6px 8px; border-radius: 7px; background: color-mix(in srgb, var(--accent, #38d6ff) 8%, transparent); }
 .skill-state.error { background: color-mix(in srgb, #ef4444 14%, transparent); }
 .skill-state .link-btn { background: none; border: 0; padding: 0; color: var(--accent, #38d6ff); cursor: pointer; font: inherit; text-decoration: underline; }
 .skill-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
-.skill-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border, #333); }
+.skill-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); }
 .skill-main { flex: 1; min-width: 0; }
 .skill-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-scope { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: color-mix(in srgb, var(--fg, #fff) 8%, transparent); opacity: .85; }
 .skill-scope.builtin { background: color-mix(in srgb, var(--accent, #38d6ff) 18%, transparent); }
 
 /* Team mode (Team.tsx): the supervisor's agents, live */
-.team-panel { margin: 6px 10px; border: 1px solid color-mix(in srgb, var(--accent, #38d6ff) 35%, var(--border, #333)); border-radius: 12px; background: color-mix(in srgb, var(--accent, #38d6ff) 5%, var(--panel, #161616)); font-size: 12.5px; overflow: hidden; }
+.team-panel { margin: 6px 10px; border: 1px solid color-mix(in srgb, var(--accent, #38d6ff) 35%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--accent, #38d6ff) 5%, var(--panel, #161616)); font-size: 12.5px; overflow: hidden; }
 .team-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; }
 .team-toggle { display: flex; align-items: center; gap: 6px; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; }
 .team-glyph { color: var(--accent, #38d6ff); }
-.team-list { display: flex; flex-direction: column; border-top: 1px solid var(--border, #333); max-height: 38vh; overflow-y: auto; }
-.team-agent + .team-agent { border-top: 1px solid color-mix(in srgb, var(--border, #333) 60%, transparent); }
+.team-list { display: flex; flex-direction: column; border-top: 1px solid var(--line); max-height: 38vh; overflow-y: auto; }
+.team-agent + .team-agent { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 .team-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .team-row:hover { background: color-mix(in srgb, var(--fg, #fff) 5%, transparent); }
 .team-dot { width: 8px; height: 8px; border-radius: 99px; flex-shrink: 0; background: #888; }
@@ -547,7 +547,7 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .team-log-error { color: #ef4444; }
 .team-report { padding: 6px 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, #3ecf8e 40%, transparent); white-space: pre-wrap; }
 .team-report b { display: block; margin-bottom: 2px; font-size: 11px; opacity: .8; }
-.team-approval { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--border, #333); background: color-mix(in srgb, #f5b942 10%, transparent); }
+.team-approval { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); background: color-mix(in srgb, #f5b942 10%, transparent); }
 .team-approval > div:first-child { flex: 1; min-width: 0; }
 .team-approval-btns { display: flex; gap: 4px; flex-shrink: 0; }
 
@@ -574,9 +574,9 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .chip.attach { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip.skill-chip { border-color: color-mix(in srgb, var(--accent, #38d6ff) 50%, transparent); color: var(--accent, #38d6ff); }
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.msg-images img { max-width: 180px; max-height: 140px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border, #333); }
+.msg-images img { max-width: 180px; max-height: 140px; border-radius: 8px; object-fit: cover; border: 1px solid var(--line); }
 .skill-use-now { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.skill-search { padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border, #333); background: var(--bg, #111); color: inherit; font: inherit; font-size: 12px; }
+.skill-search { padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg, #111); color: inherit; font: inherit; font-size: 12px; }
 .skill-group { display: flex; flex-direction: column; gap: 4px; }
 .skill-group + .skill-group { margin-top: 8px; }
 .skill-group-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; opacity: .7; padding: 2px 2px 0; }
@@ -589,3 +589,9 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .skill-badge-icon { color: #a78bfa; font-size: 14px; }
 .skill-badge-name { padding: 1px 8px; border-radius: 99px; background: color-mix(in srgb, #a78bfa 28%, transparent); color: #e9e3ff; font-weight: 600; }
 .skill-badge-why { opacity: .65; font-size: 11.5px; margin-left: auto; }
+/* which model is working: a quiet line in the chat, a tag per team agent (and the status bar) */
+.model-row { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--fg2); padding: 2px 0 2px 2px; flex-wrap: wrap; }
+.model-row b { color: var(--fg); font-weight: 600; }
+.model-row.switched { color: #e0b45c; }
+.team-model { font-size: 11px; color: var(--fg2); border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.composer-row .send, .composer-row .mode-switch, .composer-row .check-it { flex-shrink: 0; }

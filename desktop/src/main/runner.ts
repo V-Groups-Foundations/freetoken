@@ -38,6 +38,8 @@ export interface PreviewHost {
   /** Load url in the preview pane; resolves to an error message if it couldn't load. */
   open(url: string): Promise<string | void>;
   inspect(): Promise<PreviewPage | null>;
+  /** Reload the page already shown (no new tab, no layout change); an error message if it couldn't load. */
+  reload?(): Promise<string | void>;
   /** Run JavaScript in the page; the result (or the error) as text. */
   evaluate?(script: string): Promise<string>;
 }
@@ -84,6 +86,26 @@ let exitCode: number | null | undefined;
 let listener: (e: RunEvent) => void = () => {};
 let host: PreviewHost | null = null;
 
+// servers kept running alongside the current app (a frontend and its backend)
+interface Background { proc: ChildProcess; command: string; url: string; out: string; exited?: number | null }
+const background: Background[] = [];
+const MAX_BACKGROUND = 2;
+const portOfUrl = (u?: string) => { try { return u ? Number(new URL(u).port) || null : null; } catch { return null; } };
+/** The port a command asks for ("-p 5173", "--port=3001", "-l 5173", "PORT=3001", "http.server 8000"). */
+export function commandPort(cmd: string) {
+  const m = cmd.match(/(?:-p|--port|-l|--listen)[ =](?:tcp:\/\/[^:\s]+:)?(\d{2,5})\b|PORT=(\d{2,5})\b|http\.server\s+(\d{2,5})\b|:(\d{2,5})\b/i);
+  return m ? Number(m[1] ?? m[2] ?? m[3] ?? m[4]) : null;
+}
+function stopBackground(b: Background) {
+  background.splice(background.indexOf(b), 1);
+  if (b.exited !== undefined) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 5000);
+    b.proc.once("close", () => { clearTimeout(timer); setTimeout(resolve, 300); });
+    killTree(b.proc);
+  });
+}
+
 export const onRunEvent = (fn: (e: RunEvent) => void) => { listener = fn; };
 export const setPreviewHost = (h: PreviewHost | null) => { host = h; };
 export const previewHost = () => host;
@@ -114,7 +136,7 @@ export function stopAppAndWait(ms = 5000) {
   return new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, ms);
     p.once("close", () => { clearTimeout(timer); setTimeout(resolve, 300); }); // the OS frees the port a moment later
-    stopApp();
+    stopCurrent();
   });
 }
 
@@ -185,6 +207,15 @@ export function portOwner(port: number): Promise<{ pid: number; name: string } |
 export async function startApp(cmd: string) {
   const root = getRoot();
   if (!root) throw new Error("Open a folder first");
+  // a running server with an address (say the frontend) keeps running when a different command (the
+  // backend) starts: an app is often two servers. Same command or same port: that one is replaced.
+  const wantPort = commandPort(cmd);
+  for (const b of [...background]) if (b.command === cmd || (wantPort && portOfUrl(b.url) === wantPort)) await stopBackground(b);
+  if (proc && command !== cmd && url && portOfUrl(url) !== wantPort) {
+    background.push({ proc, command, url, out: out.slice(-20_000) });
+    proc = null;
+    while (background.length > MAX_BACKGROUND) await stopBackground(background[0]);
+  }
   await stopAppAndWait();
   command = cmd; out = ""; readPos = 0; url = undefined; exitCode = undefined;
   const win = process.platform === "win32";
@@ -196,10 +227,18 @@ export async function startApp(cmd: string) {
   });
   proc = p;
   listener({ type: "start", command: cmd });
-  p.stdout?.on("data", (d) => append(d.toString()));
-  p.stderr?.on("data", (d) => append(d.toString()));
-  p.on("error", (e) => append(`\n${e.message}\n`));
+  // output goes to the App panel while this is the current app, to its own buffer once it runs alongside
+  const sink = (text: string) => {
+    if (proc === p) return append(text);
+    const b = background.find((x) => x.proc === p);
+    if (b) b.out = (b.out + text.replace(ANSI, "")).slice(-20_000);
+  };
+  p.stdout?.on("data", (d) => sink(d.toString()));
+  p.stderr?.on("data", (d) => sink(d.toString()));
+  p.on("error", (e) => sink(`\n${e.message}\n`));
   p.on("close", (code) => {
+    const b = background.find((x) => x.proc === p);
+    if (b) { b.exited = code; return; }
     if (proc !== p) return;
     proc = null; exitCode = code;
     append(`\n[exited with code ${code}]\n`);
@@ -207,8 +246,15 @@ export async function startApp(cmd: string) {
   });
 }
 
-/** Kill the app and everything it spawned (a dev server is usually a grandchild of the shell). */
+/** Stop every app: the current one and any running alongside it (Stop button, stop_app, quitting). */
 export function stopApp() {
+  const others = background.splice(0);
+  for (const b of others) if (b.exited === undefined) killTree(b.proc);
+  return stopCurrent() || others.length > 0;
+}
+
+/** Kill the current app and everything it spawned (a dev server is usually a grandchild of the shell). */
+function stopCurrent() {
   const p = proc;
   if (!p?.pid) return false;
   proc = null; exitCode = null;
@@ -247,6 +293,10 @@ export function settle(ms: number, signal?: AbortSignal, stopOnUrl = true): Prom
 
 export function describe(): string {
   const s = appStatus();
-  if (!s.command) return "No app has been started.";
-  return `${s.running ? "Running" : `Not running (exit code ${s.exitCode ?? "n/a"})`}: ${s.command}${s.url ? `\nURL: ${s.url}` : ""}`;
+  const also = background.map((b) => `\nAlso ${b.exited === undefined ? "running" : `stopped (exit code ${b.exited ?? "n/a"})`}: ${b.command} — ${b.url}${b.exited === undefined ? "" : `\n  last output: ${b.out.trim().split("\n").slice(-3).join(" | ").slice(0, 300)}`}`).join("");
+  if (!s.command) return `No app has been started.${also}`;
+  return `${s.running ? "Running" : `Not running (exit code ${s.exitCode ?? "n/a"})`}: ${s.command}${s.url ? `\nURL: ${s.url}` : ""}${also}`;
 }
+
+/** The apps running alongside the current one (e.g. the backend while the frontend is shown). */
+export const otherApps = () => background.map((b) => ({ command: b.command, url: b.url, running: b.exited === undefined }));

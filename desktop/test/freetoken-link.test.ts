@@ -308,6 +308,26 @@ async function main() {
     return (follow === true && s.bigJob === false && ai.stepsLeftNote(ai.MAX_STEPS - 9)?.includes("honest summary") && ai.stepsLeftNote(10) === null) || JSON.stringify({ follow, now: s.bigJob });
   });
 
+  await check("a frontend and its backend run together; the same command again restarts only that one", async () => {
+    ws.setRoot(tmp);
+    const server = (name: string) => `node -e "const s=require('http').createServer((q,r)=>r.end('${name}'));s.listen(0,()=>console.log('${name} at http://localhost:'+s.address().port))"`;
+    const urlOf = () => runner.appStatus().url!;
+    const get = (u: string) => fetch(u).then((r) => r.text(), () => "down");
+    await runner.startApp(server("front")); await runner.settle(8000);
+    const front = urlOf();
+    await runner.startApp(server("back")); await runner.settle(8000);
+    const back = urlOf();
+    const both = [await get(front), await get(back)];
+    const listed = runner.describe().includes("Also running") && runner.otherApps().length === 1;
+    await runner.startApp(server("front")); await runner.settle(8000); // same command: the old frontend is replaced
+    const oldFrontGone = (await get(front)) === "down", backStill = (await get(back)) === "back";
+    runner.stopApp();
+    await new Promise((r) => setTimeout(r, 1500));
+    const allDown = (await get(back)) === "down" && (await get(urlOf())) === "down";
+    return (both.join() === "front,back" && listed && oldFrontGone && backStill && allDown && runner.commandPort("npx serve . -l 5173") === 5173 && runner.commandPort("PORT=3001 node server.js") === 3001)
+      || JSON.stringify({ both, listed, oldFrontGone, backStill, allDown });
+  });
+
   await check("agents can't take over or stop FreeToken's port (serve on it, kill it, kill all node)", async () => {
     runner.setProtectedPorts(() => [{ port: 3000, name: "FreeToken" }]);
     try {

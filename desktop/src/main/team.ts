@@ -23,6 +23,8 @@ interface Worker {
   pendingRun?: string;
   /** the reviewer: reads and runs checks, never edits; started automatically when the agents finish */
   reviewer?: boolean;
+  /** the model it's working with right now */
+  model?: string;
 }
 export const REVIEWER = "reviewer";
 const MAX_REVIEWS = 2;
@@ -48,7 +50,7 @@ export interface TeamDeps {
   forward(sessionId: string, e: AgentEvent): void;
   onTeam(supervisor: string, snapshot: TeamSnapshot): void;
 }
-export type TeamSnapshot = { supervisor: string; agents: { sid: string; name: string; task: string; status: Status; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean }[] };
+export type TeamSnapshot = { supervisor: string; agents: { sid: string; name: string; task: string; status: Status; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean; model?: string }[] };
 
 let deps: TeamDeps | null = null;
 export const configureTeam = (d: TeamDeps) => { deps = d; };
@@ -87,7 +89,7 @@ export function snapshot(supervisor: string): TeamSnapshot {
     supervisor,
     agents: [...t.workers.values()].map((w) => ({
       sid: w.sid, name: w.name, task: w.task, status: w.status, activity: w.activity, report: w.report, ...(w.reviewer ? { reviewer: true } : {}),
-      files: [...t.claims].filter(([, s]) => s === w.sid).map(([p]) => p), ...(w.question ? { question: w.question.text } : {}),
+      files: [...t.claims].filter(([, s]) => s === w.sid).map(([p]) => p), ...(w.question ? { question: w.question.text } : {}), ...(w.model ? { model: w.model } : {}),
     })),
   };
 }
@@ -200,6 +202,7 @@ function run(t: Team, w: Worker, text: string) {
     if (e.type === "text") w.text += e.delta;
     else if (e.type === "tool_start") { w.text = ""; w.activity = `${e.name}${(e.input as any)?.path ? ` ${(e.input as any).path}` : (e.input as any)?.command ? `: ${String((e.input as any).command).slice(0, 80)}` : ""}`; publish(t); }
     else if (e.type === "tool_end") { w.activity = e.summary; publish(t); }
+    else if (e.type === "model") { w.model = e.model; publish(t); }
     else if (e.type === "approval") { w.activity = `Needs approval: ${e.command}`; publish(t); }
     else if (e.type === "error") w.report = `Error: ${e.message}`;
     else if (e.type === "done") {

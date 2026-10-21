@@ -143,9 +143,9 @@ export function reportModel(model: string | null, good: boolean, reason: string)
 }
 
 /** Have a vision model look at a screenshot of the page and list what's visibly wrong. */
-export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSignal): Promise<string> {
+export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSignal): Promise<{ text: string; model?: string }> {
   try {
-    const r = await client().chat.completions.create({
+    const { data: r, response } = await client().chat.completions.create({
       model: "auto-smart",
       max_tokens: 600,
       messages: [{
@@ -155,11 +155,12 @@ export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSi
           { type: "image_url", image_url: { url: `data:image/jpeg;base64,${jpeg.toString("base64")}` } },
         ],
       }],
-    }, { signal, timeout: 90_000, maxRetries: 0 });
+    }, { signal, timeout: 90_000, maxRetries: 0 }).withResponse();
     const said = r.choices[0]?.message?.content?.trim();
-    return said ? `\n\nWhat the page looks like (a vision model reviewed the screenshot):\n${said}` : "";
+    const who = response.headers.get("x-freetoken-provider") ?? undefined;
+    return { text: said ? `\n\nWhat the page looks like (${who ?? "a vision model"} reviewed the screenshot):\n${said}` : "", model: who };
   } catch {
-    return ""; // no vision model connected, or it's busy: the text and console above still count
+    return { text: "" }; // no vision model connected, or it's busy: the text and console above still count
   }
 }
 
@@ -196,7 +197,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
 
   try {
     const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"), req.worker);
-    let stepModel: string | null = null;
+    let stepModel: string | null = null, shownModel: string | null = null;
     const turnModels = new Set<string>();
     for (let turn = 0; turn < MAX_STEPS; turn++) {
       let text = "";
@@ -217,6 +218,11 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
           // which model FreeToken picked: what it gets right or wrong is reported back so routing learns
           stepModel = response.headers.get("x-freetoken-provider");
           if (stepModel) turnModels.add(stepModel);
+          // show the user which model works on this, and when FreeToken switches to another one
+          if (stepModel && stepModel !== shownModel) {
+            shownModel = stepModel;
+            emit({ type: "model", model: stepModel, task: response.headers.get("x-freetoken-task") ?? undefined, fallbacks: response.headers.get("x-freetoken-fallbacks") ?? undefined });
+          }
           let usage: { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
           const split = thinkSplitter();
           for await (const chunk of stream) {
@@ -308,7 +314,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             // the agent model may not see images: a vision model looks at the page and describes problems
             if (u.name === "inspect_preview" && r.image) {
               const look = await lookAtPage(r.image, req.text, s.abort.signal);
-              if (look) { content += look; r.summary += " · screenshot reviewed"; }
+              if (look.text) { content += look.text; r.summary += ` · screenshot reviewed${look.model ? ` by ${look.model.split("/").pop()}` : ""}`; }
             }
             emit({ type: "tool_end", id: u.id, ok: true, summary: r.summary, detail: toolDetail(u.name, r) });
           } catch (e) {

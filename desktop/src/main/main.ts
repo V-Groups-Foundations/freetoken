@@ -272,6 +272,20 @@ runner.setPreviewHost({
     await v.webContents.session.clearCache().catch(() => {});
     try { await v.webContents.loadURL(url, { extraHeaders: "pragma: no-cache\ncache-control: no-cache\n" }); } catch (e) { return (e as Error).message; }
   },
+  async reload() {
+    // the page already shown, fresh from disk — quietly: the preview pane isn't re-opened or re-laid out
+    const wc = preview?.webContents;
+    if (!wc?.getURL()) return "Nothing is open in the preview.";
+    previewConsole = [];
+    await wc.session.clearCache().catch(() => {});
+    return new Promise<string | void>((resolve) => {
+      const done = () => { wc.off("did-fail-load", failed); resolve(); };
+      const failed = (_e: unknown, code: number, desc: string) => { if (code !== -3) { wc.off("did-finish-load", done); resolve(desc || `error ${code}`); } };
+      wc.once("did-finish-load", done);
+      wc.on("did-fail-load", failed);
+      wc.reloadIgnoringCache();
+    });
+  },
   async inspect() {
     const wc = preview?.webContents;
     if (!wc?.getURL()) return null;

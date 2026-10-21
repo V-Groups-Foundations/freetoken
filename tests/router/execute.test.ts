@@ -55,6 +55,9 @@ describe('routeChat', () => {
     const first = run(handler);
     const out = await first.p;
     expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('gemini/flash');
+    // the client learns what it fell back from, and what kind of task routing saw
+    expect(out.ok && out.response.headers.get('x-freetoken-fallbacks')).toMatch(/^groq\/.+ \(rate limit\)$/);
+    expect(out.ok && out.response.headers.get('x-freetoken-task')).toBeTruthy();
     const second = run(handler);
     await second.p;
     expect(second.f.calls.map((c) => c.url).some((u) => u.includes(GROQ))).toBe(false);

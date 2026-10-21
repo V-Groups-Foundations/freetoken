@@ -13,6 +13,7 @@ export type AgentEvent =
   | { type: "tool_start"; id: string; name: string; input: any }
   | { type: "tool_end"; id: string; ok: boolean; summary: string; detail?: ToolDetail }
   | { type: "usage"; input: number; output: number }
+  | { type: "model"; model: string; task?: string; fallbacks?: string }
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "memory"; scope: "project" | "user"; line: string; added: boolean }
   | { type: "skill"; name: string; scope: "project" | "user" }
@@ -114,7 +115,7 @@ export type AppEvent = { type: "start"; command: string } | { type: "data"; data
 export type PreviewState = { url: string; title: string; loading: boolean };
 export type FtProject = { id: string; name: string; model: string; origin: string; messages: { role: "user" | "assistant"; content: string; provider?: string | null }[] };
 type MemoryFile = { file: string | null; exists: boolean; lines: number; entries: number };
-export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean };
+export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean; model?: string };
 export type TeamSnapshot = { supervisor: string; agents: TeamAgent[] };
 export type ChatAttachment = { name: string; mime?: string; data?: string; path?: string };
 export type SkillInfo = { name: string; description: string; scope: "user" | "project" | "builtin"; dir: string | null; source?: string };

@@ -5,6 +5,7 @@ import { Banner } from "./Logo";
 import ftMark from "./brand/freetoken.png";
 import { FreeTokenHub } from "./FreeTokenHub";
 import * as videoEncoder from "./video-encoder";
+import { shortModel } from "./models";
 import { EditorArea, liveText, registerTabCompletions, type Review, type Selection, type Tab } from "./Editor";
 
 export function App() {
@@ -48,6 +49,13 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
   const [side, setSide] = useState<"files" | "search">("files");
   const [quickOpen, setQuickOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // the model answering right now (the chat announces it; FreeToken may switch between steps)
+  const [liveModel, setLiveModel] = useState<string | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => setLiveModel((e as CustomEvent<string>).detail);
+    window.addEventListener("vrun-model", on);
+    return () => window.removeEventListener("vrun-model", on);
+  }, []);
   // the FreeToken tab in place of the editor: "hub" (V-Run's own dashboard) or a web route (only for
   // signing in — the full website opens in the browser), or null when closed
   const [ftPane, setFtPane] = useState<string | null>(null);
@@ -241,7 +249,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
           {index.state === "indexing" ? "Indexing…" : index.state === "error" ? `Index error: ${index.message}` : `Indexed ${index.files} files · ${index.chunks} chunks`}
         </button>
         <button className="linklike" onClick={() => setTabEnabled((v) => !v)} aria-pressed={tabEnabled}>Tab: {tabEnabled ? "on" : "off"}</button>
-        <button className="linklike" onClick={() => setSettingsOpen(true)}>{settings ? (settings.provider === "freetoken" ? (settings.hasFtToken ? `FreeToken · ${settings.ftModel}` : "⚠ No FreeToken token") : settings.hasKey || settings.envKey ? settings.model : "⚠ No API key") : ""}</button>
+        <button className="linklike" onClick={() => setSettingsOpen(true)} title={liveModel ? `Answering now: ${liveModel}` : undefined}>{settings ? (settings.provider === "freetoken" ? (settings.hasFtToken ? `FreeToken · ${settings.ftModel}${liveModel ? ` → ${shortModel(liveModel)}` : ""}` : "⚠ No FreeToken token") : settings.hasKey || settings.envKey ? settings.model : "⚠ No API key") : ""}</button>
       </footer>
       {quickOpen && <QuickOpen onClose={() => setQuickOpen(false)} onPick={(p) => { setQuickOpen(false); openFile(p); }} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenFreeToken={(route) => { setSettingsOpen(false); openFt(route); }} />}

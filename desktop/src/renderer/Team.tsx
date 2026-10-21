@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type TeamAgent, type TeamSnapshot } from "./api";
+import { shortModel } from "./models";
 
 type LogLine = { kind: "tool" | "text" | "note" | "error"; text: string };
 type Approval = { sid: string; id: string; command: string; explanation?: string };
@@ -77,6 +78,7 @@ export function TeamPanel({ sid, autoApprove }: { sid: string; autoApprove: () =
                 <span className={`team-dot ${a.status}`} aria-hidden />
                 <b className="team-name">{a.reviewer ? "🔍 " : ""}{a.name}</b>
                 <span className="team-status">{statusOf(a)}</span>
+                {a.model && <span className="team-model" title={`Working with ${a.model}`}>{shortModel(a.model)}</span>}
                 <span className="team-activity" title={a.activity}>{a.question ? `❓ ${a.question}` : a.activity}</span>
                 {a.files.length > 0 && <span className="team-files" title={a.files.join("\n")}>🔒 {a.files.length}</span>}
               </button>

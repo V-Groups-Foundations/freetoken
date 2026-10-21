@@ -121,7 +121,7 @@ export const TOOLS: Tool[] = [
     input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
   { name: "run_terminal_command", description: "Run a shell command in the workspace root. The user must approve it. Output is truncated to the last ~20,000 characters; commands time out after 2 minutes, so don't start servers, watchers or interactive programs — use run_app for those.",
     input_schema: { type: "object", properties: { command: { type: "string" }, explanation: { type: "string", description: "One sentence on why" } }, required: ["command"] } },
-  { name: "run_app", description: "Start the user's app (dev server, website, CLI, bot) inside the editor. It keeps running in the App panel, which the user can see; any localhost URL it prints opens in the editor's preview pane automatically. Only one app runs at a time (starting another stops the previous one). The user must approve it. Returns the first output.",
+  { name: "run_app", description: "Start the user's app (dev server, website, CLI, bot) inside the editor. It keeps running in the App panel, which the user can see; any localhost URL it prints opens in the editor's preview pane automatically. A frontend and its backend can run together: starting a different command keeps an already-running server going (up to 3 at once), while running the same command again — or one on the same port — restarts it. stop_app stops them all. The user must approve it. Returns the first output.",
     input_schema: { type: "object", properties: { command: { type: "string", description: "e.g. npm run dev, python app.py" }, explanation: { type: "string", description: "One sentence on why" } }, required: ["command"] } },
   { name: "app_output", description: "Read the running app's new output (logs, errors, prompts) since you last checked, and whether it is still running.",
     input_schema: { type: "object", properties: { wait_seconds: { type: "number", description: "Wait up to this long for more output first (0-60)" } } } },
@@ -187,6 +187,8 @@ export type AgentEvent =
   | { type: "tool_start"; id: string; name: string; input: unknown }
   | { type: "tool_end"; id: string; ok: boolean; summary: string; detail?: ToolDetail }
   | { type: "usage"; input: number; output: number }
+  /** the model now answering (FreeToken auto routing picks per request): its task kind, and what it fell back from */
+  | { type: "model"; model: string; task?: string; fallbacks?: string }
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "file_changed"; path: string }
   | { type: "approval"; id: string; command: string; explanation?: string }
@@ -726,7 +728,9 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       if (host && target && /^https?:/.test(target)) {
         s.pageStale = false;
         // one try, time-limited: a page that doesn't load is the finding (the server may have stopped)
-        const err = await Promise.race([host.open(target), new Promise<string>((r) => setTimeout(() => r("it took longer than 15 seconds"), 15_000))]);
+        // the page already shown is reloaded in place; another address is opened
+        const load = target === current && host.reload ? host.reload() : host.open(target);
+        const err = await Promise.race([load, new Promise<string>((r) => setTimeout(() => r("it took longer than 15 seconds"), 15_000))]);
         if (err) return { content: `Couldn't load ${target}: ${err}\n\n${runner.describe()}\n\nStart the app with run_app if it isn't running, then inspect again.`, summary: `Page didn't load: ${target}` };
       }
       const page = await host?.inspect();
@@ -961,6 +965,7 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
   let jsonRetries = 0;
   try {
     const system = await systemPrompt(req.mode, `${recentUserText(s.messages)}\n${req.text}`, req.worker);
+    emit({ type: "model", model: `anthropic/${config.model()}` });
     for (let turn = 0; turn < MAX_STEPS; turn++) {
       const stream = client().beta.messages.stream({
         model: config.model(),

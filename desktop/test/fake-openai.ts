@@ -123,8 +123,9 @@ const PAGES: Record<string, string> = {
   "/v-run": page("Connect V-Run", `<button id="connect" onclick="window.vrun.connect('ft_test').then(() => out('connected'), (e) => out('error: ' + e.message))">Connect V-Run</button>`),
 };
 
-export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; requests: any[]; projects: Map<string, FakeProject>; close: () => void }> {
+export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; requests: any[]; feedback: any[]; projects: Map<string, FakeProject>; close: () => void }> {
   const requests: any[] = [];
+  const feedback: any[] = [];
   const projects = new Map<string, FakeProject>();
   const busySeen = new Set<string>();
   let n = 0;
@@ -171,6 +172,8 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
         if (req.method === "POST") { p.messages.push(...body.messages); return res.end(JSON.stringify({ added: body.messages.length })); }
         return res.end(JSON.stringify({ project: { id: pm[1], name: p.name, model: p.model }, messages: p.messages }));
       }
+      // V-Run's reports on how each model did (routing feedback): not a chat request
+      if (pathOnly.endsWith("/feedback")) { feedback.push(body); return res.end('{"ok":true}'); }
       requests.push(body);
       // mimic every free provider being rate-limited for a moment (once per "busy test" message)
       if (/busy test/i.test(lastUserText(body)) && !busySeen.has(lastUserText(body))) {
@@ -199,7 +202,10 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
         const content = blocks.filter((b) => b.type === "text").map((b: any) => b.text).join("");
         return res.end(JSON.stringify({ id, object: "chat.completion", created: 0, model: "fake/model", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }] }));
       }
-      res.writeHead(200, { "content-type": "text/event-stream" });
+      // name the model FreeToken "picked" (a "switch models" task moves to another one after its first step)
+      const answered = body.messages.filter((m: any) => m.role === "assistant").length;
+      const picked = /switch models/i.test(lastUserText(body)) && answered > 0 ? "kilo/nvidia/nemotron-3-ultra" : "groq/qwen/qwen3.8-27b";
+      res.writeHead(200, { "content-type": "text/event-stream", "x-freetoken-provider": picked, "x-freetoken-task": "agent", ...(picked.startsWith("kilo") ? { "x-freetoken-fallbacks": "groq/qwen/qwen3.8-27b (rate limit)" } : {}) });
       const send = (delta: object, finish: string | null = null) => res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
       send({ role: "assistant", content: "" });
       let ti = 0;
@@ -219,6 +225,6 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => {
     const { port } = server.address() as { port: number };
-    resolve({ url: `http://127.0.0.1:${port}/api/v1`, requests, projects, close: () => server.close() });
+    resolve({ url: `http://127.0.0.1:${port}/api/v1`, requests, feedback, projects, close: () => server.close() });
   }));
 }
