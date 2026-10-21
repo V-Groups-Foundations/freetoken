@@ -118,6 +118,39 @@ export function stopAppAndWait(ms = 5000) {
   });
 }
 
+// Ports the agent must never take over or kill: FreeToken, which the agent itself runs on (an agent that
+// started `npx serve . -p 3000`, was told the port was busy and stopped "that process" took down its own
+// AI connection, and every request after that hit a static file server).
+let protectedPorts: () => { port: number; name: string }[] = () => [];
+export const setProtectedPorts = (fn: typeof protectedPorts) => { protectedPorts = fn; };
+export const protectedPort = (port: number) => protectedPorts().find((p) => p.port === port);
+
+/** A command that would use, free up or kill a protected port: why it's refused (null when fine). */
+export async function guardCommand(cmd: string): Promise<string | null> {
+  const ports = protectedPorts();
+  if (!ports.length) return null;
+  const c = cmd.toLowerCase();
+  const why = (p: { port: number; name: string }) =>
+    `Refused: port ${p.port} is ${p.name}, the AI service this agent is running on — stopping it or putting another server on that port cuts off the agent. Use a different port (e.g. npx serve . -p 5173), and never stop ${p.name}.`;
+  // stopping every node process takes FreeToken (and V-Run's own helpers) down with it
+  if (/taskkill\b[^\n]*\/im\s+"?node|stop-process\b[^\n]*-name\s+"?node\b|\b(killall|pkill)\s+(-\w+\s+)*node\b|get-process\s+"?node"?\s*\|\s*stop-process/.test(c))
+    return why(ports[0]);
+  for (const p of ports) {
+    const n = String(p.port);
+    const mentions = new RegExp(`(?:^|[^\\d])${n}(?!\\d)`).test(c);
+    if (!mentions) continue;
+    // serving on it, or freeing it (kill-port, fuser -k, "netstat … 3000 … taskkill")
+    if (new RegExp(`(-p|--port|-l|--listen|port=|port\\s+|:)\\s*${n}(?!\\d)`).test(c) || /kill|stop-process|fuser/.test(c)) return why(p);
+  }
+  // killing a PID: refuse it when that PID holds a protected port
+  const pids = [...c.matchAll(/(?:\/pid|-id|\bkill(?:\s+-\d+|\s+-9)?)\s+(\d{2,7})/g)].map((m) => Number(m[1]));
+  if (pids.length) for (const p of ports) {
+    const owner = await portOwner(p.port);
+    if (owner && pids.includes(owner.pid)) return why(p);
+  }
+  return null;
+}
+
 /** "EADDRINUSE … :3000" / "port 5173 is already in use" → 3000 / 5173. */
 export function portInUse(output: string) {
   const m = output.match(/EADDRINUSE[^\n]*?:(\d{2,5})|address already in use[^\n]*?:(\d{2,5})|port (\d{2,5}) is (?:already )?in use|(\d{2,5}) is already in use/i);

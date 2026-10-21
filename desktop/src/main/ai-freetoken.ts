@@ -44,6 +44,8 @@ export function describeFreeTokenError(e: unknown): string {
   if (BAD_TOOL_CALL.test(String((e as Error)?.message))) return "The free model kept calling tools that don't exist. Try again, or pick a different model in Settings → FreeToken.";
   if (e instanceof OpenAI.AuthenticationError) return "FreeToken rejected the token. Create a new one in FreeToken → Settings → API tokens.";
   if (e instanceof OpenAI.APIConnectionError) return `Can't reach FreeToken at ${cfg.url()}. Start it with "npm run dev" in the free_token folder.`;
+  // FreeToken never 404s its own API: something else (often a static server like `npx serve`) took its port
+  if (e instanceof OpenAI.NotFoundError && !/model/i.test(e.message)) return `Something other than FreeToken is answering at ${cfg.url()} (${e.message.replace(/^404\s*/, "")}) — usually a web server an app or agent started on FreeToken's port. Stop that program, start FreeToken again ("npm run dev" in the free_token folder), then Retry.`;
   if (e instanceof OpenAI.RateLimitError) return "FreeToken: every connected provider is rate-limited right now — try again shortly or connect more keys.";
   if (e instanceof OpenAI.APIError) return `FreeToken error ${e.status ?? ""}: ${e.message}`;
   return e instanceof Error ? e.message : String(e);

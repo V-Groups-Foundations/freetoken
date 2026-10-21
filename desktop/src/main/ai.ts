@@ -658,6 +658,8 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       return { content: `Deleted ${rel}.`, summary: `Deleted ${rel}`, detail: diffDetail(rel, before, "") };
     }
     case "run_app": {
+      const refusedApp = await runner.guardCommand(String(input.command));
+      if (refusedApp) return { content: refusedApp, summary: "Refused: that port belongs to FreeToken" };
       if (!(await askApproval(s, emit, id, input.command, input.explanation ?? "Run your app in the editor:")))
         return { content: "The user declined to start the app. Ask them how they want to run it.", summary: `Declined: ${input.command}` };
       await runner.startApp(input.command);
@@ -666,6 +668,12 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       let content = `${runner.describe()}\n\nOutput so far:\n${runner.takeNewOutput() || "(none yet)"}`;
       // another program (often an old copy of this app) still has the port: the preview would show it, not the new code
       const busyPort = runner.portInUse(st.output);
+      const mine = busyPort ? runner.protectedPort(busyPort) : undefined;
+      if (busyPort && mine) {
+        return { content: `${content}
+
+Port ${busyPort} is ${mine.name}, the AI service you are running on — never stop it. Start the app on another port instead (e.g. npx serve . -p 5173).`, summary: `Port ${busyPort} is ${mine.name}: use another port` };
+      }
       if (busyPort) {
         const owner = await runner.portOwner(busyPort);
         content += `\n\nPort ${busyPort} is already taken${owner ? ` by ${owner.name} (PID ${owner.pid})` : ""}, so this app couldn't start — and the preview would show whatever is running there, probably an old version. Stop that process first (${process.platform === "win32" ? `Stop-Process -Id ${owner?.pid ?? "<PID>"} -Force` : `kill ${owner?.pid ?? "<PID>"}`}, with the user's approval) or start the app on another port, then run_app again.`;
@@ -734,6 +742,8 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       };
     }
     case "run_terminal_command": {
+      const refusedCmd = await runner.guardCommand(String(input.command));
+      if (refusedCmd) return { content: refusedCmd, summary: "Refused: that would stop FreeToken" };
       // a server never exits: run it as the app (App panel + preview) instead of blocking the agent
       if (runner.LONG_RUNNING.test(String(input.command).trim())) {
         const r = await execTool(s, "run_app", { command: input.command, explanation: input.explanation ?? "This keeps running, so it starts as your app:" }, emit, id);

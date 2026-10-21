@@ -308,6 +308,20 @@ async function main() {
     return (follow === true && s.bigJob === false && ai.stepsLeftNote(ai.MAX_STEPS - 9)?.includes("honest summary") && ai.stepsLeftNote(10) === null) || JSON.stringify({ follow, now: s.bigJob });
   });
 
+  await check("agents can't take over or stop FreeToken's port (serve on it, kill it, kill all node)", async () => {
+    runner.setProtectedPorts(() => [{ port: 3000, name: "FreeToken" }]);
+    try {
+      const refused = await Promise.all([
+        "npx serve . -p 3000", "npx http-server -p 3000", "python -m http.server 3000", "npx kill-port 3000",
+        "taskkill /F /IM node.exe", "Stop-Process -Name node -Force", "Get-NetTCPConnection -LocalPort 3000 | % { Stop-Process -Id $_.OwningProcess }",
+      ].map((c) => runner.guardCommand(c)));
+      const allowed = await Promise.all(["npx serve . -p 5173", "npm run dev -- --port 5173", "node server.js", "npm test", "echo 30000"].map((c) => runner.guardCommand(c)));
+      const out = ftAi.describeFreeTokenError(new (await import("openai")).default.NotFoundError(404, { message: "The requested path could not be found" }, "404 The requested path could not be found", new Headers()));
+      return (refused.every((r) => r?.includes("FreeToken")) && allowed.every((r) => r === null) && out.includes("Something other than FreeToken"))
+        || JSON.stringify({ refused, allowed, out });
+    } finally { runner.setProtectedPorts(() => []); }
+  });
+
   await check("the page probe returns readable values, even for cyclic objects, and reports errors", async () => {
     const g = globalThis as any;
     g.Element ??= class {};

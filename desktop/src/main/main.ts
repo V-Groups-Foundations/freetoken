@@ -88,6 +88,14 @@ web.setFreeTokenSearch(async (query) => {
   return j.answer ? [{ title: "Summary", url: hits[0]?.url ?? "", snippet: j.answer }, ...hits] : hits;
 });
 ft.configureFreeToken({ url: ftBase, token: ftToken, model: () => settings.ftModel || "auto-smart" });
+// the agent must never take over or stop the FreeToken server it runs on (when that's on this machine)
+runner.setProtectedPorts(() => {
+  try {
+    const u = new URL(ftBase());
+    if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)) return [];
+    return [{ port: Number(u.port || (u.protocol === "https:" ? 443 : 80)), name: "FreeToken" }];
+  } catch { return []; }
+});
 const useFreeToken = () => (process.env.CURSOR_REMAKE_PROVIDER ?? settings.provider) === "freetoken";
 const errorText = (e: unknown) => (useFreeToken() ? ft.describeFreeTokenError(e) : ai.describeError(e));
 
