@@ -47,7 +47,7 @@ export function compact<T extends { role: string }>(msgs: T[], userIndex: number
 // 80k characters — so it isn't rewritten on every step. If summarising fails, compact()'s note is used.
 
 const MAX_CHARS = 160_000, KEEP_CHARS = 80_000;
-type Summary = { userIndex: number; upTo: number; text: string };
+type Summary = { upTo: number; text: string };
 const summaries = new Map<string, Summary>();
 const sizeOf = (m: unknown) => JSON.stringify(m).length;
 const charsOf = (ms: unknown[]) => ms.reduce<number>((n, m) => n + sizeOf(m), 0);
@@ -91,29 +91,41 @@ async function summarise(previous: string | undefined, dropped: ChatCompletionMe
   return text;
 }
 
+/** No summariser available: keep the request and the recent steps (within the size limits), with a note. */
+function cutWithNote(msgs: ChatCompletionMessageParam[], userIndex: number): ChatCompletionMessageParam[] {
+  const cut = keepFrom(msgs, userIndex);
+  const dropped = msgs.slice(0, cut).filter((_, i) => i !== userIndex);
+  const used = new Map<string, number>();
+  for (const m of dropped) for (const tc of ("tool_calls" in m ? m.tool_calls ?? [] : []) as { function?: { name: string } }[]) if (tc.function) used.set(tc.function.name, (used.get(tc.function.name) ?? 0) + 1);
+  const note = { role: "user" as const, content: `(${dropped.length} earlier messages of this conversation were removed to keep the context small — tools used: ${[...used].map(([k, v]) => `${k}×${v}`).join(", ") || "none"}. Continue from the latest state below; re-read a file if you need it.)` };
+  return [msgs[userIndex], note, ...msgs.slice(cut)];
+}
+
 /**
- * What to send for this step: the whole transcript while it's small; once it's long, the task's request,
- * the running summary of the older steps, and the recent steps.
+ * What to send for this step: the whole conversation while it's small. Once it's long — counting the
+ * earlier turns too, not just this task — the older part becomes a running summary (kept from turn to
+ * turn), followed by the request (always as the user wrote it) and the recent steps.
  */
 export async function contextFor(id: string, msgs: ChatCompletionMessageParam[], userIndex: number, signal?: AbortSignal, onSummarise?: () => void): Promise<ChatCompletionMessageParam[]> {
   let sum = summaries.get(id);
-  if (sum && (sum.userIndex !== userIndex || sum.upTo > msgs.length)) { summaries.delete(id); sum = undefined; }
-  const from = sum ? sum.upTo : userIndex + 1;
-  const withSummary = (s: Summary) => [msgs[userIndex], { role: "user" as const, content: `(Earlier steps of this task were summarised to keep the context small. Your notes so far:\n${s.text}\n\nContinue from the latest state below; re-read a file if you need its exact contents.)` }, ...msgs.slice(s.upTo)];
+  // the transcript was cut back (a rewind, a new chat): the summary no longer matches it
+  if (sum && sum.upTo > msgs.length) { summaries.delete(id); sum = undefined; }
+  const from = sum ? sum.upTo : 0; // everything not yet summarised, from the very start of the conversation
+  const note = (t: string) => ({ role: "user" as const, content: `(Earlier parts of this conversation were summarised to keep the context small. Your notes so far:\n${t}\n\nContinue from the latest state below; re-read a file if you need its exact contents.)` });
+  const withSummary = (x: Summary): ChatCompletionMessageParam[] =>
+    x.upTo <= userIndex ? [note(x.text), ...msgs.slice(x.upTo)] : [note(x.text), msgs[userIndex], ...msgs.slice(x.upTo)];
   const tooBig = msgs.length - from > MAX_MSGS || charsOf(msgs.slice(from)) > MAX_CHARS;
   if (!tooBig) return sum ? withSummary(sum) : msgs;
   const upTo = keepFrom(msgs, userIndex);
-  if (upTo <= from) return sum ? withSummary(sum) : compact(msgs, userIndex);
-  // the first summary of a task also folds in the conversation before it
-  const dropped = sum ? msgs.slice(from, upTo) : [...msgs.slice(0, userIndex), ...msgs.slice(userIndex + 1, upTo)];
+  if (upTo <= from) return sum ? withSummary(sum) : cutWithNote(msgs, userIndex);
   onSummarise?.();
   try {
-    const next = { userIndex, upTo, text: await summarise(sum?.text, dropped, signal) };
+    const next = { upTo, text: await summarise(sum?.text, msgs.slice(from, upTo), signal) };
     summaries.set(id, next);
     return withSummary(next);
   } catch {
     if (signal?.aborted) throw new Error("aborted");
-    return compact(msgs, userIndex); // the summariser is busy: fall back to cutting with a note
+    return cutWithNote(msgs, userIndex); // the summariser is busy: cut with a note instead
   }
 }
 
@@ -412,6 +424,12 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
       if (finish === "length") throw new Error("A tool call was cut off by the output limit. Try a smaller step.");
 
       for (const u of uses) {
+        // stopped mid-batch: the rest of this reply's tool calls don't run (each still gets a result,
+        // so the transcript stays valid)
+        if (s.abort.signal.aborted) {
+          msgs.push({ role: "tool", tool_call_id: u.id, content: "Not run: the user stopped the task." });
+          continue;
+        }
         let input: unknown = {};
         try { input = JSON.parse(u.args || "{}"); } catch { input = undefined; }
         emit({ type: "tool_start", id: u.id, name: u.name, input });

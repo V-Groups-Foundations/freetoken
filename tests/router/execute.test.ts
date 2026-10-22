@@ -160,6 +160,17 @@ describe('routeChat', () => {
       expect(await keyStatus('gemini')).toBe('valid');
     });
 
+    it("a 403 that isn't about the key (moderation, a model the key can't use) never disables the key", async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      const flagged = await run((url) => (url.includes(GROQ) ? Response.json({ error: { message: 'Your input was flagged by moderation' } }, { status: 403 }) : okJson())).p;
+      expect(flagged).toMatchObject({ ok: false, status: 403 }); // the request's fault: the user sees why
+      expect(await keyStatus('groq')).toBe('valid');
+      const notAllowed = await run((url) => (url.includes(GROQ) ? Response.json({ error: { message: 'Model access denied for this project' } }, { status: 403 }) : okJson('from gemini'))).p;
+      expect(notAllowed.ok).toBe(true); // another model answered
+      expect(await keyStatus('groq')).toBe('valid');
+    });
+
     it('a real 403 from the API (JSON) is still a rejected key', async () => {
       await connect('groq', 'gsk_mine');
       await run(() => Response.json({ error: { message: 'Invalid API Key' } }, { status: 403 })).p;

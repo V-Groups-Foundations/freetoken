@@ -97,6 +97,27 @@ async function main() {
     return !!waited && Date.now() - t0 >= 900 && text.includes("FreeToken says") && !events.some((e) => e.type === "error");
   });
 
+  await check("Stop stops the rest of the reply: later tool calls don't run, and an approval after Stop doesn't hang", async () => {
+    const ai = await import("../src/main/ai");
+    const events: AI.AgentEvent[] = [];
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "stopper", mode: "agent", text: "stop test" }, (e) => {
+      events.push(e);
+      if (e.type === "tool_end" && events.filter((x) => x.type === "tool_end").length === 1) ai.stop("stopper"); // Stop right after the first write
+      if (e.type === "done") r();
+    }));
+    const root = ws.getRoot()!;
+    const wroteA = fs.existsSync(path.join(root, "stop-a.txt")), wroteB = fs.existsSync(path.join(root, "stop-b.txt"));
+    const done = events.find((e) => e.type === "done") as any;
+    const tr = ft.getTranscript("stopper") as any[];
+    const answered = tr.filter((m) => m.role === "tool").map((m) => m.tool_call_id).length === 2;
+    // an approval on a session that's already stopped resolves at once (no hang)
+    const s = ai.getSession("stopper");
+    const t0 = Date.now();
+    const r = await Promise.race([ai.execTool(s, "run_terminal_command", { command: "echo hi" }, () => {}, "late"), new Promise((res) => setTimeout(() => res("hung"), 3000))]);
+    fs.rmSync(path.join(root, "stop-a.txt"), { force: true });
+    return (wroteA && !wroteB && done?.stopReason === "aborted" && answered && r !== "hung" && Date.now() - t0 < 2000) || JSON.stringify({ wroteA, wroteB, done, answered, r });
+  });
+
   await check("a provider the network can't reach is reported once per task (restricted Wi-Fi?)", async () => {
     const events: AI.AgentEvent[] = [];
     // "I have created" makes the agent take a second step (sent back to do the work): still one warning
@@ -193,10 +214,23 @@ async function main() {
     const ids = new Set(second.flatMap((m: any) => (m.tool_calls ?? []).map((t: any) => t.id)));
     const sent = JSON.stringify(first).length;
     const small = await ft.contextFor("short-task", msgs.slice(0, 10), 2);
-    return (summariserCalls === 1 && notes === 1 && reused && first[0].content === "build the tracker" && String(first[1].content).includes("Your notes so far")
+    return (summariserCalls === 1 && notes === 1 && reused && String(first[0].content).includes("Your notes so far") && first[1].content === "build the tracker"
       && first[2].role === "assistant" && sent < 100_000 && second.at(-1) === msgs.at(-1)
       && second.filter((m: any) => m.role === "tool").every((m: any) => ids.has(m.tool_call_id)) && small.length === 10)
       || JSON.stringify({ summariserCalls, notes, reused, len: first.length, sent, head: String(first[1]?.content).slice(0, 80) });
+  });
+
+  await check("a long earlier conversation is summarised too: the next request isn't sent with the whole history", async () => {
+    // a chat that already had a 150-step task (300 messages) plus one huge tool output, then a new short request
+    const msgs: any[] = [{ role: "user", content: "first task" }];
+    for (let i = 0; i < 150; i++) msgs.push({ role: "assistant", content: null, tool_calls: [{ id: `p${i}`, type: "function", function: { name: "read_file", arguments: "{}" } }] }, { role: "tool", tool_call_id: `p${i}`, content: i === 3 ? "z".repeat(500_000) : `out ${i}` });
+    msgs.push({ role: "assistant", content: "Done with the first task." }, { role: "user", content: "now make the header blue" });
+    const userIndex = msgs.length - 1;
+    const out = await ft.contextFor("long-history", msgs, userIndex);
+    const size = JSON.stringify(out).length;
+    const again = await ft.contextFor("long-history", [...msgs, { role: "assistant", content: "ok" }], userIndex);
+    return (out.length < 90 && size < 200_000 && String(out[0].content).includes("Your notes so far") && out.some((m: any) => m.content === "now make the header blue")
+      && again.length <= out.length + 1) || JSON.stringify({ len: out.length, size, again: again.length });
   });
 
   await check("long tasks are trimmed under FreeToken's 200-message limit with tool calls kept paired", () => {

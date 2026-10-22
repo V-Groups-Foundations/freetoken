@@ -96,6 +96,13 @@ export function freeTokenScript(body: any): Block[] {
     ];
     return steps[Math.min(turns, steps.length - 1)];
   }
+  // one reply with two file writes (the test stops the task after the first)
+  if (/stop test/i.test(text)) {
+    const turns = body.messages.filter((m: any) => m.role === "assistant").length;
+    return turns === 0
+      ? [{ type: "tool", name: "write_file", args: { path: "stop-a.txt", contents: "a" } }, { type: "tool", name: "write_file", args: { path: "stop-b.txt", contents: "b" } }]
+      : [{ type: "text", text: "done" }];
+  }
   if (/rename/i.test(text)) {
     const turns = body.messages.filter((m: any) => m.role === "assistant").length;
     const steps: Block[][] = [

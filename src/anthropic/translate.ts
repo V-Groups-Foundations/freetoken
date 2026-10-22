@@ -122,9 +122,21 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
   let stop = 'end_turn';
   let outputTokens = 0;
   let textChars = 0;
+  // the client went away (Esc in Claude Code): stop reading and cancel the provider's stream, which
+  // also records the request's usage — instead of reading the whole answer with nobody listening
+  const reader = upstream.getReader();
+  let cancelled = false;
 
   return new ReadableStream<Uint8Array>({
-    async start(ctrl) {
+    cancel(reason) {
+      cancelled = true;
+      return reader.cancel(reason).catch(() => {});
+    },
+    async start(raw) {
+      const ctrl = {
+        enqueue(chunk: Uint8Array) { if (cancelled) return; try { raw.enqueue(chunk); } catch { cancelled = true; } },
+        close() { if (cancelled) return; try { raw.close(); } catch { /* already closed */ } },
+      };
       const push = (s: string) => ctrl.enqueue(enc.encode(s));
       const begin = (id?: string) => {
         if (started) return;
@@ -155,9 +167,9 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
         }
         if (ch.finish_reason) stop = toolBlock.size ? 'tool_use' : STOP[ch.finish_reason] ?? 'end_turn';
       };
-      const reader = upstream.getReader();
       try {
         for (;;) {
+          if (cancelled) { await reader.cancel().catch(() => {}); return; }
           const { done, value } = await reader.read();
           if (done) break;
           buf += dec.decode(value, { stream: true });
@@ -166,7 +178,9 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
           for (const line of lines) {
             const data = line.startsWith('data:') ? line.slice(5).trim() : '';
             if (!data || data === '[DONE]') continue;
-            try { handle(JSON.parse(data)); } catch { /* skip malformed chunk */ }
+            let chunk: unknown;
+            try { chunk = JSON.parse(data); } catch { continue; /* skip a malformed chunk */ }
+            handle(chunk);
           }
         }
       } catch (e) {

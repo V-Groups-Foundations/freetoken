@@ -96,6 +96,24 @@ export function removeBlock(text: string) {
 // custom providers speak the Responses API (wire_api = "responses" — FreeToken serves /v1/responses).
 const codexPath = (env: ToolEnv) => path.join(env.home, '.codex', 'config.toml');
 const codexProfilePath = (env: ToolEnv) => path.join(env.home, '.codex', 'freetoken.config.toml');
+/**
+ * Remove a TOML table the user added by hand (e.g. from the setup guide) — its header line up to the next
+ * table header — so writing ours doesn't create a duplicate key, which makes Codex refuse to start.
+ */
+export function removeTomlTable(text: string, table: string) {
+  const name = table.split('.').map((p) => `(?:${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|"${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}")`).join('\\s*\\.\\s*');
+  const header = new RegExp(`^[ \\t]*\\[\\s*${name}\\s*\\][ \\t]*(?:#.*)?$`);
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (header.test(line)) { skipping = true; continue; }
+    if (skipping && /^[ \t]*\[/.test(line)) skipping = false;
+    if (!skipping) out.push(line);
+  }
+  return out.join('\n');
+}
+
 export function codexBlock(baseUrl: string) {
   return `${BLOCK_START}\n[model_providers.freetoken]\nname = "FreeToken"\nbase_url = "${baseUrl}"\nenv_key = "FREETOKEN_API_KEY"\nwire_api = "responses"\n${BLOCK_END}\n`;
 }
@@ -162,7 +180,8 @@ export function connectTool(id: ToolId, env: ToolEnv, baseUrl: string, token: st
       const file = codexPath(env);
       mkdirSync(path.dirname(file), { recursive: true });
       backup(file);
-      const now = removeBlock(read(file) ?? '').replace(/\s*$/, '');
+      // ours (marked) and a hand-added copy (from the setup guide) both go, so the table is there once
+      const now = removeTomlTable(removeBlock(read(file) ?? ''), 'model_providers.freetoken').replace(/\s*$/, '');
       writeFileSync(file, `${now ? `${now}\n\n` : ''}${codexBlock(baseUrl)}`);
       writeFileSync(codexProfilePath(env), CODEX_PROFILE);
       writeShim(env, 'codex-free', 'run codex --profile freetoken');

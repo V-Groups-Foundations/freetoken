@@ -31,12 +31,22 @@ export function resolveInRoot(p: string): { abs: string; rel: string } {
   const abs = driveAbs ? path.resolve(p) : path.resolve(root, p.replace(/^[/\\]+/, ""));
   const rel = path.relative(root, abs);
   if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) throw new PathError(`Path is outside the workspace: ${p}`);
-  // canonicalize through symlinks for paths that already exist
-  try {
-    const real = fs.realpathSync(abs);
-    const realRel = path.relative(root, real);
-    if (realRel.startsWith("..") || path.isAbsolute(realRel)) throw new PathError(`Path resolves outside the workspace: ${p}`);
-  } catch (e) { if (e instanceof PathError) throw e; }
+  // follow symlinks / junctions: the path — or, for a file that doesn't exist yet, the nearest folder
+  // above it that does — must really be inside the workspace (a link in the repo pointing at ~/.ssh
+  // must not let a new file be written there)
+  let existing = abs;
+  for (;;) {
+    try {
+      const realRel = path.relative(root, fs.realpathSync(existing));
+      if (realRel === ".." || realRel.startsWith(".." + path.sep) || path.isAbsolute(realRel)) throw new PathError(`Path resolves outside the workspace: ${p}`);
+      break;
+    } catch (e) {
+      if (e instanceof PathError) throw e;
+      const up = path.dirname(existing);
+      if (up === existing) break;
+      existing = up;
+    }
+  }
   return { abs, rel: rel.split(path.sep).join("/") };
 }
 

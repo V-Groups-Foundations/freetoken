@@ -58,6 +58,7 @@ const api = {
   memoryStatus: () => call("memory:status"),
   skillsList: () => call("skills:list"),
   historyList: () => call("history:list"),
+  closeFolder: () => call("folder:close"),
   previewDevice: (d: object) => call("preview:device", d),
   shareInfo: () => call("share:info"),
   publishPlan: () => call("publish:plan"),

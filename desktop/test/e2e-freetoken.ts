@@ -1,5 +1,6 @@
 // End-to-end: the real Electron app talking to a (fake) FreeToken server through the UI.
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -76,6 +77,18 @@ async function main() {
       // sending an Agent prompt first asks how to run it
       await page.getByRole("group", { name: "How should the agent run this task?" }).getByRole("button", { name: /^Step by step/ }).click();
       await page.getByRole("group", { name: "Command approval" }).waitFor({ timeout: 15000 });
+      // typing "1" / "2" / Esc anywhere but the chat (here the code editor's focus target, a plain element
+      // outside the chat) must not approve or reject the waiting command
+      await page.evaluate(() => {
+        const el = document.createElement("div");
+        el.tabIndex = 0; el.id = "outside-chat"; el.className = "monaco-like";
+        document.body.appendChild(el); el.focus();
+      });
+      await page.keyboard.press("1");
+      await page.keyboard.press("2");
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => document.getElementById("outside-chat")?.remove());
+      if (!(await page.getByRole("group", { name: "Command approval" }).getByRole("button", { name: "Run", exact: true }).count())) throw new Error("keys typed outside the chat decided the approval");
       await page.getByRole("button", { name: "Run all for this task" }).click();
       await page.locator(".msg-ai", { hasText: "via FreeToken" }).waitFor({ timeout: 15000 });
       // the second command ran without asking, and auto mode ended with the task
@@ -92,6 +105,31 @@ async function main() {
     await step("every chat request carried the ft_ token and tools", async () => {
       const r = fake.requests.filter((x) => x.tools);
       if (r.length < 5 || !r.every((x) => x.model === "auto-smart")) throw new Error(`${r.length} tool requests`);
+    });
+    await step("the first page opened while the Preview tab is already showing appears at once (it stayed blank until a resize)", async () => {
+      const srv = http.createServer((_q, r) => { r.writeHead(200, { "content-type": "text/html" }); r.end("<title>First</title><h1>first preview</h1>"); });
+      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+      const url = `http://localhost:${(srv.address() as net.AddressInfo).port}/`;
+      try {
+        await page.getByRole("button", { name: "Run app" }).click(); // opens the bottom panel
+        await page.getByRole("tab", { name: "Preview" }).click();
+        await page.getByLabel("Preview address").fill(url);
+        await page.getByLabel("Preview address").press("Enter");
+        // the native page view: shown, with a real size, showing that page
+        type View = { url: string; visible: boolean; w: number; h: number };
+        let view = null as View | null;
+        for (let i = 0; i < 40 && !(view && view.visible && view.w > 0); i++) {
+          await page.waitForTimeout(250);
+          view = (await app.evaluate(({ BrowserWindow }) => {
+            const v = (BrowserWindow.getAllWindows()[0].contentView.children as any[]).find((c) => /^http:\/\/localhost:\d+/.test(c.webContents?.getURL?.() ?? ""));
+            return v ? { url: v.webContents.getURL(), visible: typeof v.getVisible === "function" ? v.getVisible() : true, w: v.getBounds().width, h: v.getBounds().height } : null;
+          })) as View | null;
+        }
+        if (!view || !view.visible || view.w <= 0 || view.h <= 0) throw new Error(`the preview stayed hidden: ${JSON.stringify(view)}`);
+      } finally {
+        srv.close();
+        await page.getByRole("tab", { name: "App" }).click();
+      }
     });
     await step("\"run the app\": agent starts it in the App panel, the page opens in Preview, and the agent reads it back", async () => {
       fs.writeFileSync(path.join(proj, "server.js"), `const h=require('http');const s=h.createServer((q,r)=>{r.writeHead(200,{'content-type':'text/html'});r.end("<meta name='viewport' content='width=device-width, initial-scale=1'><title>Test App</title><h1>Hello from test app</h1><script>console.error('boom from page')</script>")});s.listen(0,()=>console.log('Server ready at http://localhost:'+s.address().port));`);
@@ -468,9 +506,25 @@ async function main() {
       const other = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-remake-other-"));
       fs.writeFileSync(path.join(other, "second.txt"), "hi\n");
       await app.evaluate(({ dialog }, dir) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dir] })) as any; }, other);
+      // a task is waiting for approval to run a command when another folder is opened: it must stop
+      // there — no more model requests, and its command never runs (in either folder)
+      fs.writeFileSync(path.join(proj, "server.js"), "require('fs').writeFileSync(require('path').join(process.cwd(), 'RAN.txt'), 'ran'); setInterval(() => {}, 1000);");
+      const box = page.getByLabel("Message the AI");
+      await box.fill("Please run the app");
+      await box.press("Enter");
+      await page.getByRole("group", { name: "How should the agent run this task?" }).getByRole("button", { name: /^Step by step/ }).click();
+      await page.getByRole("group", { name: "Command approval" }).waitFor({ timeout: 15000 });
+      const before = fake.requests.length;
       await page.keyboard.press("Control+o");
       await page.getByRole("button", { name: "second.txt" }).waitFor({ timeout: 10000 });
       if (await page.getByRole("button", { name: "src", exact: true }).count()) throw new Error("old tree still shown");
+      await page.waitForTimeout(3000);
+      if (fake.requests.length > before + 1) throw new Error(`the old task kept working after the folder changed (${fake.requests.length - before} more requests)`);
+      if (fs.existsSync(path.join(proj, "RAN.txt")) || fs.existsSync(path.join(other, "RAN.txt"))) throw new Error("the old task's command ran after the folder changed");
+      // and it really ended (not just hidden, waiting forever): its "task running" marker is gone
+      const chatsDir = path.join((await app.evaluate(({ app }) => app.getPath("userData"))) as string, "chats");
+      const stillRunning = fs.readdirSync(chatsDir).filter((f) => f.startsWith("running-"));
+      if (stillRunning.length) throw new Error(`the old task is still running after the folder changed: ${stillRunning.join(", ")}`);
       await page.getByRole("button", { name: "Close folder" }).click();
       await page.getByRole("button", { name: "Open folder…" }).waitFor();
       await page.getByRole("button", { name: proj }).click();

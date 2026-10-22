@@ -458,10 +458,12 @@ export function fuzzyEdit(text: string, oldS: string, newS: string): { text: str
 }
 
 function askApproval(s: Session, emit: (e: AgentEvent) => void, id: string, command: string, explanation?: string) {
+  // already stopped: nothing to ask (a listener added to an aborted signal never fires — it would hang)
+  if (s.abort?.signal.aborted) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
     s.approvals.set(id, resolve);
     emit({ type: "approval", id, command, explanation });
-    s.abort?.signal.addEventListener("abort", () => resolve(false));
+    s.abort?.signal.addEventListener("abort", () => resolve(false), { once: true });
   }).finally(() => s.approvals.delete(id));
 }
 
@@ -652,6 +654,8 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
     const why = team.guardWrite(s.id, rel, await exists(rel));
     if (why) return withNotices(s, { content: why, summary: why.startsWith("🔒") ? `Blocked — ${rel} belongs to another agent` : `Re-read needed — ${rel} changed` });
   }
+  // the user pressed Stop: nothing more gets changed or run
+  if (s.abort?.signal.aborted && ACTS.has(name)) return { content: "Not run: the user stopped the task.", summary: "Stopped" };
   // stuck for good: the agent was told to stop and explain; nothing more gets changed or run
   if (s.mustStop && ACTS.has(name)) {
     return { content: "Stopped: you were going in circles. Don't run or change anything else now — reply to the user: what's blocking you, what you tried, and what you need from them.", summary: "Stopped — going in circles" };
@@ -1196,6 +1200,12 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
 
       const results: ToolResult[] = [];
       for (const u of uses) {
+        // stopped mid-batch: the rest of this reply's tool calls don't run (each still gets a result,
+        // so the transcript stays valid)
+        if (s.abort.signal.aborted) {
+          results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "Not run: the user stopped the task." });
+          continue;
+        }
         emit({ type: "tool_start", id: u.id, name: u.name, input: u.input });
         const schema = schemas[u.name as ToolName];
         const parsed = schema?.safeParse(u.input);

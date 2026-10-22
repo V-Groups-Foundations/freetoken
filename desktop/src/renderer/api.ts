@@ -75,6 +75,8 @@ interface Api {
   memoryStatus(): Promise<MemoryStatus>;
   skillsList(): Promise<SkillInfo[]>;
   historyList(): Promise<HistorySnapshot[]>;
+  /** Close the open folder: stops the agent, app and anything else working on it. */
+  closeFolder(): Promise<void>;
   previewDevice(d: { kind: "desktop" | "phone" | "tablet"; scale?: number }): Promise<void>;
   shareInfo(): Promise<ShareInfo>;
   publishPlan(): Promise<PublishPlan>;

@@ -2,7 +2,7 @@ import type { ProviderDef } from './registry';
 import { describeNetworkFailure, looksLikeWebPage } from './network';
 
 /** network = never got an answer (DNS, refused, reset, swapped certificate); blocked = a web page came back instead of the API */
-export type ErrorKind = 'rate_limit' | 'auth' | 'server' | 'timeout' | 'bad_request' | 'not_found' | 'network' | 'blocked';
+export type ErrorKind = 'rate_limit' | 'auth' | 'server' | 'timeout' | 'bad_request' | 'not_found' | 'network' | 'blocked' | 'forbidden';
 
 export interface ProviderError {
   kind: ErrorKind;
@@ -49,7 +49,14 @@ export function normalizeError(status: number, headers: Headers, bodyText: strin
   if (status === 429 || status === 413) {
     return { kind: 'rate_limit', status, message, retryAfterMs: parseRetryAfter(headers.get('retry-after')) };
   }
-  if (status === 401 || status === 403) return { kind: 'auth', status, message };
+  if (status === 401) return { kind: 'auth', status, message };
+  // 403 isn't always the key: OpenRouter answers 403 for a prompt its moderation flagged, others for
+  // "this key can't use this model". Only a 403 that's about the key disables the key.
+  if (status === 403) {
+    if (/flag|moderat|content polic|safety|violat/i.test(message)) return { kind: 'bad_request', status, message };
+    if (/api[ _-]?key|invalid (key|token)|unauthori[sz]ed|authenticat|credential|key (is )?(revoked|disabled|expired)/i.test(message)) return { kind: 'auth', status, message };
+    return { kind: 'forbidden', status, message };
+  }
   // 404 = model retired/not on this key's plan; 410 = model reached end-of-life. Either way
   // skip just this model (and never let a dead test model block an otherwise-valid key).
   if (status === 404 || status === 410) return { kind: 'not_found', status, message };

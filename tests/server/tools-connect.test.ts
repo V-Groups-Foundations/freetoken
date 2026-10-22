@@ -52,6 +52,19 @@ describe('connecting tools', () => {
     expect(existsSync(profile)).toBe(false);
   });
 
+  it('Codex: a provider table added by hand (the setup guide) is replaced, not duplicated (a duplicate key stops Codex starting)', () => {
+    mkdirSync(path.join(env.home, '.codex'));
+    const file = path.join(env.home, '.codex', 'config.toml');
+    writeFileSync(file, 'model = "o4-mini"\r\n\r\n[model_providers.freetoken]\r\nname = "FreeToken"\r\nbase_url = "http://old:3000/api/v1"\r\nenv_key = "FREETOKEN_API_KEY"\r\nwire_api = "responses"\r\n\r\n[profiles.work]\r\nmodel = "gpt-5"\r\n');
+    connectTool('codex', env, BASE, 'ft_tok');
+    const t = readFileSync(file, 'utf8');
+    expect(t.match(/\[model_providers\.freetoken\]/g)).toHaveLength(1);
+    expect(t).not.toContain('http://old:3000');
+    expect(t).toContain('[profiles.work]');
+    expect(t).toContain('model = "gpt-5"');
+    expect(t.startsWith('model = "o4-mini"')).toBe(true);
+  });
+
   it('Continue: inserts a model with the right indentation, or creates the config', () => {
     const created = continueWithFreeToken(null, BASE, 'ft_tok');
     expect(created).toContain('models:\n  # >>> FreeToken');

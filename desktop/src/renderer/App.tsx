@@ -15,7 +15,7 @@ export function App() {
     api.getFolder().then((f) => { setRoot(f.root); setRecent(f.recent); });
     return api.onFolderOpened((r) => setRoot(r));
   }, []);
-  const closeFolder = () => { api.getFolder().then((f) => setRecent(f.recent)); setRoot(null); };
+  const closeFolder = () => { api.closeFolder().catch(() => {}).then(() => api.getFolder()).then((f) => setRecent(f.recent)); setRoot(null); };
   if (!root) return <Welcome recent={recent} onOpen={setRoot} />;
   return <Workbench key={root} root={root} onCloseFolder={closeFolder} />;
 }

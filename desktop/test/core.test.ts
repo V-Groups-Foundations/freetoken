@@ -38,6 +38,19 @@ ws.setRoot(dir);
 await check("paths outside the workspace are rejected", async () =>
   (await throws(() => ws.resolveInRoot("../etc/passwd"))) && (await throws(() => ws.resolveInRoot(path.join(os.tmpdir(), "x")))) &&
   ws.resolveInRoot("/src/hello.ts").rel === "src/hello.ts");
+await check("a link inside the workspace can't be used to write (or read) outside it; ..-named files are fine", async () => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-remake-outside-"));
+  // a junction on Windows (no admin rights needed), a symlink elsewhere — what a cloned repo could contain
+  fs.symlinkSync(outside, path.join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
+  const write = await ws.writeText("link/pwned.txt", "x").then(() => "written", (e) => String(e.message));
+  const deep = await ws.writeText("link/a/b/c.txt", "x").then(() => "written", (e) => String(e.message));
+  const read = await ws.readText("link/anything.txt").then(() => "read", (e) => String(e.message));
+  fs.writeFileSync(path.join(dir, "..env"), "ok");
+  const dotdot = ws.resolveInRoot("..env").rel;
+  fs.rmSync(path.join(dir, "link"));
+  return !fs.existsSync(path.join(outside, "pwned.txt")) && /outside the workspace/.test(write) && /outside the workspace/.test(deep)
+    && /outside the workspace|ENOENT/.test(read) && dotdot === "..env";
+});
 await check(".gitignore and .cursorignore hide files from the tree", async () => {
   const names = (await ws.listDir(".")).map((e) => e.name);
   return names.includes("src") && !names.includes("build") && !names.includes("secret");

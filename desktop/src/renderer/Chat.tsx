@@ -527,7 +527,11 @@ export function ChatPanel(props: {
     const onKey = (e: KeyboardEvent) => {
       if (document.querySelector("[role=dialog]")) return;
       const typing = e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement;
-      if (waiting && !(typing && (e.target as HTMLTextAreaElement).value)) {
+      // the approval keys (1 / 2 / 3 / Esc) belong to the chat: never while typing in the code editor,
+      // the terminal or any other field — "1" typed in code must not approve a shell command
+      const target = e.target instanceof Element ? e.target : null;
+      const inChat = !target || target === document.body || !!target.closest(".chat");
+      if (waiting && inChat && !(typing && (e.target as HTMLTextAreaElement).value)) {
         const k = e.key;
         if (k === "1" || k === "2" || k === "3" || (k === "Escape" && !mentionHits.length)) {
           e.preventDefault();

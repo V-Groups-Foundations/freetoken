@@ -12,7 +12,10 @@ describe('normalizeError', () => {
   });
   it('maps auth, server, 404 and bad request', () => {
     expect(normalizeError(401, h(), '').kind).toBe('auth');
-    expect(normalizeError(403, h(), '').kind).toBe('auth');
+    // a 403 only means a bad key when it says so; moderation is the request's fault; anything else: skip the model
+    expect(normalizeError(403, h(), '{"error":{"message":"Invalid API key provided"}}').kind).toBe('auth');
+    expect(normalizeError(403, h(), '{"error":{"message":"Input flagged by moderation"}}').kind).toBe('bad_request');
+    expect(normalizeError(403, h(), '').kind).toBe('forbidden');
     expect(normalizeError(413, h(), '').kind).toBe('rate_limit');
     expect(normalizeError(503, h(), '').kind).toBe('server');
     expect(normalizeError(404, h(), '').kind).toBe('not_found');

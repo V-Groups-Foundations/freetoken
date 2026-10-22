@@ -145,8 +145,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       // model's context: another model can take it. Anything else is the request's fault: report it.
       if (e.kind === 'bad_request' && !MODEL_SIDE_400.test(String(e.message))) return fail(e.status, 'upstream_bad_request', e.message);
       if (e.kind === 'bad_request') continue;
-      if (e.kind === 'not_found') {
-        // Retired/unavailable model: skip just this model, leave the provider's others usable.
+      if (e.kind === 'not_found' || e.kind === 'forbidden') {
+        // Retired/unavailable model, or one this key may not use (a 403 that isn't about the key):
+        // skip just this model, leave the provider's others — and the key — usable.
         continue;
       }
       // the network's doing (blocked page, no connection) never marks the key invalid

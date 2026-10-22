@@ -152,10 +152,21 @@ export function streamToResponses(upstream: ReadableStream<Uint8Array>, model: s
   const think = thinkFilter();
   let msgId: string | null = null, text = '', usage: any;
   const calls = new Map<number, { id: string; name: string; args: string }>();
+  // the client went away (Ctrl+C in Codex): stop reading and cancel the provider's stream, which also
+  // records the request's usage — instead of reading on, or hanging, with nobody listening
+  const reader = upstream.getReader();
+  let cancelled = false;
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
+    cancel(reason) {
+      cancelled = true;
+      return reader.cancel(reason).catch(() => {});
+    },
+    async start(ctrl) {
+      const controller = {
+        enqueue(chunk: Uint8Array) { if (cancelled) return; try { ctrl.enqueue(chunk); } catch { cancelled = true; } },
+        close() { if (cancelled) return; try { ctrl.close(); } catch { /* already closed */ } },
+      };
       controller.enqueue(ev({ type: 'response.created', response: { id, object: 'response', created_at, status: 'in_progress', model, output: [] } }));
-      const reader = upstream.getReader();
       let buffer = '';
       const onText = (delta: string) => {
         const t = think(delta);
@@ -170,6 +181,7 @@ export function streamToResponses(upstream: ReadableStream<Uint8Array>, model: s
       };
       try {
         for (;;) {
+          if (cancelled) { await reader.cancel().catch(() => {}); return; }
           const { done, value } = await reader.read();
           if (done) break;
           buffer += dec.decode(value, { stream: true });

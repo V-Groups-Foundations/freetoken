@@ -19,7 +19,7 @@ import * as chats from "./chats";
 import * as video from "./video";
 import * as web from "./web";
 import { fuzzyFiles, grep } from "./search";
-import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText } from "./workspace";
+import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText, clearRoot } from "./workspace";
 
 if (process.env.CURSOR_REMAKE_USER_DATA) app.setPath("userData", process.env.CURSOR_REMAKE_USER_DATA);
 else migrateProfile();
@@ -183,8 +183,21 @@ let changedBuf = new Set<string>();
 let changeTimer: NodeJS.Timeout | undefined;
 let indexTimer: NodeJS.Timeout | undefined;
 
-async function openFolder(dir: string) {
+/**
+ * Leaving a project (another folder opened, or the folder closed): the agent and its team, a benchmark,
+ * the app and any share link stop — nothing keeps changing or serving a project that isn't open.
+ */
+function leaveProject() {
+  for (const sid of [...runningTasks.keys()]) { team.stopAgent(sid); ai.stop(sid); }
+  bench.cancelBenchmark();
   runner.stopApp();
+  share.stopTunnel();
+}
+
+async function openFolder(dir: string) {
+  const same = getRoot() && path.resolve(dir).toLowerCase() === path.resolve(getRoot()!).toLowerCase();
+  if (same) runner.stopApp(); // reopening the same folder: just restart cleanly
+  else leaveProject();
   setRoot(dir);
   const root = getRoot()!;
   settings.recent = [root, ...settings.recent.filter((r) => r !== root)].slice(0, 8);
@@ -255,6 +268,17 @@ function schedulePreviewReload() {
 }
 let previewConsole: string[] = [];
 let previewShown = false;
+// where the renderer wants the preview (CSS px), or null when it's hidden
+let previewWanted: { x: number; y: number; width: number; height: number } | null = null;
+function applyPreviewBounds() {
+  previewShown = !!previewWanted;
+  if (!preview) return;
+  // the renderer measures in CSS px; the view is placed in window DIPs, which differ when the UI is zoomed (Ctrl+= / Ctrl+-)
+  const z = win?.webContents.getZoomFactor() ?? 1;
+  const r = previewWanted;
+  if (r) preview.setBounds({ x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.round(r.width * z), height: Math.round(r.height * z) });
+  preview.setVisible(previewShown);
+}
 
 // what the preview tells sites it is, per device (a real phone/tablet browser, so sites serve their mobile layout)
 const MOBILE_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36";
@@ -280,6 +304,7 @@ function ensurePreview() {
   wc.on("did-fail-load", (_e, code, desc, url, isMain) => { if (isMain && code !== -3) previewConsole.push(`[error] Failed to load ${url}: ${desc}`); });
   wc.on("render-process-gone", (_e, d) => previewConsole.push(`[error] The page crashed (${d.reason})`));
   preview = v;
+  applyPreviewBounds();
   return v;
 }
 
@@ -782,6 +807,13 @@ function registerIpc() {
   });
   handle("publish:cancel", () => publisher.cancelPublish());
   // Android app: check the tools, prepare / build the APK, install it on a USB-connected phone
+  // Close folder: stop everything working on it, then no project is open
+  handle("folder:close", () => {
+    leaveProject();
+    watcher?.close(); watcher = null;
+    clearTimeout(changeTimer); clearTimeout(indexTimer);
+    clearRoot();
+  });
   handle("android:check", () => android.checkAndroid());
   handle("android:build", (o: { name: string; appId?: string; build: boolean }) => android.buildAndroid(o, (line) => send("android-log", line)));
   handle("android:install", (apk: string) => android.installApk(String(apk), (line) => send("android-log", line)));
@@ -805,12 +837,10 @@ function registerIpc() {
   handle("bench:cancel", () => bench.cancelBenchmark());
   handle("preview:external", () => { const u = preview?.webContents.getURL(); if (u && /^https?:/i.test(u)) shell.openExternal(u); });
   handle("preview:bounds", (r: { x: number; y: number; width: number; height: number } | null) => {
-    previewShown = !!r && r.width > 0 && r.height > 0;
-    if (!preview) return;
-    // the renderer measures in CSS px; the view is placed in window DIPs, which differ when the UI is zoomed (Ctrl+= / Ctrl+-)
-    const z = win?.webContents.getZoomFactor() ?? 1;
-    if (previewShown) preview.setBounds({ x: Math.round(r!.x * z), y: Math.round(r!.y * z), width: Math.round(r!.width * z), height: Math.round(r!.height * z) });
-    preview.setVisible(previewShown);
+    // remembered even before the view exists: the first page opened while the Preview tab is already
+    // showing creates the view later, and it must appear right away (it stayed blank until a resize)
+    previewWanted = r && r.width > 0 && r.height > 0 ? r : null;
+    applyPreviewBounds();
   });
   handle("term:kill", (id: string) => terms.get(id)?.kill());
 }
