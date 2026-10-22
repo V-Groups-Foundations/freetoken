@@ -80,3 +80,40 @@ describe("Claude Code's token counts", () => {
     expect(JSON.parse(delta.slice(5)).usage).toMatchObject({ input_tokens: 18234, output_tokens: 3 });
   });
 });
+
+describe('streamed tool calls, however the provider numbers them', () => {
+  const stream = (chunks: object[]) => {
+    const enc = new TextEncoder();
+    return new ReadableStream<Uint8Array>({ start(c) { for (const ch of chunks) c.enqueue(enc.encode(`data: ${JSON.stringify(ch)}\n\n`)); c.close(); } });
+  };
+  const delta = (d: object, finish: string | null = null) => ({ id: 'x', choices: [{ delta: d, finish_reason: finish }] });
+  const calls = async (chunks: object[]) => {
+    const out = await new Response(streamToResponses(stream(chunks), 'auto-smart', new Map())).text();
+    const done = out.split('\n').filter((l) => l.startsWith('data:')).map((l) => JSON.parse(l.slice(5))).at(-1);
+    return { status: done.response.status, details: done.response.incomplete_details, items: done.response.output.filter((o: { type: string }) => o.type === 'function_call') };
+  };
+
+  it('two parallel calls both sent as index 0 stay two calls (they were merged into one)', async () => {
+    const r = await calls([
+      delta({ tool_calls: [{ index: 0, id: 'a', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }),
+      delta({ tool_calls: [{ index: 0, id: 'b', function: { name: 'read_file', arguments: '{"path":"b"}' } }] }, 'tool_calls'),
+    ]);
+    expect(r.items.map((i: { call_id: string; arguments: string }) => [i.call_id, i.arguments])).toEqual([['a', '{"path":"a"}'], ['b', '{"path":"b"}']]);
+  });
+
+  it('a name the provider repeats in every chunk is not doubled; name fragments still join', async () => {
+    const r = await calls([
+      delta({ tool_calls: [{ index: 0, id: 'a', function: { name: 'shell', arguments: '{"cmd":' } }] }),
+      delta({ tool_calls: [{ index: 0, function: { name: 'shell', arguments: '"ls"}' } }] }),
+      delta({ tool_calls: [{ index: 1, id: 'b', function: { name: 'apply_', arguments: '' } }] }),
+      delta({ tool_calls: [{ index: 1, function: { name: 'patch', arguments: '{}' } }] }, 'tool_calls'),
+    ]);
+    expect(r.items.map((i: { name: string; arguments: string }) => [i.name, i.arguments])).toEqual([['shell', '{"cmd":"ls"}'], ['apply_patch', '{}']]);
+  });
+
+  it('an answer cut off at the output limit is incomplete, not completed', async () => {
+    const r = await calls([delta({ content: 'half of the' }, 'length')]);
+    expect(r.status).toBe('incomplete');
+    expect(r.details).toEqual({ reason: 'max_output_tokens' });
+  });
+});

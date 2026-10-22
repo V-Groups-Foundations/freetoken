@@ -222,7 +222,9 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
       }
       // name the model FreeToken "picked" (a "switch models" task moves to another one after its first step)
       const answered = body.messages.filter((m: any) => m.role === "assistant").length;
-      const picked = /switch models/i.test(lastUserText(body)) && answered > 0 ? "kilo/nvidia/nemotron-3-ultra" : "groq/qwen/qwen3.8-27b";
+      // the task is in any user message (later ones can be V-Run's own nudges)
+      const task = body.messages.filter((m: any) => m.role === "user").map((m: any) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join(" ");
+      const picked = /switch models/i.test(task) && answered > 0 ? "kilo/nvidia/nemotron-3-ultra" : "groq/qwen/qwen3.8-27b";
       res.writeHead(200, { "content-type": "text/event-stream", "x-freetoken-provider": picked, "x-freetoken-task": "agent", ...(picked.startsWith("kilo") ? { "x-freetoken-fallbacks": "groq/qwen/qwen3.8-27b (rate limit)" } : {}), ...(/restricted wifi test/i.test(lastUserText(body)) ? { "x-freetoken-unreachable": "gemini" } : {}) });
       const send = (delta: object, finish: string | null = null) => res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
       send({ role: "assistant", content: "" });

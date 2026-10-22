@@ -1,11 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { toast } from '../fx';
 
 type Token = { id: number; name: string; prefix: string; lastUsedAt: string | null };
 
 async function fetchTokens(): Promise<Token[]> {
-  return (await fetch('/api/tokens')).json();
+  // a failed load is an empty list (and a note), not an error object the list can't render
+  const r = await fetch('/api/tokens').catch(() => null);
+  const j = r?.ok ? await r.json().catch(() => null) : null;
+  if (!Array.isArray(j)) { toast("Couldn't load your tokens — reload the page to try again."); return []; }
+  return j;
 }
 
 export function Tokens() {
@@ -22,15 +27,17 @@ export function Tokens() {
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
-    const res = await fetch('/api/tokens', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
-    if (!res.ok) return;
+    const res = await fetch('/api/tokens', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }).catch(() => null);
+    if (!res) return toast("Couldn't reach FreeToken — is it still running?");
+    if (!res.ok) return toast((await res.json().catch(() => ({}))).error ?? "Couldn't create the token — try again.");
     setFresh((await res.json()).token);
     setName('');
     void reload();
   }
 
   async function revoke(id: number) {
-    await fetch(`/api/tokens?id=${id}`, { method: 'DELETE' });
+    const ok = await fetch(`/api/tokens?id=${id}`, { method: 'DELETE' }).then((r) => r.ok, () => false);
+    if (!ok) toast("Couldn't revoke the token — try again.");
     void reload();
   }
 

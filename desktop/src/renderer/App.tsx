@@ -181,6 +181,10 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
       else if (mod && e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); setSide("search"); }
       else if (mod && e.key === "`") { e.preventDefault(); setTermOpen((v) => !v); }
       else if (mod && e.key === ",") { e.preventDefault(); setSettingsOpen(true); }
+      // zoom: Ctrl+= / Ctrl+- / Ctrl+0 (on Windows and Linux there's no menu that carries them)
+      else if (mod && !e.altKey && (e.key === "=" || e.key === "+")) { e.preventDefault(); api.zoom(0.5); }
+      else if (mod && !e.altKey && (e.key === "-" || e.key === "_")) { e.preventDefault(); api.zoom(-0.5); }
+      else if (mod && !e.altKey && e.key === "0") { e.preventDefault(); api.zoom(0); }
       else if (mod && e.key.toLowerCase() === "l" && !(e.target as HTMLElement).closest(".monaco-editor")) { e.preventDefault(); setChatFocus((n) => n + 1); }
       else return;
       e.stopPropagation();
@@ -820,6 +824,13 @@ function SharePanel({ onClose }: { onClose: () => void }) {
   const [info, setInfo] = useState<ShareInfo | null>(null);
   const [tunnel, setTunnel] = useState<{ status: string; url?: string; via?: string; message?: string; qr: string | null } | null>(null);
   useEffect(() => { api.shareInfo().then(setInfo).catch((e) => setInfo({ url: null, lan: null, reachable: false, qr: null, advice: (e as Error).message, addresses: [] })); }, []);
+  // a link made earlier is still running after the panel was closed: show it (and follow it live)
+  useEffect(() => {
+    let live = true;
+    api.shareTunnelState().then((s) => { if (live && s.status !== "off") setTunnel(s); }).catch(() => {});
+    const off = api.onShareTunnel((s) => setTunnel(s.status === "off" ? null : s));
+    return () => { live = false; off(); };
+  }, []);
   async function startTunnel() {
     setTunnel({ status: "starting", qr: null });
     setTunnel(await api.shareTunnelStart().catch((e) => ({ status: "error", message: (e as Error).message, qr: null })));

@@ -20,7 +20,9 @@ const api = (body?: object) => fetch('/api/local/tools', {
   method: body ? 'POST' : 'GET',
   headers: { 'x-freetoken-ui': '1', ...(body ? { 'content-type': 'application/json' } : {}) },
   body: body ? JSON.stringify(body) : undefined,
-}).then(async (r) => ({ ok: r.ok, status: r.status, j: await r.json().catch(() => ({})) }));
+}).then(async (r) => ({ ok: r.ok, status: r.status, j: await r.json().catch(() => ({})) }),
+  // FreeToken unreachable: a failed answer like any other (never an exception that leaves a button busy)
+  () => ({ ok: false, status: 0, j: { error: "Couldn't reach FreeToken — is it still running?" } }));
 
 function Copy({ value, label }: { value: string; label?: string }) {
   return (
@@ -35,6 +37,7 @@ function Copy({ value, label }: { value: string; label?: string }) {
 export function ToolConnect({ manual }: { manual: React.ReactNode }) {
   const [tools, setTools] = useState<Tool[] | null>(null);
   const [available, setAvailable] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [done, setDone] = useState<Record<string, string>>({});
   const [keys, setKeys] = useState<Record<string, KeyInfo>>({});
@@ -45,7 +48,8 @@ export function ToolConnect({ manual }: { manual: React.ReactNode }) {
       if (!live) return;
       if (r.status === 403) setAvailable(false); // hosted FreeToken / not the owner: just the guides
       else if (r.ok) setTools(r.j.tools);
-    }).catch(() => {});
+      else setLoadError(r.j.error ?? "Couldn't check your tools."); // not an empty grid: say so, and show the guides
+    });
     return () => { live = false; };
   }, []);
 
@@ -60,10 +64,21 @@ export function ToolConnect({ manual }: { manual: React.ReactNode }) {
   }
 
   if (!available) return <>{manual}</>;
+  if (loadError) {
+    return (
+      <div className="space-y-4">
+        <p className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm">
+          {loadError} The manual steps below work for every tool.
+        </p>
+        {manual}
+      </div>
+    );
+  }
+  if (!tools) return <p className="muted text-sm">Checking which tools you have…</p>;
   return (
     <div className="space-y-4">
       <div className="grid items-start gap-3 md:grid-cols-2">
-        {(tools ?? []).map((t) => {
+        {tools.map((t) => {
           const k = keys[t.id];
           return (
             <div key={t.id} className={`tile p-4 ${t.connected ? 'border-[color-mix(in_srgb,var(--ok)_45%,var(--border))]' : ''}`}>

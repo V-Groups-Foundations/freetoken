@@ -134,7 +134,8 @@ export function describeFreeTokenError(e: unknown): string {
   if (e instanceof OpenAI.AuthenticationError) return "FreeToken rejected the token. Create a new one in FreeToken → Settings → API tokens.";
   if (e instanceof OpenAI.APIConnectionError) return `Can't reach FreeToken at ${cfg.url()}. Start it with "npm run dev" in the free_token folder.`;
   // FreeToken never 404s its own API: something else (often a static server like `npx serve`) took its port
-  if (e instanceof OpenAI.NotFoundError && !/model/i.test(e.message)) return `Something other than FreeToken is answering at ${cfg.url()} (${e.message.replace(/^404\s*/, "")}) — usually a web server an app or agent started on FreeToken's port. Stop that program, start FreeToken again ("npm run dev" in the free_token folder), then Retry.`;
+  // (by status, not class: an error built by another copy of the openai package isn't an instanceof)
+  if ((e as { status?: number })?.status === 404 && !/model/i.test(String((e as Error).message))) return `Something other than FreeToken is answering at ${cfg.url()} (${(e as Error).message.replace(/^404\s*/, "")}) — usually a web server an app or agent started on FreeToken's port. Stop that program, start FreeToken again ("npm run dev" in the free_token folder), then Retry.`;
   if (e instanceof OpenAI.RateLimitError) return "FreeToken: every connected provider is rate-limited right now — try again shortly or connect more keys.";
   if (e instanceof OpenAI.APIError) return `FreeToken error ${e.status ?? ""}: ${e.message}`;
   return e instanceof Error ? e.message : String(e);
@@ -461,11 +462,11 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         }
         msgs.push({ role: "tool", tool_call_id: u.id, content });
       }
-      const budget = stepsLeftNote(turn);
+      const budget = stepsLeftNote(turn, req.maxSteps ?? MAX_STEPS);
       if (budget) msgs.push({ role: "user", content: budget });
       if (s.abort.signal.aborted) return emit({ type: "done", stopReason: "aborted" });
     }
-    emit({ type: "error", message: `Stopped after ${MAX_STEPS} steps.` });
+    emit({ type: "error", message: `Stopped after ${req.maxSteps ?? MAX_STEPS} steps.` });
     emit({ type: "done", stopReason: "max_turns" });
   } catch (e) {
     // keep the transcript valid: answer any dangling tool calls; drop an unanswered user turn

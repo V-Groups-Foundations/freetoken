@@ -20,13 +20,15 @@ export function ProviderCard({ provider, connected, oauth = false, unreachable =
     e.preventDefault();
     setBusy(true);
     setMessage(null);
+    // the button must never stay stuck on "busy": a dropped connection is an error too
     const res = await fetch('/api/keys', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: provider.id, key, extra: extra || undefined }),
-    });
-    const data = await res.json().catch(() => ({}));
+    }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
     setBusy(false);
+    if (!res) return setMessage({ kind: 'error', text: "Couldn't reach FreeToken — is it still running?" });
     if (!res.ok) return setMessage({ kind: 'error', text: data.error ?? 'Something went wrong.' });
     setKey('');
     setExtra('');
@@ -43,16 +45,18 @@ export function ProviderCard({ provider, connected, oauth = false, unreachable =
   }
 
   async function remove() {
-    await fetch(`/api/keys?provider=${provider.id}`, { method: 'DELETE' });
+    const ok = await fetch(`/api/keys?provider=${provider.id}`, { method: 'DELETE' }).then((r) => r.ok, () => false);
+    if (!ok) toast(`Couldn't disconnect ${provider.name} — try again.`);
     router.refresh();
   }
 
   async function toggleExclude(excludedFromAuto: boolean) {
-    await fetch('/api/keys', {
+    const ok = await fetch('/api/keys', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: provider.id, excludedFromAuto }),
-    });
+    }).then((r) => r.ok, () => false);
+    if (!ok) toast("Couldn't save that setting — try again.");
     router.refresh();
   }
 

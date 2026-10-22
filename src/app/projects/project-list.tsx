@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from '../fx';
 
 type Project = { id: string; name: string };
 
@@ -20,15 +21,18 @@ export function ProjectList({ initial }: { initial: Project[] }) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: name.trim() }),
-    });
+    }).catch(() => null);
     setBusy(false);
-    if (!res.ok) return;
+    // never a silent no-op: say why it wasn't created
+    if (!res) return toast("Couldn't reach FreeToken — is it still running?");
+    if (!res.ok) return toast((await res.json().catch(() => ({}))).error ?? "Couldn't create the project — try again.");
     const p = await res.json();
     router.push(`/projects/${p.id}`);
   }
 
   async function remove(id: string) {
-    await fetch(`/api/projects?id=${id}`, { method: 'DELETE' });
+    const ok = await fetch(`/api/projects?id=${id}`, { method: 'DELETE' }).then((r) => r.ok, () => false);
+    if (!ok) return toast("Couldn't delete the project — try again."); // it's still there: keep showing it
     setProjects((ps) => ps.filter((p) => p.id !== id));
   }
 

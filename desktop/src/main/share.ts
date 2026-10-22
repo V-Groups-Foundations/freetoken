@@ -98,9 +98,15 @@ export function startTunnel(port: number, opts: { command?: string } = {}): Prom
   return new Promise((resolve) => {
     let seen = "";
     const timer = setTimeout(() => finish({ status: "error", message: `No link after 45 seconds.${seen ? ` Last output: ${seen.trim().split("\n").slice(-2).join(" ").slice(0, 200)}` : ""}` }), 45_000);
+    let done = false;
+    // only the current tunnel reports: one stopped or replaced while starting must not, 45 s later,
+    // put "No link" (or its own link) over the new tunnel's state
     const finish = (s: TunnelState) => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
-      if (s.status === "error") { if (tunnel === p) { killTree(p); tunnel = null; } }
+      if (tunnel !== p) { resolve({ status: "off" }); return; }
+      if (s.status === "error") { killTree(p); tunnel = null; }
       set(s);
       resolve(s);
     };
@@ -113,10 +119,11 @@ export function startTunnel(port: number, opts: { command?: string } = {}): Prom
     p.stderr?.on("data", onData);
     p.on("error", (e) => finish({ status: "error", message: e.message }));
     p.on("close", (code) => {
-      if (tunnel !== p) return;
+      if (tunnel !== p) { finish({ status: "off" }); return; } // stopped: settle (and disarm the timer)
+      // still the current tunnel here, so finish() reports it (and clears it)
+      if (state.status === "starting") { finish({ status: "error", message: `The tunnel exited (code ${code}). ${seen.trim().split("\n").slice(-2).join(" ").slice(0, 200)}` }); return; }
       tunnel = null;
-      if (state.status === "starting") finish({ status: "error", message: `The tunnel exited (code ${code}). ${seen.trim().split("\n").slice(-2).join(" ").slice(0, 200)}` });
-      else if (state.status === "on") set({ status: "off" });
+      if (state.status === "on") set({ status: "off" });
     });
   });
 }

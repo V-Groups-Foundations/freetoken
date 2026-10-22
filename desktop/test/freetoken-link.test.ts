@@ -17,9 +17,22 @@ async function main() {
 
   let failures = 0;
   async function check(name: string, fn: () => unknown | Promise<unknown>) {
-    try { const r = await fn(); if (r === false) throw new Error("returned false"); console.log(`PASS  ${name}`); }
+    try { const r = await fn(); if (r === false) throw new Error("returned false"); if (typeof r === "string") throw new Error(r); /* a string is a failure report */ console.log(`PASS  ${name}`); }
     catch (e) { failures++; console.log(`FAIL  ${name}\n      ${(e as Error).message}`); }
   }
+
+  await check("FreeToken is recognised by its own reply — another server on the port is not FreeToken", async () => {
+    const serve = (reply: string) => new Promise<http.Server>((r) => { const sv = http.createServer((_q, res) => res.end(reply)); sv.listen(0, "127.0.0.1", () => r(sv)); });
+    const ft = await serve(JSON.stringify({ error: { message: "Missing or invalid FreeToken API token." } }));
+    const other = await serve("<html>my other dev server</html>");
+    const at = (sv: http.Server) => `http://127.0.0.1:${(sv.address() as { port: number }).port}`;
+    const closedPort = at(other).replace(/\d+$/, "1");
+    const got = [await link.probe(at(ft)), await link.probe(at(other)), await link.probe(closedPort, 3000)];
+    let refused = "";
+    try { await link.ensureServer(at(other), "C:/nowhere"); } catch (e) { refused = (e as Error).message; }
+    ft.close(); other.close();
+    return (got.join() === "freetoken,other,down" && /Something other than FreeToken/.test(refused)) || JSON.stringify({ got, refused });
+  });
 
   await check("vrun:// links: only project/<id> with a safe id is accepted", () =>
     link.parseDeepLink("vrun://open")?.kind === "open" && link.parseDeepLink("vrun://open/x") === null
@@ -305,7 +318,8 @@ async function main() {
     ai.startTurnState(s, { sessionId: "followup", mode: "agent", text: "now can u build it" }, "i want a location tracker app with a 3D model of my building");
     const follow = s.bigJob;
     ai.startTurnState(s, { sessionId: "followup", mode: "agent", text: "what does this error mean?" }, "i want a location tracker app with a 3D model of my building");
-    return (follow === true && s.bigJob === false && ai.stepsLeftNote(ai.MAX_STEPS - 9)?.includes("honest summary") && ai.stepsLeftNote(10) === null) || JSON.stringify({ follow, now: s.bigJob });
+    return (follow === true && s.bigJob === false && ai.stepsLeftNote(ai.MAX_STEPS - 9)?.includes("honest summary") && ai.stepsLeftNote(10) === null
+      && ai.stepsLeftNote(16, 25)?.includes("17 of 25 steps") && ai.stepsLeftNote(ai.MAX_STEPS - 9, 25) === null) || JSON.stringify({ follow, now: s.bigJob });
   });
 
   await check("each task starts its plan-step count at zero (a previous task's count skipped this one's checkpoints)", async () => {

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 async function call<T = any>(ch: string, ...args: unknown[]): Promise<T> {
@@ -65,6 +65,7 @@ const api = {
   androidCheck: () => call("android:check"),
   benchModels: () => call("bench:models"),
   benchLast: () => call("bench:last"),
+  benchProgress: () => call("bench:progress"),
   benchScores: () => call("bench:scores"),
   benchStart: (models: string[]) => call("bench:start", models),
   benchCancel: () => call("bench:cancel"),
@@ -79,6 +80,10 @@ const api = {
   onPublishLog: on("publish-log"),
   shareTunnelStart: () => call("share:tunnel-start"),
   shareTunnelStop: () => call("share:tunnel-stop"),
+  shareTunnelState: () => call("share:tunnel-state"),
+  /** Zoom the window in/out by `step` levels (0 = back to 100%). */
+  zoom: (step: number) => webFrame.setZoomLevel(step === 0 ? 0 : Math.max(-3, Math.min(4, webFrame.getZoomLevel() + step))),
+  onShareTunnel: on("share-tunnel"),
   historyRestore: (id: string) => call("history:restore", id),
   /** where a dropped file lives on disk ("" for pasted data, which has no file) */
   pathForFile: (f: File) => { try { return webUtils.getPathForFile(f); } catch { return ""; } },

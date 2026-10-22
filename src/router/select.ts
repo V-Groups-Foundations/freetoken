@@ -92,14 +92,25 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
   // auto: the best model for this kind of task first; one that just failed or was rate-limited drops
   // back for a few minutes; ties go to the catalog's priority (the user's own order)
   const task = input.task;
-  const shared = (m: CatalogModel) => (m.provider === 'starter' ? 40 : input.keyless?.has(m.provider) ? 4 : 0); // the built-in starter is a last resort
-  const rank = (m: CatalogModel) => {
-    const k = usageKey(m.provider, m.modelId);
-    return quality(m.provider, m.modelId, task) + (input.learned?.get(k) ?? 0) - shared(m) - 6 * Math.min(4, input.recentFailures?.get(k) ?? 0);
-  };
+  const rank = (m: CatalogModel) => rankParts(m, task, input).score;
   const byQuality = (a: CatalogModel, b: CatalogModel) => rank(b) - rank(a) || a.priority - b.priority;
   const main = pool(tier).sort(byQuality);
   // when every strong model is spent or failing, the other tier still answers (smart ⇄ fast)
   const other = pool(tier === 'smart' ? 'fast' : 'smart').sort(byQuality);
   return [...first, ...main, ...other];
+}
+
+/**
+ * How auto routing scores one model for a task (higher first): its estimated quality, plus what it
+ * learned from real results, minus a penalty for shared (keyless) providers — the built-in starter is a
+ * last resort — and for failing in the last few minutes. The scores page shows these same numbers.
+ */
+export function rankParts(m: { provider: string; modelId: string }, task: Task,
+  input: { learned?: Map<string, number>; recentFailures?: Map<string, number>; keyless?: Set<string> }) {
+  const k = usageKey(m.provider, m.modelId);
+  const quality_ = quality(m.provider, m.modelId, task);
+  const learned = input.learned?.get(k) ?? 0;
+  const shared = m.provider === 'starter' ? 40 : input.keyless?.has(m.provider) ? 4 : 0;
+  const failing = 6 * Math.min(4, input.recentFailures?.get(k) ?? 0);
+  return { quality: quality_, learned, shared, failing, score: quality_ + learned - shared - failing };
 }

@@ -90,7 +90,11 @@ export type BenchEvent = { type: "start"; model: string; task: string } | { type
 let cancelled = false;
 let running: string | null = null; // the session of the task in progress
 export const cancelBenchmark = () => { cancelled = true; if (running) getSession(running).abort?.abort(); };
-export const benchmarkRunning = () => running !== null || false;
+// the run in progress (also while a task is being graded, when no session is running): a panel opened
+// again mid-run shows it
+let progress: { results: BenchResult[]; current: { model: string; task: string } | null } | null = null;
+export const benchmarkRunning = () => progress !== null;
+export const benchmarkProgress = () => (progress ? { results: [...progress.results], current: progress.current } : null);
 
 type Runner = (req: ChatRequest, emit: (e: AgentEvent) => void) => Promise<unknown> | unknown;
 
@@ -104,10 +108,12 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
   const tasks = opts.tasks ?? TASKS;
   const results: BenchResult[] = [];
   cancelled = false;
+  progress = { results, current: null };
   try {
     for (const model of models) {
       for (const task of tasks) {
         if (cancelled) break;
+        if (progress) progress.current = { model, task: task.id };
         onEvent({ type: "start", model, task: task.id });
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vrun-bench-${task.id}-`));
         for (const [f, t] of Object.entries(task.files)) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), t); }
@@ -140,6 +146,7 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
     }
   } finally {
     running = null;
+    progress = null;
   }
   onEvent({ type: "done", results });
   return results;

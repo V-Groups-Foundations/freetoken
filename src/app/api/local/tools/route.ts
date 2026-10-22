@@ -1,13 +1,10 @@
 import { z } from 'zod';
 import { getDb } from '@/db';
 import { sessionUserId } from '@/lib/session';
-import { createToken } from '@/server/tokens';
+import { tokenForTool } from '@/server/tokens';
 import { localLoginEnabled, localOwner } from '@/server/local-login';
-import { connectTool, detectEnv, disconnectTool, toolStatus, type ToolId } from '@/server/tools-connect';
+import { connectTool, detectEnv, disconnectTool, toolStatus } from '@/server/tools-connect';
 
-const TOOL_TOKEN_NAME: Record<ToolId, string> = {
-  'claude-code': 'Claude Code', codex: 'Codex', aider: 'Aider', continue: 'Continue', freetoken: 'CLI', cursor: 'Cursor', cline: 'Cline',
-};
 
 /**
  * Connecting a tool writes files in the home folder of whoever runs this server, so only that
@@ -44,7 +41,7 @@ export async function POST(req: Request) {
       disconnectTool(tool, env);
       return Response.json({ ok: true, message: 'Disconnected. (Its key stays under API until you revoke it.)', tools: toolStatus(env) });
     }
-    const token = await createToken(db, owner.id, TOOL_TOKEN_NAME[tool]);
+    const token = await tokenForTool(db, env, owner.id, tool, action, baseUrl);
     // tools configured inside their own app: hand over the values to paste
     if (action === 'key' || tool === 'cursor' || tool === 'cline') return Response.json({ ok: true, key: token, baseUrl, model: 'auto-smart' });
     const r = connectTool(tool, env, baseUrl, token);

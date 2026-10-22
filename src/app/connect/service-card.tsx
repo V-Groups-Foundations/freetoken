@@ -19,13 +19,15 @@ export function ServiceCard({ service, connected }: { service: PublicService; co
     e.preventDefault();
     setBusy(true);
     setMessage(null);
+    // the button must never stay stuck on "busy": a dropped connection is an error too
     const res = await fetch('/api/services', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ service: service.id, key }),
-    });
-    const data = await res.json().catch(() => ({}));
+    }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
     setBusy(false);
+    if (!res) return setMessage({ kind: 'error', text: "Couldn't reach FreeToken — is it still running?" });
     if (!res.ok) return setMessage({ kind: 'error', text: data.error ?? 'Something went wrong.' });
     setKey('');
     setMessage({ kind: 'ok', text: data.note ?? 'Connected.' });
@@ -41,7 +43,8 @@ export function ServiceCard({ service, connected }: { service: PublicService; co
   }
 
   async function remove() {
-    await fetch(`/api/services?service=${service.id}`, { method: 'DELETE' });
+    const ok = await fetch(`/api/services?service=${service.id}`, { method: 'DELETE' }).then((r) => r.ok, () => false);
+    if (!ok) toast(`Couldn't disconnect ${service.name} — try again.`);
     router.refresh();
   }
 

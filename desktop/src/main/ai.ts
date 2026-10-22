@@ -571,8 +571,10 @@ export function buildNudge(s: Session, text: string, request: string): Nudge | n
 export const CHECK_PROMPT = "Before you finish, check your work like a careful engineer: make sure the app is running (run_app, e.g. npx serve . for a static site), then call inspect_preview and read the console errors, the page text and what the screenshot shows. Fix every error you find (and anything that looks broken or misplaced), check again, and only then summarise what works — never say it works without having looked. For each important feature you verified, save_check it, so it is re-checked after every later change.";
 
 /** A bigger job (a new app, site or feature across several files) gets a plan with checkpoints first. */
-export const isBigJob = (text: string) =>
-  text.length > 400 || /\b(build|create|make|develop|implement|write)\b[^.?!\n]{0,60}\b(app|application|website|site|game|dashboard|tracker|platform|system|tool|clone|backend|frontend|api|bot|extension|viewer|editor)\b/i.test(text);
+const PRODUCT = String.raw`\b(app|application|website|site|game|dashboard|tracker|platform|system|tool|clone|backend|frontend|api|bot|extension|viewer|editor)\b`;
+// "build a … app", and a description that a later "build it" refers to: "i want a location tracker app …"
+const BIG_JOB = new RegExp(String.raw`\b(build|create|make|develop|implement|write|(want|need|would like)\s+(a|an|my own|to build|to make))\b[^.?!\n]{0,60}` + PRODUCT, "i");
+export const isBigJob = (text: string) => text.length > 400 || BIG_JOB.test(text);
 
 /**
  * Tasks are long-running: there's no small step limit. A task ends when it's done, when the user stops
@@ -581,8 +583,9 @@ export const isBigJob = (text: string) =>
  */
 export const MAX_STEPS = 1000;
 /** Near the step limit, wrap up honestly instead of being cut off mid-fix. */
-export const stepsLeftNote = (turn: number) => turn === MAX_STEPS - 9
-  ? `(You've used ${turn + 1} of ${MAX_STEPS} steps. Wrap up: finish the current fix only if it's one or two steps away; otherwise stop changing things and give the user an honest summary — what works, what doesn't yet and why, and the next step you'd take.)`
+/** The wrap-up note near the step limit — this task's limit (the benchmark sets a small one), not just the default. */
+export const stepsLeftNote = (turn: number, max = MAX_STEPS) => turn === max - 9
+  ? `(You've used ${turn + 1} of ${max} steps. Wrap up: finish the current fix only if it's one or two steps away; otherwise stop changing things and give the user an honest summary — what works, what doesn't yet and why, and the next step you'd take.)`
   : null;
 
 /** Per-turn state both agent loops start from. `earlier` is the recent conversation: "build it" after describing an app is a big job too. */
@@ -593,7 +596,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.unchecked = false;
   s.checkNudged = false;
   s.selfReviewed = false;
-  const followUp = /(build|make|create|do|start|implement|go ahead)/i.test(req.text) && isBigJob(earlier);
+  const followUp = /\b(build|make|create|do|start|implement|go ahead)\b/i.test(req.text) && isBigJob(earlier);
   s.bigJob = canAct(s.mode) && !req.worker && s.mode !== "team" && (isBigJob(req.text) || followUp);
   s.planned = false;
   s.doneSteps = 0;
@@ -743,7 +746,9 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       const text = await readText(input.path);
       const lines = text.split(/\r?\n/);
       const a = Math.max(1, input.start_line ?? 1);
-      const b = Math.min(lines.length, input.end_line ?? Math.min(lines.length, a + 799));
+      // past the end ("L900-899 of 120", "Read 0 lines"): say where the file ends instead
+      if (a > lines.length) return { content: `${resolveInRoot(input.path).rel} has only ${lines.length} line${lines.length === 1 ? "" : "s"} — start_line ${a} is past the end.`, summary: `Past the end (${lines.length} lines)` };
+      const b = Math.max(a, Math.min(lines.length, input.end_line ?? Math.min(lines.length, a + 799)));
       const more = b < lines.length ? `\n…(${lines.length - b} more lines; read with start_line=${b + 1})` : "";
       return { content: `${resolveInRoot(input.path).rel} (${lines.length} lines)\n${numbered(lines.slice(a - 1, b).join("\n"), a)}${more}`, summary: `Read ${b - a + 1} line${b - a ? "s" : ""}${a > 1 || b < lines.length ? ` (L${a}-${b} of ${lines.length})` : ""}` };
     }
@@ -932,7 +937,9 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       if (refusedCmd) return { content: refusedCmd, summary: "Refused: that would stop FreeToken" };
       // a server never exits: run it as the app (App panel + preview) instead of blocking the agent
       if (runner.LONG_RUNNING.test(String(input.command).trim())) {
-        const r = await execTool(s, "run_app", { command: input.command, explanation: input.explanation ?? "This keeps running, so it starts as your app:" }, emit, id);
+        // runTool, not execTool: this call already went through execTool, which counts it once for loop
+        // detection (counted twice, a server the model restarts tripped "going in circles" twice as fast)
+        const r = await runTool(s, "run_app", { command: input.command, explanation: input.explanation ?? "This keeps running, so it starts as your app:" }, emit, id);
         return { ...r, content: `That command keeps running (it's a server), so it was started with run_app instead of the terminal.\n\n${r.content}` };
       }
       const ok = await askApproval(s, emit, id, input.command, input.explanation);
@@ -1016,7 +1023,14 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
 }
 
 export function approve(sessionId: string, toolId: string, ok: boolean) { getSession(sessionId).approvals.get(toolId)?.(ok); }
-export function stop(sessionId: string) { getSession(sessionId).abort?.abort(); }
+/**
+ * The user's Stop: this session's task, and its team — including agents started in earlier turns, which
+ * keep working after the turn that spawned them (that turn's abort no longer reaches them).
+ */
+export function stop(sessionId: string) {
+  getSession(sessionId).abort?.abort();
+  team.stopAgent(sessionId);
+}
 
 export interface ChatRequest {
   sessionId: string;
@@ -1228,11 +1242,11 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
           emit({ type: "tool_end", id: u.id, ok: false, summary: msg });
         }
       }
-      const budget = stepsLeftNote(turn);
+      const budget = stepsLeftNote(turn, req.maxSteps ?? MAX_STEPS);
       s.messages.push({ role: "user", content: budget ? [...results, { type: "text", text: budget }] : results });
       if (s.abort.signal.aborted) return emit({ type: "done", stopReason: "aborted" });
     }
-    emit({ type: "error", message: `Stopped after ${MAX_STEPS} steps.` });
+    emit({ type: "error", message: `Stopped after ${req.maxSteps ?? MAX_STEPS} steps.` });
     emit({ type: "done", stopReason: "max_turns" });
   } catch (e) {
     // keep the transcript valid for the next turn: every tool_use needs a tool_result

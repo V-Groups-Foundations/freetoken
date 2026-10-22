@@ -83,6 +83,10 @@ export function saveCliConfig(env: ToolEnv, baseUrl: string, token: string) {
   writeFileSync(cliConfigPath(env), JSON.stringify({ ...readCliConfig(env), baseUrl, token }, null, 2), { mode: 0o600 });
 }
 export const cliConfiguredFor = (env: ToolEnv, baseUrl: string) => { const c = readCliConfig(env); return !!c.token && c.baseUrl === baseUrl; };
+/** The token the CLI (and every *-free shim) already uses for this server, if any. */
+export const cliTokenFor = (env: ToolEnv, baseUrl: string) => { const c = readCliConfig(env); return c.baseUrl === baseUrl && c.token ? c.token : null; };
+/** Tools that run through `freetoken run`, so they all use the CLI's one token. */
+export const VIA_CLI: ReadonlySet<ToolId> = new Set<ToolId>(['freetoken', 'claude-code', 'aider', 'codex']);
 
 // ---------------------------------------------------------------- marked blocks in text configs
 

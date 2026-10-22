@@ -138,14 +138,27 @@ export function serverRoot(fromDir: string) {
   catch { return null; }
 }
 
-export async function isUp(origin: string) {
-  try { await fetch(origin, { signal: AbortSignal.timeout(2500), redirect: "manual" }); return true; } catch { return false; }
+/**
+ * What answers at `origin`: FreeToken (recognised by its API's own reply to a request without a token),
+ * something else on that port (another dev server), or nothing. The wait is long enough for a dev
+ * server compiling the route on first use.
+ */
+export async function probe(origin: string, ms = 20_000): Promise<"freetoken" | "other" | "down"> {
+  let res: Response;
+  try { res = await fetch(`${origin}/api/v1/models`, { signal: AbortSignal.timeout(ms), redirect: "manual" }); } catch { return "down"; }
+  const body = await res.text().catch(() => "");
+  return /FreeToken/.test(body) ? "freetoken" : "other";
 }
+/** FreeToken itself answers at `origin` (not just anything listening on the port). */
+export const isUp = async (origin: string) => (await probe(origin)) === "freetoken";
 
 let server: ChildProcess | null = null;
 /** Start `npm run dev` in the FreeToken repo (once) and wait until it answers. */
 export async function ensureServer(origin: string, root: string | null, onLog?: (line: string) => void): Promise<"running" | "started"> {
-  if (await isUp(origin)) return "running";
+  const now = await probe(origin);
+  if (now === "freetoken") return "running";
+  // starting FreeToken there would fail (port taken) — and V-Run would talk to the wrong server
+  if (now === "other") throw new Error(`Something other than FreeToken is using ${origin}. Stop it, or point V-Run at FreeToken's address in Settings.`);
   const local = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
   if (!local || !root) throw new Error(`FreeToken isn't answering at ${origin}. Start it, then try again.`);
   if (!server) {

@@ -29,7 +29,10 @@ const WIN = typeof process !== 'undefined' && process.platform === 'win32';
 /** Quote one argument for a Windows command line (CommandLineToArgvW rules; safe inside cmd /c "…"). */
 export function quoteWinArg(a) {
   if (a !== '' && !/[\s"&|<>^%()]/.test(a)) return a;
-  return `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
+  const quoted = `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
+  // cmd.exe expands %NAME% even inside quotes: step out of the quotes and caret-escape each % ("^%"),
+  // so the name cmd sees starts with a quote — never a real variable — and the % reaches the tool as is
+  return quoted.replace(/%/g, '"^%"');
 }
 
 /**

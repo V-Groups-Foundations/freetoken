@@ -803,6 +803,10 @@ function registerIpc() {
     return { ...s, qr: s.status === "on" ? await share.qrSvg(s.url) : null };
   });
   handle("share:tunnel-stop", () => share.stopTunnel());
+  // the panel shows a link that's already running when it's opened again, and follows changes live
+  const withQr = async (s: share.TunnelState) => ({ ...s, qr: s.status === "on" ? await share.qrSvg(s.url) : null });
+  handle("share:tunnel-state", () => withQr(share.tunnelState()));
+  share.onTunnel((s) => { void withQr(s).then((x) => send("share-tunnel", x)).catch(() => {}); });
   // Publish: the website online on a free host
   handle("publish:plan", () => publisher.planPublish());
   handle("publish:start", async (o: { provider: publisher.Provider; name: string; build: string | null; dir: string }) => {
@@ -829,6 +833,7 @@ function registerIpc() {
     if (!useFreeToken()) throw new Error("Benchmarking compares FreeToken's models: switch the provider to FreeToken in Settings.");
     return (await ft.listModels()).filter((m) => !/^auto-/.test(m));
   });
+  handle("bench:progress", () => bench.benchmarkProgress());
   handle("bench:last", () => { try { return JSON.parse(fs.readFileSync(benchFile(), "utf8")); } catch { return null; } });
   handle("bench:scores", () => ft.routerScores("agent").catch(() => null));
   handle("bench:start", async (models: string[]) => {

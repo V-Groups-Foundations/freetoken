@@ -62,7 +62,16 @@ export function probeScript(script: string) {
       return out;
     };
     try {
-      const value = await (0, eval)(${JSON.stringify(script)});
+      // "await …" isn't valid in a plain eval: run it as an async expression, then as async statements
+      const run = async (src) => {
+        try { return await (0, eval)(src); }
+        catch (e) {
+          if (!(e instanceof SyntaxError) || !/await/.test(String(e.message))) throw e;
+          try { return await (0, eval)("(async () => (" + src + "\\n))()"); }
+          catch (e2) { if (!(e2 instanceof SyntaxError)) throw e2; return await (0, eval)("(async () => {" + src + "\\n})()"); }
+        }
+      };
+      const value = await run(${JSON.stringify(script)});
       const text = JSON.stringify(show(value), null, 1);
       return text === undefined ? String(value) : text.length > 6000 ? text.slice(0, 6000) + "…(cut)" : text;
     } catch (e) { return "Error: " + (e && e.message || e); }
@@ -163,6 +172,8 @@ export async function guardCommand(cmd: string): Promise<string | null> {
     if (!mentions) continue;
     // serving on it, or freeing it (kill-port, fuser -k, "netstat … 3000 … taskkill")
     if (new RegExp(`(-p|--port|-l|--listen|port=|port\\s+|:)\\s*${n}(?!\\d)`).test(c) || /kill|stop-process|fuser/.test(c)) return why(p);
+    // servers that take the port as a plain argument: python -m http.server 3000
+    if (/http\.server|simplehttpserver/.test(c)) return why(p);
   }
   // killing a PID: refuse it when that PID holds a protected port
   const pids = [...c.matchAll(/(?:\/pid|-id|\bkill(?:\s+-\d+|\s+-9)?)\s+(\d{2,7})/g)].map((m) => Number(m[1]));

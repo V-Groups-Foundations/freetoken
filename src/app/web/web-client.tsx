@@ -40,9 +40,10 @@ function SearchPanel({ enabled }: { enabled: boolean }) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ query }),
-    });
-    const data = await res.json().catch(() => ({}));
+    }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
     setBusy(false);
+    if (!res) return setError("Couldn't reach FreeToken — is it still running?");
     if (!res.ok) return setError(data.error ?? 'Search failed.');
     setResult(data as SearchResult);
   }
@@ -117,9 +118,10 @@ function ReadPanel() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ url }),
-    });
-    const data = await res.json().catch(() => ({}));
+    }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
     setBusy(false);
+    if (!res) return setError("Couldn't reach FreeToken — is it still running?");
     if (!res.ok) return setError(data.error ?? 'Could not read that URL.');
     setResult(data as ReadResult);
   }

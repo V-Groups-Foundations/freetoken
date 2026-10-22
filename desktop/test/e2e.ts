@@ -154,6 +154,21 @@ ${e.stack}` : ""}`));
       await shot("04-workbench");
     });
 
+    await step("Ctrl+= / Ctrl+- / Ctrl+0 zoom the window (there's no menu to carry them)", async () => {
+      const zoom = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel());
+      await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+      await page.keyboard.press("Control+=");
+      await page.waitForTimeout(200);
+      const bigger = await zoom();
+      await page.keyboard.press("Control+-");
+      await page.keyboard.press("Control+-");
+      await page.waitForTimeout(200);
+      const smaller = await zoom();
+      await page.keyboard.press("Control+0");
+      await page.waitForTimeout(200);
+      const reset = await zoom();
+      if (!(bigger > 0 && smaller < 0 && reset === 0)) throw new Error(JSON.stringify({ bigger, smaller, reset }));
+    });
     await step("settings stores the API key encrypted", async () => {
       await page.keyboard.press("Control+,");
       await page.getByRole("dialog", { name: "Settings" }).getByPlaceholder(/sk-ant|ANTHROPIC_API_KEY/).fill("sk-ant-test-123");

@@ -14,11 +14,25 @@ type Phase = 'idle' | 'opening' | 'help';
 
 function useLauncher() {
   const [phase, setPhase] = useState<Phase>('idle');
-  /** Follow a vrun:// link; if the browser is still here a moment later, nothing handled it. */
+  /**
+   * Follow a vrun:// link. The page stays put either way, so "still here" proves nothing: when V-Run
+   * (or the browser's "Open V-Run?" prompt) comes up, this window loses focus — only if it never does
+   * did nothing handle the link.
+   */
   function viaLink(href: string) {
     setPhase('opening');
+    let left = false;
+    const away = () => { left = true; };
+    const onVisibility = () => { if (document.hidden) left = true; };
+    window.addEventListener('blur', away);
+    document.addEventListener('visibilitychange', onVisibility);
     window.location.href = href;
-    setTimeout(() => setPhase((p) => (p === 'opening' ? 'help' : p)), 1800);
+    // a cold start of V-Run can take a few seconds before its window takes focus
+    setTimeout(() => {
+      window.removeEventListener('blur', away);
+      document.removeEventListener('visibilitychange', onVisibility);
+      setPhase((p) => (p === 'opening' ? (left ? 'idle' : 'help') : p));
+    }, 4000);
   }
   return { phase, setPhase, viaLink };
 }

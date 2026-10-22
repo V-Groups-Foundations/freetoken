@@ -28,12 +28,28 @@ const ai = await import("../src/main/ai");
 
 let failures = 0;
 async function check(name: string, fn: () => unknown | Promise<unknown>) {
-  try { const r = await fn(); if (r === false) throw new Error("returned false"); console.log(`PASS  ${name}`); }
+  try { const r = await fn(); if (r === false) throw new Error("returned false"); if (typeof r === "string") throw new Error(r); /* a string is a failure report */ console.log(`PASS  ${name}`); }
   catch (e) { failures++; console.log(`FAIL  ${name}\n      ${(e as Error).message}`); }
 }
 const throws = async (fn: () => unknown) => { try { await fn(); return false; } catch { return true; } };
 
 ws.setRoot(dir);
+
+await check("no source file contains a control character (a \\b once arrived as a backspace byte, silently breaking a regex)", async () => {
+  const bad: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|tsx|js|mjs|cjs|css|java)$/.test(e.name) && /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(fs.readFileSync(p, "utf8"))) bad.push(p);
+    }
+  };
+  for (const d of ["src", "test", path.join("..", "src"), path.join("..", "bin"), path.join("..", "tests")]) {
+    const abs = path.join(__dirname, "..", d);
+    if (fs.existsSync(abs)) walk(abs);
+  }
+  return bad.length === 0 || bad.join(", ");
+});
 
 await check("paths outside the workspace are rejected", async () =>
   (await throws(() => ws.resolveInRoot("../etc/passwd"))) && (await throws(() => ws.resolveInRoot(path.join(os.tmpdir(), "x")))) &&

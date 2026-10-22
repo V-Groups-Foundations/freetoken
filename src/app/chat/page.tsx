@@ -5,7 +5,8 @@ import { listUserModels } from '@/router/models';
 import { listChats, listChatMessages } from '@/chat/service';
 import { Chat } from './chat';
 
-export default async function ChatPage() {
+export default async function ChatPage({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
+  const fresh = (await searchParams).new;
   const uid = await requireUserId();
   const db = getDb();
   const [models, chatList] = await Promise.all([listUserModels(db, uid), listChats(db, uid)]);
@@ -20,10 +21,12 @@ export default async function ChatPage() {
       </div>
     );
   }
-  const activeId = chatList[0]?.id ?? null;
+  // ?new=… (the command palette's New chat): an empty conversation instead of the latest one
+  const activeId = fresh ? null : chatList[0]?.id ?? null;
   const initialMessages = activeId ? await listChatMessages(db, activeId) : [];
   return (
     <Chat
+      key={fresh ? `new-${fresh}` : 'chat'}
       models={models}
       initialChats={chatList.map((c) => ({ id: c.id, title: c.title, model: c.model }))}
       activeId={activeId}

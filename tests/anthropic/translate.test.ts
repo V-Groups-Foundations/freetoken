@@ -43,6 +43,8 @@ describe('Anthropic → OpenAI request', () => {
   it('maps Claude model names to tiers and passes FreeToken ids through', () => {
     expect(mapModel('claude-haiku-4-5')).toBe('auto-fast');
     expect(mapModel('claude-opus-4-1')).toBe('auto-smart');
+    expect(mapModel('gemini-2.5-pro')).toBe('auto-smart'); // contains "mini", isn't small
+    expect(mapModel('gpt-4o-mini')).toBe('auto-fast');
     expect(mapModel('groq/openai/gpt-oss-120b')).toBe('groq/openai/gpt-oss-120b');
     expect(mapModel('auto-fast')).toBe('auto-fast');
   });

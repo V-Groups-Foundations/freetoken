@@ -9,7 +9,8 @@ type Item = { label: string; icon: string; hint?: string; run: (r: ReturnType<ty
 const go = (href: string) => (r: ReturnType<typeof useRouter>) => r.push(href);
 
 const ITEMS: Item[] = [
-  { label: 'New chat', icon: '✨', hint: 'Start a conversation', run: go('/chat') },
+  // a fresh conversation (not the last one), even when already on /chat: the value makes it a new page
+  { label: 'New chat', icon: '✨', hint: 'Start a conversation', run: (r) => r.push(`/chat?new=${Date.now()}`) },
   { label: 'Chat', icon: '💬', run: go('/chat') },
   { label: 'Image studio', icon: '🎨', hint: 'Generate an image', run: go('/images') },
   { label: 'Documents', icon: '📄', hint: 'Chat with your files', run: go('/docs') },

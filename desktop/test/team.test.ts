@@ -140,6 +140,17 @@ function startServer(): Promise<{ url: string; close: () => void }> {
       && task.includes("src/api.ts") && task.includes("src/web.ts") && final.includes("APPROVED") && final.includes("reviewer")
       || JSON.stringify({ reqs: reqs.length, firstReview, lastBuilder, tools: [...tools], final: final.slice(-300) });
   });
+  await check("the user's Stop also stops agents started in an earlier turn", async () => {
+    team.resetTeams();
+    const stopped: string[] = [];
+    team.configureTeam({ run: () => new Promise(() => {}), stop: (sid) => stopped.push(sid), getSession: ai.getSession, forward: () => {}, onTeam: () => {} });
+    team.spawn("sup-old", { name: "builder", task: "build the page" }, (p) => p);
+    // that turn ended; a new turn is running (with its own abort) when the user presses Stop
+    ai.getSession("sup-old").abort = new AbortController();
+    ai.stop("sup-old");
+    return stopped.length === 1 || JSON.stringify(stopped);
+  });
+
   await check("two agent names that map to one session (front end / front-end) are refused", async () => {
     team.resetTeams();
     team.configureTeam({ run: () => new Promise(() => {}), stop: () => {}, getSession: ai.getSession, forward: () => {}, onTeam: () => {} });

@@ -21,7 +21,11 @@ export function BenchmarkPanel({ onClose, busy }: { onClose: () => void; busy: b
 
   useEffect(() => {
     api.benchModels().then((m) => { setModels(m); setPicked(new Set(m.slice(0, 3))); }).catch((e) => { setModels([]); setError((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "")); });
-    api.benchLast().then((l) => { if (l) { setResults(l.results); setLastAt(l.at); } }).catch(() => {});
+    // a run in progress (the panel was closed and opened again) wins over the last finished one
+    Promise.all([api.benchProgress().catch(() => null), api.benchLast().catch(() => null)]).then(([p, l]) => {
+      if (p) { setResults(p.results); setCurrent(p.current); setState("running"); }
+      else if (l) { setResults(l.results); setLastAt(l.at); }
+    });
     api.benchScores().then(setScores).catch(() => {});
     return api.onBenchEvent((e) => {
       if (e.type === "start") setCurrent({ model: e.model, task: e.task });

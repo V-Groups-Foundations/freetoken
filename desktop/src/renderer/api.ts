@@ -82,6 +82,7 @@ interface Api {
   publishPlan(): Promise<PublishPlan>;
   benchModels(): Promise<string[]>;
   benchLast(): Promise<{ at: number; results: BenchResult[] } | null>;
+  benchProgress(): Promise<{ results: BenchResult[]; current: { model: string; task: string } | null } | null>;
   benchScores(): Promise<RouterScores | null>;
   benchStart(models: string[]): Promise<BenchResult[]>;
   benchCancel(): Promise<void>;
@@ -97,6 +98,9 @@ interface Api {
   onPublishLog(fn: (line: string) => void): Unsub;
   shareTunnelStart(): Promise<{ status: "on" | "error" | "off" | "starting"; url?: string; via?: string; message?: string; qr: string | null }>;
   shareTunnelStop(): Promise<void>;
+  zoom(step: number): void;
+  shareTunnelState(): Promise<{ status: "on" | "error" | "off" | "starting"; url?: string; via?: string; message?: string; qr: string | null }>;
+  onShareTunnel(fn: (s: { status: "on" | "error" | "off" | "starting"; url?: string; via?: string; message?: string; qr: string | null }) => void): Unsub;
   historyRestore(id: string): Promise<{ restored: number; removed: string[]; files: string[] }>;
   skillsInstall(source: string): Promise<{ source: string; installed: { name: string; files: number; skipped: number }[]; readme: string }>;
   skillsRemove(name: string): Promise<void>;

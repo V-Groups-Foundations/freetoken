@@ -20,7 +20,7 @@ async function main() {
 
   let failures = 0;
   async function check(name: string, fn: () => unknown | Promise<unknown>) {
-    try { const r = await fn(); if (r === false) throw new Error("returned false"); console.log(`PASS  ${name}`); }
+    try { const r = await fn(); if (r === false) throw new Error("returned false"); if (typeof r === "string") throw new Error(r); /* a string is a failure report */ console.log(`PASS  ${name}`); }
     catch (e) { failures++; console.log(`FAIL  ${name}\n      ${(e as Error).message}`); }
   }
 
@@ -189,6 +189,25 @@ async function main() {
     await ai.rewind("rewind", 0);
     const back = fs.readFileSync(path.join(dir, "src/math.ts"), "utf8");
     return ok1 && back === orig && s.messages.length === 0 && ai.pendingChanges("rewind").length === 0 && s.turns.length === 0;
+  });
+
+  await check("read_file past the end says where the file ends (it gave \"L900-899\" and \"Read 0 lines\")", async () => {
+    const ai = await import("../src/main/ai");
+    const s = ai.getSession("eof");
+    const n = fs.readFileSync(path.join(dir, "src/math.ts"), "utf8").split(/\r?\n/).length;
+    const past = await ai.execTool(s, "read_file", { path: "src/math.ts", start_line: n + 50 }, () => {}, "e1");
+    const backwards = await ai.execTool(s, "read_file", { path: "src/math.ts", start_line: 2, end_line: 1 }, () => {}, "e2");
+    return (past.content.includes(`only ${n} line`) && backwards.summary.startsWith("Read 1 line")) || JSON.stringify({ past: past.summary, backwards: backwards.summary });
+  });
+
+  await check("a server started from run_terminal_command counts once for loop detection (it counted twice)", async () => {
+    const ai = await import("../src/main/ai");
+    const s = ai.getSession("redirect");
+    s.actions = [];
+    // decline the approval: nothing is started, but the action is recorded as it would be
+    const emit = (e: { type: string; id?: string }) => { if (e.type === "approval") ai.approve("redirect", e.id!, false); };
+    await ai.execTool(s, "run_terminal_command", { command: "npm run dev" }, emit as never, "rd");
+    return s.actions.length === 1 || JSON.stringify(s.actions);
   });
 
   await check("repeated identical reads are short-circuited until the workspace changes", async () => {

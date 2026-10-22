@@ -3,6 +3,7 @@
 // responses and the server-sent event stream both ways, so those tools run on your free models.
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- untyped JSON from clients and providers */
+import { toolCallSlots } from '@/openai/tool-slots';
 
 export type AnthropicRequest = {
   model?: string;
@@ -24,7 +25,8 @@ export const MAX_OUTPUT_TOKENS = 8192;
 export function mapModel(model: string | undefined): string {
   if (!model) return 'auto-smart';
   if (model.startsWith('auto-') || model.includes('/')) return model;
-  return /haiku|fast|mini|nano|flash|lite/i.test(model) ? 'auto-fast' : 'auto-smart';
+  // whole words: "gemini-2.5-pro" contains "mini" but is not a small model
+  return /haiku|fast|\bmini\b|\bnano\b|flash|\blite\b/i.test(model) ? 'auto-fast' : 'auto-smart';
 }
 
 const textOf = (content: unknown): string =>
@@ -119,6 +121,7 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
   let index = -1;
   let open: 'text' | 'tool' | null = null;
   const toolBlock = new Map<number, number>(); // OpenAI tool index → our block index
+  const slot = toolCallSlots(); // one slot per real call, however the provider numbers them
   let stop = 'end_turn';
   let outputTokens = 0;
   let realInputTokens: number | null = null; // the provider's own count, when its usage chunk arrives
@@ -160,7 +163,7 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
           push(sse('content_block_delta', { index, delta: { type: 'text_delta', text: d.content } }));
         }
         for (const tc of d.tool_calls ?? []) {
-          const i = tc.index ?? 0;
+          const i = slot(tc);
           if (!toolBlock.has(i)) {
             close(); index++; open = 'tool'; toolBlock.set(i, index);
             push(sse('content_block_start', { index, content_block: { type: 'tool_use', id: tc.id ?? `toolu_${index}`, name: tc.function?.name ?? '', input: {} } }));

@@ -52,6 +52,8 @@ const setup = (files: Record<string, string>) => {
     const run = async (req: any, emit: (e: any) => void) => {
       emit({ type: "tool_start", id: "1", name: "write_file", input: {} });
       seenByTask.add(fs.realpathSync(ws.getRoot()!));
+      const pr = bench.benchmarkProgress();
+      if (pr?.current?.model === req.model) progressSeen++;
       if (req.model === "good/model") {
         const task = bench.TASKS.find((t) => t.prompt === req.text)!;
         for (const [f, t] of Object.entries(SOLUTIONS[task.id])) fs.writeFileSync(path.join(ws.getRoot()!, f), t);
@@ -62,14 +64,17 @@ const setup = (files: Record<string, string>) => {
     // the rest of the app (editor, terminal, chat) checks the folder while the benchmark runs
     const seenByApp = new Set<string>();
     const seenByTask = new Set<string>();
+    let progressSeen = 0, runningAtResult = 0;
     const watch = setInterval(() => seenByApp.add(fs.realpathSync(ws.getRoot()!)), 2);
-    const results = await bench.runBenchmark(["good/model", "lazy/model"], run, (e) => events.push(e.type), (m, ok) => reports.push(`${m}:${ok}`));
+    const results = await bench.runBenchmark(["good/model", "lazy/model"], run, (e) => { events.push(e.type); if (e.type === "result" && bench.benchmarkRunning()) runningAtResult++; }, (m, ok) => reports.push(`${m}:${ok}`));
     clearInterval(watch);
     const sum = bench.summarise(results);
     const restored = fs.realpathSync(ws.getRoot()!) === fs.realpathSync(userProject);
     const appStayed = seenByApp.size === 1 && seenByApp.has(fs.realpathSync(userProject));
     const taskScoped = seenByTask.size === 8 && !seenByTask.has(fs.realpathSync(userProject));
     if (!appStayed || !taskScoped) return JSON.stringify({ app: [...seenByApp], task: seenByTask.size });
+    // a panel opened mid-run sees the run (also while grading), and nothing once it's over
+    if (progressSeen !== 8 || runningAtResult !== 8 || bench.benchmarkProgress() !== null || bench.benchmarkRunning()) return JSON.stringify({ progressSeen, runningAtResult, after: bench.benchmarkProgress() });
     return (results.length === 8 && sum[0].model === "good/model" && sum[0].passed === 4 && sum[1].passed === 0 && restored
       && reports.filter((r) => r === "good/model:true").length === 4 && reports.filter((r) => r === "lazy/model:false").length === 4
       && events.at(-1) === "done" && results.every((r) => r.steps === 1 && r.tokens === 120))

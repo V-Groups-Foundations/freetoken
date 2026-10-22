@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createTestDb, createUser } from '../helpers/db';
 import { models } from '@/db/schema';
 import { saveKey } from '@/keys/service';
-import { recordFeedback } from '@/usage/ledger';
+import { recordFeedback, recordUsage } from '@/usage/ledger';
 import { routerScores } from '@/server/router-scores';
 import { TEST_VAULT_KEY } from '../helpers/fixtures';
 import type { DB } from '@/db';
@@ -29,5 +29,15 @@ describe('router scores', () => {
     expect(after.models[0].model).toBe('groq/openai/gpt-oss-120b');
     expect(after.models[1].learned).toBeLessThan(0);
     expect((await routerScores(deps, userId, 'bogus')).task).toBe('agent');
+  });
+
+  it('shows the penalty routing gives a model that just failed (the page used to rank it as if it were fine)', async () => {
+    const deps = { db, vaultKey: TEST_VAULT_KEY } as never;
+    await recordUsage(db, { userId, provider: 'groq', modelId: 'qwen/qwen3.8-27b', source: 'api', status: 'error', promptTokens: 0, completionTokens: 0, latencyMs: 10 });
+    const out = await routerScores(deps, userId, 'agent');
+    const qwen = out.models.find((m) => m.model === 'groq/qwen/qwen3.8-27b')!;
+    expect(qwen.failing).toBe(6);
+    expect(qwen.score).toBeCloseTo(qwen.quality + qwen.learned - qwen.shared - 6, 5);
+    expect(qwen.shared).toBe(0); // the user's own key: not shared
   });
 });

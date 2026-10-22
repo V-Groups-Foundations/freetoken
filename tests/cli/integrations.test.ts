@@ -13,6 +13,8 @@ describe('freetoken run / setup', () => {
     expect(quoteWinArg('say "hi"')).toBe('"say \\"hi\\""');
     expect(quoteWinArg('a&b')).toBe('"a&b"');
     expect(quoteWinArg('')).toBe('""');
+    // cmd.exe would expand %USERNAME% even inside quotes; each % is stepped out of the quotes and caret-escaped
+    expect(quoteWinArg('%USERNAME%')).toBe('""^%"USERNAME"^%""');
   });
 
   it('prints setup with the real base URL, and names the tools it knows', () => {

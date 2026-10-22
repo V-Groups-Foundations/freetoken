@@ -2,6 +2,7 @@
 // the Codex CLI since it dropped wire_api = "chat" — run on FreeToken's free models. Stateless: the
 // client sends the whole conversation each turn (Codex does, with store: false).
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { mergeName, toolCallSlots } from './tool-slots';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant' | 'tool'; content: any; tool_calls?: any[]; tool_call_id?: string };
 export type ToolKind = 'function' | 'custom' | 'local_shell';
@@ -139,7 +140,9 @@ export function fromChat(json: any, model: string, kinds: Map<string, ToolKind>)
   const text = thinkFilter()(String(msg.content ?? '')) ;
   if (text.trim()) output.push({ type: 'message', id: rid('msg'), role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] });
   for (const tc of msg.tool_calls ?? []) output.push(callItem(kinds, { id: tc.id || rid('call'), name: tc.function?.name ?? '', args: tc.function?.arguments ?? '{}' }));
-  return { id: rid('resp'), object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'completed', model, output, usage: usageOf(json?.usage) };
+  const cut = json?.choices?.[0]?.finish_reason === 'length';
+  return { id: rid('resp'), object: 'response', created_at: Math.floor(Date.now() / 1000), status: cut ? 'incomplete' : 'completed',
+    ...(cut ? { incomplete_details: { reason: 'max_output_tokens' } } : {}), model, output, usage: usageOf(json?.usage) };
 }
 
 /** Stream a chat-completions SSE body out as Responses API events. */
@@ -152,6 +155,8 @@ export function streamToResponses(upstream: ReadableStream<Uint8Array>, model: s
   const think = thinkFilter();
   let msgId: string | null = null, text = '', usage: any;
   const calls = new Map<number, { id: string; name: string; args: string }>();
+  const slot = toolCallSlots();
+  let finish: string | null = null;
   // the client went away (Ctrl+C in Codex): stop reading and cancel the provider's stream, which also
   // records the request's usage — instead of reading on, or hanging, with nobody listening
   const reader = upstream.getReader();
@@ -196,14 +201,15 @@ export function streamToResponses(upstream: ReadableStream<Uint8Array>, model: s
             // the provider broke off mid-answer: report a failed response, not a completed one
             if (j.error) throw new Error(String(j.error.message ?? j.error));
             if (j.usage) usage = j.usage;
+            if (j.choices?.[0]?.finish_reason) finish = j.choices[0].finish_reason;
             const d = j.choices?.[0]?.delta;
             if (!d) continue;
             if (typeof d.content === 'string' && d.content) onText(d.content);
             for (const tc of d.tool_calls ?? []) {
-              const i = tc.index ?? 0;
+              const i = slot(tc);
               const c = calls.get(i) ?? { id: '', name: '', args: '' };
               if (tc.id) c.id = tc.id;
-              if (tc.function?.name) c.name += tc.function.name;
+              if (tc.function?.name) c.name = mergeName(c.name, tc.function.name);
               if (tc.function?.arguments) c.args += tc.function.arguments;
               calls.set(i, c);
             }
@@ -225,7 +231,10 @@ export function streamToResponses(upstream: ReadableStream<Uint8Array>, model: s
           controller.enqueue(ev({ type: 'response.output_item.done', output_index: output.length, item }));
           output.push(item);
         }
-        controller.enqueue(ev({ type: 'response.completed', response: { id, object: 'response', created_at, status: 'completed', model, output, usage: usageOf(usage) } }));
+        // cut off at the output limit: incomplete, so the client knows the answer (or a tool call) is partial
+        const cut = finish === 'length';
+        controller.enqueue(ev({ type: cut ? 'response.incomplete' : 'response.completed', response: { id, object: 'response', created_at, status: cut ? 'incomplete' : 'completed',
+          ...(cut ? { incomplete_details: { reason: 'max_output_tokens' } } : {}), model, output, usage: usageOf(usage) } }));
       } catch (e) {
         controller.enqueue(ev({ type: 'response.failed', response: { id, object: 'response', created_at, status: 'failed', model, output: [], error: { code: 'server_error', message: (e as Error).message || 'The model stream broke off.' } } }));
       } finally {

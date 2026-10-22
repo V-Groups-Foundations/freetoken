@@ -52,6 +52,22 @@ const portOf = (s: http.Server) => (s.address() as { port: number }).port;
       || JSON.stringify({ on, failed, states });
   });
 
+  await check("a tunnel stopped while starting settles at once and never reports over the next one", async () => {
+    // prints its link only after 3 s: still "starting" when it's stopped
+    const slow = share.startTunnel(5173, { command: `node -e "setTimeout(() => console.log('your url is: https://old-link.loca.lt'), 3000); setInterval(() => {}, 1000)"` });
+    await new Promise((r) => setTimeout(r, 300));
+    share.stopTunnel();
+    const t0 = Date.now();
+    const first = await slow;
+    const settledMs = Date.now() - t0;
+    const next = await share.startTunnel(5173, { command: `node -e "console.log('your url is: https://new-link.loca.lt'); setInterval(() => {}, 1000)"` });
+    await new Promise((r) => setTimeout(r, 3500)); // past the old process's link time
+    const after = share.tunnelState();
+    share.stopTunnel();
+    return (first.status === "off" && settledMs < 10_000 && next.status === "on" && after.status === "on" && after.url === "https://new-link.loca.lt")
+      || JSON.stringify({ first, settledMs, next, after });
+  });
+
   console.log(failures ? `\n${failures} failed` : "\nall share checks passed");
   process.exit(failures ? 1 : 0);
 })();
