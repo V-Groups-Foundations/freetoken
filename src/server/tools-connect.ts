@@ -121,16 +121,39 @@ export function codexBlock(baseUrl: string) {
 export const CODEX_PROFILE = `# ${MARK}: the "freetoken" Codex profile (codex --profile freetoken). Disconnect in FreeToken removes it.\nmodel_provider = "freetoken"\nmodel = "auto-smart"\nsandbox_mode = "workspace-write"\napproval_policy = "on-request"\n`;
 
 const continuePath = (env: ToolEnv) => path.join(env.home, '.continue', 'config.yaml');
+const continueJsonPath = (env: ToolEnv) => path.join(env.home, '.continue', 'config.json');
+/**
+ * Which Continue config to edit: config.yaml when it exists; else an existing (older) config.json —
+ * creating a config.yaml next to it would hide the user's models, since Continue prefers the YAML.
+ */
+const continueTarget = (env: ToolEnv) => (existsSync(continuePath(env)) || !existsSync(continueJsonPath(env)) ? continuePath(env) : continueJsonPath(env));
+const FT_TITLE = 'FreeToken (auto-smart)';
+
+/** Add (or replace) the FreeToken model in Continue's older config.json. */
+export function continueJsonWithFreeToken(existing: string, baseUrl: string, token: string) {
+  const cfg = JSON.parse(existing) as { models?: { title?: string }[] };
+  const models = (cfg.models ?? []).filter((m) => m?.title !== FT_TITLE);
+  cfg.models = [{ title: FT_TITLE, provider: 'openai', model: 'auto-smart', apiBase: baseUrl, apiKey: token } as { title: string }, ...models];
+  return `${JSON.stringify(cfg, null, 2)}\n`;
+}
+export function continueJsonWithoutFreeToken(existing: string) {
+  const cfg = JSON.parse(existing) as { models?: { title?: string }[] };
+  cfg.models = (cfg.models ?? []).filter((m) => m?.title !== FT_TITLE);
+  return `${JSON.stringify(cfg, null, 2)}\n`;
+}
 /** Add a FreeToken model under `models:` in Continue's config.yaml (creating the file if needed). */
 export function continueWithFreeToken(existing: string | null, baseUrl: string, token: string) {
   const item = (indent: string) =>
     [`${indent}${BLOCK_START}`, `${indent}- name: FreeToken (auto-smart)`, `${indent}  provider: openai`, `${indent}  model: auto-smart`,
       `${indent}  apiBase: ${baseUrl}`, `${indent}  apiKey: ${token}`, `${indent}${BLOCK_END}`].join('\n');
   if (!existing?.trim()) return `name: My Continue config\nversion: 1.0.0\nschema: v1\nmodels:\n${item('  ')}\n`;
-  const text = removeBlock(existing);
-  const m = text.match(/^models:[ \t]*\n((?:[ \t]*\n)*)([ \t]*)-/m);
-  if (m) return text.replace(/^models:[ \t]*\n/m, `models:\n${item(m[2])}\n`);
-  if (/^models:[ \t]*\[\s*\][ \t]*$/m.test(text)) return text.replace(/^models:[ \t]*\[\s*\][ \t]*$/m, `models:\n${item('  ')}`);
+  // Windows line endings, comments and blank lines before the first model are all fine — and the file
+  // never gets a second top-level `models:` key (invalid YAML: Continue fails to load it)
+  const text = removeBlock(existing.replace(/\r\n/g, '\n'));
+  if (/^models:[ \t]*\[\s*\][ \t]*(#.*)?$/m.test(text)) return text.replace(/^models:[ \t]*\[\s*\][ \t]*(#.*)?$/m, `models:\n${item('  ')}`);
+  const m = text.match(/^models:[ \t]*(#.*)?\n((?:[ \t]*(?:#.*)?\n)*)([ \t]*)-/m);
+  if (m) return text.replace(/^models:[ \t]*(#.*)?\n/m, (line) => `${line}${item(m[3])}\n`);
+  if (/^models:[ \t]*(#.*)?$/m.test(text)) return text.replace(/^models:[ \t]*(#.*)?$/m, (line) => `${line}\n${item('  ')}`);
   return `${text.replace(/\s*$/, '')}\nmodels:\n${item('  ')}\n`;
 }
 
@@ -140,7 +163,7 @@ const read = (p: string) => { try { return readFileSync(p, 'utf8'); } catch { re
 
 export function toolStatus(env: ToolEnv): ToolStatus[] {
   const codex = read(codexPath(env));
-  const cont = read(continuePath(env));
+  const cont = read(continueTarget(env));
   return [
     { id: 'claude-code', name: 'Claude Code', kind: 'auto', installed: env.installed('claude'), connected: hasShim(env, 'claude-free'), command: 'claude-free',
       note: 'Adds a claude-free command: Claude Code on your free models. Your normal claude command is unchanged.' },
@@ -148,8 +171,8 @@ export function toolStatus(env: ToolEnv): ToolStatus[] {
       note: 'Adds FreeToken as a provider plus a separate "freetoken" profile (~/.codex/freetoken.config.toml — your default is unchanged) and a codex-free command.' },
     { id: 'aider', name: 'Aider', kind: 'auto', installed: env.installed('aider'), connected: hasShim(env, 'aider-free'), command: 'aider-free',
       note: 'Adds an aider-free command that runs Aider on your free models.' },
-    { id: 'continue', name: 'Continue', kind: 'auto', installed: existsSync(path.join(env.home, '.continue')) || null, connected: !!cont?.includes(BLOCK_START),
-      note: 'Adds a "FreeToken (auto-smart)" model to ~/.continue/config.yaml (a backup is kept).' },
+    { id: 'continue', name: 'Continue', kind: 'auto', installed: existsSync(path.join(env.home, '.continue')) || null, connected: !!cont && (cont.includes(BLOCK_START) || cont.includes(`"${FT_TITLE}"`)),
+      note: 'Adds a "FreeToken (auto-smart)" model to your Continue config (a backup is kept).' },
     { id: 'freetoken', name: 'freetoken command', kind: 'auto', installed: true, connected: env.installed('freetoken') || hasShim(env, 'freetoken'), command: 'freetoken run <tool>',
       note: 'Lets you run any AI tool on FreeToken from any folder: freetoken run <tool>.' },
     { id: 'cursor', name: 'Cursor', kind: 'assist', installed: null, connected: false, openUrl: 'cursor://',
@@ -188,10 +211,11 @@ export function connectTool(id: ToolId, env: ToolEnv, baseUrl: string, token: st
       return { message: 'Done. Open a new terminal and type codex-free (or codex --profile freetoken via freetoken run).', command: 'codex-free' };
     }
     case 'continue': {
-      const file = continuePath(env);
+      const file = continueTarget(env);
       mkdirSync(path.dirname(file), { recursive: true });
       backup(file);
-      writeFileSync(file, continueWithFreeToken(read(file), baseUrl, token));
+      const current = read(file);
+      writeFileSync(file, file.endsWith('.json') && current ? continueJsonWithFreeToken(current, baseUrl, token) : continueWithFreeToken(current, baseUrl, token));
       return { message: 'Done. In Continue, pick "FreeToken (auto-smart)" from the model list (reload VS Code if it doesn\'t show).' };
     }
     default:
@@ -212,8 +236,9 @@ export function disconnectTool(id: ToolId, env: ToolEnv) {
       break;
     }
     case 'continue': {
-      const t = read(continuePath(env));
-      if (t) writeFileSync(continuePath(env), removeBlock(t));
+      const file = continueTarget(env);
+      const t = read(file);
+      if (t) writeFileSync(file, file.endsWith('.json') ? continueJsonWithoutFreeToken(t) : removeBlock(t));
       break;
     }
     default: break;

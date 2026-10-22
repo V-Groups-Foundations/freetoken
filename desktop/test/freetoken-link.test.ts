@@ -308,6 +308,13 @@ async function main() {
     return (follow === true && s.bigJob === false && ai.stepsLeftNote(ai.MAX_STEPS - 9)?.includes("honest summary") && ai.stepsLeftNote(10) === null) || JSON.stringify({ follow, now: s.bigJob });
   });
 
+  await check("each task starts its plan-step count at zero (a previous task's count skipped this one's checkpoints)", async () => {
+    const s = ai.getSession("steps");
+    s.doneSteps = 5;
+    ai.startTurnState(s, { sessionId: "steps", mode: "agent", text: "build a tracker app with floors" });
+    return s.doneSteps === 0 || String(s.doneSteps);
+  });
+
   await check("going in circles is caught: repeats, ping-pong between servers, new ports; the third time it must stop", async () => {
     const s = ai.getSession("loops");
     ai.startTurnState(s, { sessionId: "loops", mode: "agent", text: "fix the page" });

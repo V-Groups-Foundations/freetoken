@@ -596,6 +596,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   const followUp = /(build|make|create|do|start|implement|go ahead)/i.test(req.text) && isBigJob(earlier);
   s.bigJob = canAct(s.mode) && !req.worker && s.mode !== "team" && (isBigJob(req.text) || followUp);
   s.planned = false;
+  s.doneSteps = 0;
   s.lengthRetries = 0;
   s.summaryNudged = false;
   s.actions = [];

@@ -1,5 +1,6 @@
 // Workspace file access. Every path that comes from the renderer or the model is
 // resolved against the open folder and rejected if it escapes it.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +8,17 @@ import path from "node:path";
 let root: string | null = null;
 let ignore: IgnoreMatcher = () => false;
 
-export const getRoot = () => root;
+// A task can work in its own folder without switching the app's (the model benchmark runs each task
+// in a throwaway project while the editor, terminal and chat stay on the user's): everything that
+// task starts, however deep, sees this folder instead.
+const scoped = new AsyncLocalStorage<{ root: string; ignore: IgnoreMatcher }>();
+/** Run `fn` (and everything it starts) with `dir` as the workspace. */
+export function withRoot<T>(dir: string, fn: () => T): T {
+  const real = fs.realpathSync(path.resolve(dir));
+  return scoped.run({ root: real, ignore: loadIgnore(real) }, fn);
+}
+export const getRoot = () => scoped.getStore()?.root ?? root;
+const currentIgnore = () => scoped.getStore()?.ignore ?? ignore;
 export function setRoot(dir: string) {
   root = fs.realpathSync(path.resolve(dir));
   ignore = loadIgnore(root);
@@ -17,13 +28,14 @@ export function clearRoot() { root = null; ignore = () => false; }
 export const reloadIgnore = () => { if (root) ignore = loadIgnore(root); };
 export const isIgnored = (rel: string, isDir = false) => {
   const p = rel.split(path.sep).join("/");
-  return p.split("/").some((seg) => ALWAYS_HIDDEN.has(seg)) || ignore(p, isDir);
+  return p.split("/").some((seg) => ALWAYS_HIDDEN.has(seg)) || currentIgnore()(p, isDir);
 };
 
 export class PathError extends Error {}
 
 /** Resolve a workspace-relative (or absolute-inside-workspace) path; throws if it escapes the root. */
 export function resolveInRoot(p: string): { abs: string; rel: string } {
+  const root = getRoot();
   if (!root) throw new PathError("No folder is open");
   // "C:\x\y" and "/home/x" stay absolute (then must be inside root); on Windows a bare
   // leading slash ("/src/a.ts", common in model output) means workspace-relative.

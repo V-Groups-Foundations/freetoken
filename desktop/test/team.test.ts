@@ -140,6 +140,14 @@ function startServer(): Promise<{ url: string; close: () => void }> {
       && task.includes("src/api.ts") && task.includes("src/web.ts") && final.includes("APPROVED") && final.includes("reviewer")
       || JSON.stringify({ reqs: reqs.length, firstReview, lastBuilder, tools: [...tools], final: final.slice(-300) });
   });
+  await check("two agent names that map to one session (front end / front-end) are refused", async () => {
+    team.resetTeams();
+    team.configureTeam({ run: () => new Promise(() => {}), stop: () => {}, getSession: ai.getSession, forward: () => {}, onTeam: () => {} });
+    team.spawn("sup-n", { name: "front end", task: "build the page" }, (p) => p);
+    try { team.spawn("sup-n", { name: "front-end", task: "build the other page" }, (p) => p); return "accepted"; }
+    catch (e) { return /too close/.test((e as Error).message) || (e as Error).message; }
+  });
+
   await check("the name 'reviewer' is reserved for the automatic reviewer", async () => {
     try { team.spawn("sup-x", { name: "reviewer", task: "do some reviewing please" }, (p) => p); return false; } catch (e) { return /reserved/.test((e as Error).message); }
   });

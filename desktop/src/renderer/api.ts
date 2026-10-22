@@ -47,7 +47,7 @@ interface Api {
   approve(sid: string, toolId: string, ok: boolean): Promise<void>;
   stop(sid: string): Promise<void>;
   resetChat(sid: string): Promise<void>;
-  chatRestore(): Promise<{ sid: string; mode?: string; items: unknown[]; interrupted?: { text: string; mode: string; startedAt: number } } | null>;
+  chatRestore(): Promise<{ sid: string; mode?: string; items: unknown[]; interrupted?: { text: string; mode: string; startedAt: number }; running?: boolean } | null>;
   chatDismissInterrupted(sid: string): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   chatSave(chat: { sid: string; mode: string; items: unknown[] }): Promise<void>;

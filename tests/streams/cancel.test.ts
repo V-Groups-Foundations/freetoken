@@ -38,3 +38,45 @@ describe('a client that disconnects (Esc in Claude Code, Ctrl+C in Codex)', () =
     });
   }
 });
+
+describe('a provider that breaks off mid-answer', () => {
+  const broken = () => {
+    const enc = new TextEncoder();
+    return new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode(`data: ${JSON.stringify({ id: 'x', choices: [{ delta: { content: 'half an ans' } }] })}\n\n`));
+        c.enqueue(enc.encode(`data: ${JSON.stringify({ error: { message: 'Upstream idle timeout exceeded', code: 502 } })}\n\n`));
+        c.close();
+      },
+    });
+  };
+  const text = async (s: ReadableStream<Uint8Array>) => new Response(s).text();
+
+  it('Claude Code gets an error event, not a normal end_turn', async () => {
+    const out = await text(streamToAnthropic(broken(), 'auto-smart', 10));
+    expect(out).toContain('event: error');
+    expect(out).toContain('Upstream idle timeout exceeded');
+    expect(out).not.toContain('"stop_reason":"end_turn"');
+  });
+
+  it('Codex gets response.failed, not a completed response', async () => {
+    const out = await text(streamToResponses(broken(), 'auto-smart', new Map()));
+    expect(out).toContain('response.failed');
+    expect(out).toContain('Upstream idle timeout exceeded');
+    expect(out).not.toContain('"status":"completed"');
+  });
+});
+
+describe("Claude Code's token counts", () => {
+  it('the real input token count from the provider is reported at the end', async () => {
+    const enc = new TextEncoder();
+    const up = new ReadableStream<Uint8Array>({ start(c) {
+      c.enqueue(enc.encode(`data: ${JSON.stringify({ id: 'x', choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] })}\n\n`));
+      c.enqueue(enc.encode(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 18234, completion_tokens: 3 } })}\n\n`));
+      c.close();
+    } });
+    const out = await new Response(streamToAnthropic(up, 'auto-smart', 120)).text();
+    const delta = out.split('\n').find((l) => l.startsWith('data:') && l.includes('message_delta'))!;
+    expect(JSON.parse(delta.slice(5)).usage).toMatchObject({ input_tokens: 18234, output_tokens: 3 });
+  });
+});

@@ -7,7 +7,7 @@ import { Markdown } from './markdown';
 import { toast } from '../fx';
 
 type Msg = { role: 'user' | 'assistant'; content: string; provider?: string };
-type ChatRef = { id: string; title: string };
+type ChatRef = { id: string; title: string; model?: string };
 
 // Each provider answers in its own color, so a conversation shows the pool at work.
 const PROVIDER_COLOR: Record<string, string> = {
@@ -48,7 +48,13 @@ export function Chat({
 }) {
   const [chats, setChats] = useState<ChatRef[]>(initialChats);
   const [current, setCurrent] = useState<string | null>(activeId);
-  const [model, setModel] = useState('auto-smart');
+  // the model the open thread answers with (each thread keeps its own; a new chat starts on auto)
+  const [model, setModel] = useState(initialChats.find((c) => c.id === activeId)?.model ?? 'auto-smart');
+  // which conversation is on screen: a reply or a load for an older one is dropped once this moves on
+  const view = useRef(0);
+  const streamCtl = useRef<AbortController | null>(null);
+  // the message whose send failed, with its attachments: what "Try again" resends
+  const [failed, setFailed] = useState<{ text: string; atts: Attachment[] } | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>(initialMessages);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -91,21 +97,35 @@ export function Chat({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
+  /** Leave the conversation on screen: a reply still streaming for it is stopped and ignored. */
+  function leaveView() {
+    view.current++;
+    streamCtl.current?.abort();
+    streamCtl.current = null;
+    setBusy(false);
+    setError(null);
+    setFailed(null);
+  }
+
   function newChat() {
+    leaveView();
     setCurrent(null);
     setMsgs([]);
-    setError(null);
+    setModel('auto-smart');
     taRef.current?.focus();
   }
 
   async function openChat(id: string) {
-    if (id === current || busy) return;
+    if (id === current) return;
+    leaveView();
+    const mine = view.current;
     setCurrent(id);
-    setError(null);
     setMsgs([]);
+    setModel(chats.find((c) => c.id === id)?.model ?? 'auto-smart');
     try {
       const res = await fetch(`/api/chats/${id}/messages`);
-      if (res.ok) setMsgs(await res.json());
+      // clicking A then B quickly: only B's messages may land
+      if (res.ok && mine === view.current) setMsgs(await res.json());
     } catch {
       /* keep empty; the user can still type */
     }
@@ -122,11 +142,14 @@ export function Chat({
     }
   }
 
-  async function streamInto(chatId: string, history: Msg[], content: string | object[]) {
+  async function streamInto(chatId: string, history: Msg[], content: string | object[], mine: number) {
+    const ctl = new AbortController();
+    streamCtl.current = ctl;
     const res = await fetch(`/api/chats/${chatId}/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content }),
+      signal: ctl.signal,
     });
     if (!res.ok || !res.body) {
       const j = await res.json().catch(() => null);
@@ -151,6 +174,7 @@ export function Chat({
           const delta = JSON.parse(data).choices?.[0]?.delta?.content;
           if (typeof delta === 'string') {
             text += delta;
+            if (mine !== view.current) return; // the user moved on to another conversation
             setMsgs([...history, { role: 'assistant', content: text, provider }]);
           }
         } catch {
@@ -160,9 +184,11 @@ export function Chat({
     }
   }
 
-  async function submit(textValue: string) {
+  async function submit(textValue: string, retryAtts?: Attachment[]) {
     const typed = textValue.trim();
-    const atts = attachments;
+    const atts = retryAtts ?? attachments;
+    const mine = view.current;
+    const before = msgs;
     if ((!typed && atts.length === 0) || busy || reading) return;
 
     const richContent = buildContent(typed, atts);
@@ -176,6 +202,7 @@ export function Chat({
     if (taRef.current) taRef.current.style.height = 'auto';
     setBusy(true);
     setError(null);
+    setFailed(null);
     setMsgs([...history, { role: 'assistant', content: '' }]);
 
     try {
@@ -190,21 +217,30 @@ export function Chat({
         if (!res.ok) throw new Error('Could not start a new chat.');
         const chat = await res.json();
         chatId = chat.id as string;
+        if (mine !== view.current) return;
         setCurrent(chatId);
-        setChats((cs) => [{ id: chat.id, title: chat.title }, ...cs]);
+        setChats((cs) => [{ id: chat.id, title: chat.title, model }, ...cs]);
       }
-      await streamInto(chatId, history, richContent);
+      await streamInto(chatId, history, richContent, mine);
     } catch (e) {
-      setMsgs(history); // drop the partial answer; the user can retry
+      if (mine !== view.current) return; // left this conversation (new chat / another thread): nothing to show
+      // the server keeps a message only once a model answers it: take the failed one off the screen and
+      // keep it (with its attachments) for "Try again"
+      setMsgs(before);
+      setFailed({ text: typed, atts });
       setError(e instanceof Error ? e.message : 'Something went wrong.');
     } finally {
-      setBusy(false);
-      taRef.current?.focus();
+      if (mine === view.current) {
+        setBusy(false);
+        streamCtl.current = null;
+        taRef.current?.focus();
+      }
     }
   }
 
   async function changeModel(next: string) {
     setModel(next);
+    setChats((cs) => cs.map((c) => (c.id === current ? { ...c, model: next } : c)));
     if (current) {
       try {
         await fetch(`/api/chats/${current}`, {
@@ -344,7 +380,7 @@ export function Chat({
         {error && (
           <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--accent-tint)] px-4 py-3 text-sm text-[var(--danger)]">
             <span>{error}</span>
-            <button onClick={() => void submit(msgs[msgs.length - 1]?.content ?? '')} className="shrink-0 font-medium underline underline-offset-2">Try again</button>
+            {failed && <button onClick={() => void submit(failed.text, failed.atts)} className="shrink-0 font-medium underline underline-offset-2">Try again</button>}
           </div>
         )}
 

@@ -133,8 +133,15 @@ export function ChatPanel(props: {
     api.chatRestore().then((c) => {
       if (!live || !c?.sid || !Array.isArray(c.items) || !c.items.length) return;
       setSid(c.sid);
-      // tool steps that were running when the window went away: the agent may still finish them
-      setItems((c.items as Item[]).map((x) => (x.kind === "tool" && x.status === "running" ? { ...x, status: "error", summary: "Interrupted (window reloaded)" } : x)));
+      // the agent is still working on it: show it as busy (Stop, live progress) — otherwise a new message
+      // would start a second loop on the same session. Not running: unfinished steps were interrupted.
+      if (c.running) {
+        setItems(c.items as Item[]);
+        turn.current = { ...turn.current, start: Date.now(), tokens: 0, chars: 0, tools: 0, waitUntil: 0, models: [], mode: (c.mode as Mode) ?? "agent" };
+        setBusy(true);
+      } else {
+        setItems((c.items as Item[]).map((x) => (x.kind === "tool" && x.status === "running" ? { ...x, status: "error", summary: "Interrupted (window reloaded)" } : x)));
+      }
       if (c.mode && MODES.some((m) => m.id === c.mode)) setMode(c.mode as Mode);
       if (c.interrupted) setInterrupted(c.interrupted);
     }).catch(() => {}).finally(() => { if (live) restored.current = true; });

@@ -46,16 +46,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Memory: the model sees the whole saved conversation (as text) plus this turn's rich content.
   const prior = await listChatMessages(db, id);
   const history = prior.slice(-MAX_HISTORY).map((m) => ({ role: m.role, content: m.content }));
-  await addChatMessage(db, id, { role: 'user', content: storedText });
-  if (prior.length === 0 && (chat.title === 'New chat' || !chat.title)) {
-    await renameChat(db, uid, id, titleFrom(storedText));
-  }
-
   const out = await routeChat(
     { userId: uid, source: 'chat', body: { model: chat.model, messages: [...history, { role: 'user', content }], stream: true } },
     getDeps(),
   );
   if (!out.ok) return Response.json({ error: { message: out.message, code: out.code } }, { status: out.status });
+  // saved only once a model is answering: a failed send leaves no unanswered message behind
+  await addChatMessage(db, id, { role: 'user', content: storedText });
+  if (prior.length === 0 && (chat.title === 'New chat' || !chat.title)) {
+    await renameChat(db, uid, id, titleFrom(storedText));
+  }
 
   const provider = out.response.headers.get('x-freetoken-provider');
   const persisted = out.response.body

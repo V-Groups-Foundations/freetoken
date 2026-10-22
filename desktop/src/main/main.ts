@@ -45,7 +45,8 @@ if (!isTest) {
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", (_e, argv) => {
-  if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+  // shown too — V-Run may be hidden in the tray (working in the background), not just minimised
+  if (win) showWindow();
   const url = argv.find((a) => a.startsWith(`${PROTOCOL}://`));
   if (url) handleDeepLink(url);
 });
@@ -242,7 +243,7 @@ function termRun(id: string, command: string) {
   if (!root) throw new Error("Open a folder first");
   const shellBin = process.platform === "win32" ? runner.windowsShell() : "/bin/bash";
   const args = process.platform === "win32" ? ["-NoProfile", "-Command", command] : ["-lc", command];
-  const p = spawn(shellBin, args, { cwd: root, env: process.env });
+  const p = spawn(shellBin, args, { cwd: root, env: process.env, windowsHide: true });
   terms.set(id, p);
   p.stdout?.on("data", (d) => send("term-data", { id, data: d.toString() }));
   p.stderr?.on("data", (d) => send("term-data", { id, data: d.toString() }));
@@ -466,7 +467,8 @@ async function openFreeTokenProject(id: string) {
   // a new folder remounts the workbench and its chat takes the project on mount; telling the old,
   // about-to-unmount chat would let it grab the project first
   if (sameFolder) send("ft-project", { id: p.id, name: p.name });
-  if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+  // shown too — V-Run may be hidden in the tray (working in the background), not just minimised
+  if (win) showWindow();
 }
 
 let pendingLink: string | null = process.argv.find((a) => a.startsWith(`${PROTOCOL}://`)) ?? null;
@@ -702,7 +704,9 @@ function registerIpc() {
         if (wmem) { ai.restoreSession(wsid, wmem.claude, wmem.skills); ft.restoreTranscript(wsid, wmem.ft ?? []); }
       }
     }
-    return interrupted ? { ...ui, interrupted } : ui;
+    // still working (the window reloaded, or the folder was reopened): the chat shows it as busy
+    const running = runningTasks.has(ui.sid);
+    return { ...ui, ...(interrupted ? { interrupted } : {}), ...(running ? { running: true } : {}) };
   });
   // the resume offer was dismissed: forget the interrupted task
   handle("chat:dismiss-interrupted", (sid: string) => chats.markRunning(String(sid), null));

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { toast } from '../fx';
 
 /** Record from the microphone and transcribe via /api/audio/transcribe (Groq Whisper). */
 export function MicButton({ disabled, onText }: { disabled?: boolean; onText: (text: string) => void }) {
@@ -21,8 +22,13 @@ export function MicButton({ disabled, onText }: { disabled?: boolean; onText: (t
       recorderRef.current = rec;
       rec.start();
       setState('recording');
-    } catch {
+    } catch (e) {
       setState('idle');
+      // say why nothing happens: a blocked microphone, or none at all
+      const name = (e as { name?: string })?.name;
+      toast(name === 'NotAllowedError' || name === 'SecurityError'
+        ? 'Microphone access is blocked — allow it for this site in your browser, then try again.'
+        : name === 'NotFoundError' ? 'No microphone found.' : 'Could not start recording.');
     }
   }
 
@@ -38,6 +44,11 @@ export function MicButton({ disabled, onText }: { disabled?: boolean; onText: (t
       const res = await fetch('/api/audio/transcribe', { method: 'POST', body: form });
       const data = await res.json().catch(() => null);
       if (res.ok && data?.text) onText(String(data.text).trim());
+      else if (res.ok) toast("Didn't catch anything — try speaking a little longer.");
+      // e.g. "Voice transcription needs Groq… connect it at /connect"
+      else toast(data?.error?.message ?? data?.error ?? `Transcription failed (HTTP ${res.status}).`);
+    } catch {
+      toast('Could not reach the server to transcribe. Check your connection.');
     } finally {
       setState('idle');
     }

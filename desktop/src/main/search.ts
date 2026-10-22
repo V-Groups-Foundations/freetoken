@@ -16,7 +16,7 @@ function rg(args: string[], limitLines: number): Promise<string[]> {
   const extra = fs.existsSync(path.join(root, ".cursorignore")) ? ["--ignore-file", ".cursorignore"] : [];
   return new Promise((resolve, reject) => {
     // --no-require-git: honour .gitignore even when the folder isn't a git repo
-    const p = spawn(rgPath(), [...extra, "--no-require-git", "--hidden", "--glob", "!.git", "--glob", "!node_modules", ...args], { cwd: root });
+    const p = spawn(rgPath(), [...extra, "--no-require-git", "--hidden", "--glob", "!.git", "--glob", "!node_modules", ...args], { cwd: root, windowsHide: true });
     const lines: string[] = [];
     let buf = "";
     let err = "";

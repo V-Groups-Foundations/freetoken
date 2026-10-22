@@ -239,6 +239,9 @@ export function spawn(supervisor: string, input: { name: string; task: string; f
   if (!existing && t.workers.size >= MAX_AGENTS) throw new Error(`A team can have at most ${MAX_AGENTS} agents; reuse one with message_agent.`);
   const files = (input.files ?? []).map(normalize);
   const sid = workerSid(supervisor, name);
+  // "front end" and "front-end" would share one session (two agents writing one transcript)
+  const clash = [...t.workers.values()].find((w) => w.sid === sid && key(w.name) !== key(name));
+  if (clash) throw new Error(`"${name}" is too close to the existing agent "${clash.name}" — give it a clearly different name.`);
   const taken = files.filter((f) => { const o = t.claims.get(f); return o && o !== sid && o !== supervisor && ownerActive(t, o); });
   if (taken.length) throw new Error(`Already owned by other agents: ${taken.map((f) => `${f} (${nameOf(t, t.claims.get(f)!)})`).join(", ")}. Give each agent different files.`);
   const w: Worker = existing ?? { sid, name, task: input.task, files, status: "queued", activity: "", report: "", text: "", started: Date.now(), runs: 0 };

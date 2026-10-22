@@ -121,6 +121,7 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
   const toolBlock = new Map<number, number>(); // OpenAI tool index → our block index
   let stop = 'end_turn';
   let outputTokens = 0;
+  let realInputTokens: number | null = null; // the provider's own count, when its usage chunk arrives
   let textChars = 0;
   // the client went away (Esc in Claude Code): stop reading and cancel the provider's stream, which
   // also records the request's usage — instead of reading the whole answer with nobody listening
@@ -146,8 +147,10 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
       };
       const close = () => { if (open) { push(sse('content_block_stop', { index })); open = null; } };
       const handle = (chunk: any) => {
+        // the provider broke off mid-answer ("Upstream idle timeout exceeded"): an error, not a finished turn
+        if (chunk?.error) throw new Error(String(chunk.error.message ?? chunk.error));
         begin(chunk?.id);
-        if (chunk?.usage) { outputTokens = chunk.usage.completion_tokens ?? outputTokens; }
+        if (chunk?.usage) { outputTokens = chunk.usage.completion_tokens ?? outputTokens; realInputTokens = chunk.usage.prompt_tokens ?? realInputTokens; }
         const ch = chunk?.choices?.[0];
         if (!ch) return;
         const d = ch.delta ?? {};
@@ -193,7 +196,7 @@ export function streamToAnthropic(upstream: ReadableStream<Uint8Array>, model: s
       begin();
       if (index < 0) { index = 0; push(sse('content_block_start', { index, content_block: { type: 'text', text: '' } })); open = 'text'; }
       close();
-      push(sse('message_delta', { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: outputTokens || Math.ceil(textChars / 4) } }));
+      push(sse('message_delta', { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: outputTokens || Math.ceil(textChars / 4), ...(realInputTokens != null ? { input_tokens: realInputTokens } : {}) } }));
       push(sse('message_stop', {}));
       ctrl.close();
     },

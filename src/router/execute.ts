@@ -74,8 +74,13 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   const promptEstimate = estimateTokens(body.messages);
   // models the provider says are out of requests until their window resets
   const nowMs = now();
-  const exhausted = new Set((await deps.db.select().from(providerLimits).where(and(eq(providerLimits.userId, userId), eq(providerLimits.remainingRequests, 0))))
-    .filter((l) => !l.requestsResetAt || l.requestsResetAt.getTime() > nowMs).map((l) => `${l.provider}/${l.modelId}`));
+  // A "0 left" with no reset time counts only for a minute: limits are refreshed only by a successful
+  // call to that model, so excluding it until a reset that never comes would block it forever.
+  const exhaustedRows = (await deps.db.select().from(providerLimits).where(and(eq(providerLimits.userId, userId), eq(providerLimits.remainingRequests, 0))))
+    .filter((l) => (l.requestsResetAt ? l.requestsResetAt.getTime() > nowMs : l.updatedAt.getTime() + 60_000 > nowMs));
+  const exhausted = new Set(exhaustedRows.map((l) => `${l.provider}/${l.modelId}`));
+  // when they reset: the "try again at" in the all-exhausted answer
+  for (const l of exhaustedRows) resetTimes.push(l.requestsResetAt?.getTime() ?? l.updatedAt.getTime() + 60_000);
   const task = input.task ?? detectTask(body);
   const selectInput = {
     requested,
@@ -94,8 +99,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     keyless,
   };
   const candidates = selectCandidates(selectInput);
-  // Empty even with quota ignored: no connected model can serve this request at all.
-  if (candidates.length === 0 && selectCandidates({ ...selectInput, cooling: new Set(), usageToday: new Map() }).length === 0) {
+  // Empty even with quota ignored (cooldowns, daily limits, providers' "none left"): no connected model
+  // can serve this request at all. Out of quota is a 429 "try later", never this 400.
+  if (candidates.length === 0 && selectCandidates({ ...selectInput, cooling: new Set(), usageToday: new Map(), exhausted: new Set() }).length === 0) {
     if (needsVision) {
       return fail(400, 'no_vision_model',
         'None of your connected models can see images. Connect Gemini (or a GitHub GPT-4.1 key) at /connect to send pictures.');
@@ -128,6 +134,13 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     let r = await callChat(def, c.creds, askUsage ? { ...plain, stream_options: { ...(body.stream_options as object), include_usage: true } } : plain, { fetchImpl: deps.fetchImpl });
     // a provider that rejects stream_options: try again exactly as the client sent it
     if (askUsage && !r.ok && r.error.kind === 'bad_request') r = await callChat(def, c.creds, plain, { fetchImpl: deps.fetchImpl });
+    // the client asked for it itself (Claude Code / Codex through FreeToken do): if the provider rejects
+    // it, try once without it rather than failing the whole request (usage is then estimated)
+    else if (!askUsage && body.stream_options && !r.ok && r.error.kind === 'bad_request' && /stream_options|include_usage/i.test(r.error.message)) {
+      const withoutOptions: Record<string, unknown> = { ...plain };
+      delete withoutOptions.stream_options;
+      r = await callChat(def, c.creds, withoutOptions, { fetchImpl: deps.fetchImpl });
+    }
 
     if (!r.ok) {
       const e = r.error;

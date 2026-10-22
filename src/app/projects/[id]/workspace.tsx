@@ -32,14 +32,24 @@ export function Workspace({
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<'chat' | 'v-run'>('chat');
   const [error, setError] = useState<string | null>(null);
+  // the message whose send failed: what "Try again" resends (not whatever is last on screen)
+  const [failed, setFailed] = useState<string | null>(null);
 
   async function changeModel(next: string) {
+    const before = model;
     setModel(next);
-    await fetch(`/api/projects/${projectId}`, {
+    // the project's model is saved by the chat route (PATCH /api/projects/:id/chat); if it isn't saved,
+    // say so and put the selector back — replies would otherwise keep using the old model
+    const res = await fetch(`/api/projects/${projectId}/chat`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: next }),
-    }).catch(() => {});
+    }).catch(() => null);
+    if (!res?.ok) {
+      setModel(before);
+      setFailed(null);
+      setError("Couldn't change the model — check your connection and try again.");
+    }
   }
 
   async function send(content: string) {
@@ -87,6 +97,7 @@ export function Workspace({
       }
     } catch (e) {
       setMsgs(msgs); // drop the failed turn
+      setFailed(text);
       setError(e instanceof Error ? e.message : 'Something went wrong.');
     } finally {
       setBusy(false);
@@ -131,7 +142,7 @@ export function Workspace({
       {error && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--accent-tint)] px-4 py-3 text-sm text-[var(--danger)]">
           <span>{error}</span>
-          <button onClick={() => send(msgs.at(-1)?.content ?? '')} className="shrink-0 font-medium underline">Try again</button>
+          {failed && <button onClick={() => { const t = failed; setFailed(null); void send(t); }} className="shrink-0 font-medium underline">Try again</button>}
         </div>
       )}
     </div>

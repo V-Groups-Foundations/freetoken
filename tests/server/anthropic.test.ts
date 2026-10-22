@@ -33,6 +33,12 @@ describe('/v1/messages (Anthropic-compatible)', () => {
     expect((await handleMessages(post('/api/v1/messages', { authorization: `Bearer ${token}` }, msg), deps())).status).toBe(200);
   });
 
+  it('a malformed message is a 400 in Anthropic format, not a server error', async () => {
+    const res = await handleMessages(post('/api/v1/messages', { 'x-api-key': token }, { ...msg, messages: [null] }), deps());
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.type).toBe('invalid_request_error');
+  });
+
   it("answers in Anthropic format, routed through the user's providers", async () => {
     const res = await handleMessages(post('/api/v1/messages', { 'x-api-key': token }, msg), deps());
     const body = await res.json();

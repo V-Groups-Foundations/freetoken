@@ -14,4 +14,10 @@ describe('validateChatBody', () => {
     expect(validateChatBody('hi', 2)).toMatchObject({ ok: false });
     expect(validateChatBody([], 2)).toMatchObject({ ok: false });
   });
+  it('rejects messages that are not objects with a role (they used to crash routing with a 500)', () => {
+    expect(validateChatBody({ messages: [null] }, 10)).toMatchObject({ ok: false, message: expect.stringContaining('messages[0]') });
+    expect(validateChatBody({ messages: [{ role: 'user', content: 'hi' }, 'hello'] }, 10)).toMatchObject({ ok: false, message: expect.stringContaining('messages[1]') });
+    expect(validateChatBody({ messages: [{ content: 'no role' }] }, 10)).toMatchObject({ ok: false });
+    expect(validateChatBody({ messages: [{ role: 'user', content: 'hi' }] }, 10)).toMatchObject({ ok: true });
+  });
 });

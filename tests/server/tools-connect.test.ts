@@ -65,6 +65,36 @@ describe('connecting tools', () => {
     expect(t.startsWith('model = "o4-mini"')).toBe(true);
   });
 
+  it('Continue: Windows line endings, comments and an empty models: never produce a second models: key', async () => {
+    // @ts-expect-error js-yaml ships no type declarations (it's only used here to check the YAML is valid)
+    const { load: parse } = (await import('js-yaml')) as { load: (s: string) => { models: { name: string }[] } };
+    const cases = [
+      'name: Mine\r\nversion: 1.0.0\r\nmodels:\r\n  - name: GPT\r\n    provider: openai\r\n    model: gpt-4o\r\n',
+      'name: Mine\nmodels:\n  # my models\n  - name: GPT\n    model: gpt-4o\n',
+      'name: Mine\nmodels:\ncontext: []\n',
+    ];
+    for (const c of cases) {
+      const out = continueWithFreeToken(c, BASE, 'ft_tok');
+      expect(out.match(/^models:/gm)).toHaveLength(1);
+      const doc = parse(out);
+      expect(doc.models.map((m: { name: string }) => m.name)).toContain('FreeToken (auto-smart)');
+      if (c.includes('GPT')) expect(doc.models.map((m: { name: string }) => m.name)).toContain('GPT');
+    }
+  });
+
+  it("Continue: a user on the older config.json gets FreeToken there (a new config.yaml would hide their models)", () => {
+    mkdirSync(path.join(env.home, '.continue'));
+    const json = path.join(env.home, '.continue', 'config.json');
+    writeFileSync(json, JSON.stringify({ models: [{ title: 'My GPT', provider: 'openai', model: 'gpt-4o' }] }));
+    connectTool('continue', env, BASE, 'ft_tok');
+    expect(existsSync(path.join(env.home, '.continue', 'config.yaml'))).toBe(false);
+    const titles = JSON.parse(readFileSync(json, 'utf8')).models.map((m: { title: string }) => m.title);
+    expect(titles).toEqual(['FreeToken (auto-smart)', 'My GPT']);
+    expect(toolStatus(env).find((x) => x.id === 'continue')?.connected).toBe(true);
+    disconnectTool('continue', env);
+    expect(JSON.parse(readFileSync(json, 'utf8')).models.map((m: { title: string }) => m.title)).toEqual(['My GPT']);
+  });
+
   it('Continue: inserts a model with the right indentation, or creates the config', () => {
     const created = continueWithFreeToken(null, BASE, 'ft_tok');
     expect(created).toContain('models:\n  # >>> FreeToken');

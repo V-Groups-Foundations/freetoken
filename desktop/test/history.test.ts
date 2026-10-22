@@ -41,6 +41,14 @@ async function check(name: string, fn: () => Promise<boolean | string>) {
     return (restored && undone && res.removed.includes("src/new.js") && r("node_modules/x/index.js") === "dep") || JSON.stringify({ res, restored, undone, idx: r("index.html") });
   });
 
+  await check("restoring undoes a rename (it used to leave both the old and the new file)", async () => {
+    w("page.js", "export const page = 1;");
+    const snap = await history.snapshot(root, "Before: rename");
+    fs.renameSync(path.join(root, "page.js"), path.join(root, "screen.js"));
+    await history.restore(root, snap!.id);
+    return (r("page.js") === "export const page = 1;" && r("screen.js") === null) || JSON.stringify({ page: r("page.js"), screen: r("screen.js") });
+  });
+
   await check("bad ids are refused; without a history folder nothing happens", async () => {
     const bad = await history.restore(root, "; rm -rf /").then(() => "accepted", (e) => (e as Error).message);
     history.setHistoryDir(null);

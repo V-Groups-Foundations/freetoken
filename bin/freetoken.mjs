@@ -688,8 +688,16 @@ async function runTool(args) {
   const which = (name) => { try { return execFileSync('where.exe', [name], { encoding: 'utf8' }).split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch { return []; } };
   const plan = launchPlan(args[0], args.slice(1), which);
   const child = spawnChild(plan.file, plan.args, { stdio: 'inherit', env: { ...env, ...envFor(baseUrl, token) }, shell: plan.shell });
+  // Ctrl+C reaches the tool too (same terminal): Claude Code / Codex / Aider treat it as "interrupt"
+  // and keep running. This wrapper must not die under them (leaving the tool orphaned, fighting the
+  // shell for the terminal) — it ignores Ctrl+C and exits when the tool does. A real termination
+  // request is passed on to the tool.
+  for (const sig of ['SIGINT', 'SIGBREAK']) process.on(sig, () => {});
+  process.on('SIGTERM', () => child.kill('SIGTERM'));
+  process.on('SIGHUP', () => child.kill('SIGHUP'));
   child.on('error', (e) => { console.error(red(`Couldn't start ${args[0]}: ${e.message}`)); exit(1); });
-  child.on('exit', (code) => exit(code ?? 0));
+  // killed by a signal: not a success
+  child.on('exit', (code, signal) => exit(code ?? (signal ? 1 : 0)));
 }
 
 async function runSetup(args) {

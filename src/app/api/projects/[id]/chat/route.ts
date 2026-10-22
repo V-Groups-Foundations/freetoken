@@ -21,13 +21,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   // Shared memory: the model sees the whole saved conversation, not just this message.
   const history = (await listMessages(db, id)).slice(-MAX_HISTORY).map((m) => ({ role: m.role, content: m.content }));
-  await addMessage(db, id, { role: 'user', content: body.data.content });
-
   const out = await routeChat(
     { userId: uid, source: 'chat', body: { model: project.model, messages: [...history, { role: 'user', content: body.data.content }], stream: true } },
     getDeps(),
   );
   if (!out.ok) return Response.json({ error: { message: out.message, code: out.code } }, { status: out.status });
+  // saved only once a model is answering: a failed send leaves no unanswered message behind
+  // (a retry used to pile up duplicate user turns in the shared history)
+  await addMessage(db, id, { role: 'user', content: body.data.content });
 
   const provider = out.response.headers.get('x-freetoken-provider');
   const persisted = out.response.body

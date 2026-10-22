@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { clearRoot, getRoot, setRoot } from "./workspace";
+import { withRoot } from "./workspace";
 import { approve, getSession, resetSession, type AgentEvent, type ChatRequest } from "./ai";
 
 export interface BenchTask {
@@ -95,13 +95,13 @@ export const benchmarkRunning = () => running !== null || false;
 type Runner = (req: ChatRequest, emit: (e: AgentEvent) => void) => Promise<unknown> | unknown;
 
 /**
- * Run every task for every model, one at a time (each in a fresh temp project; the user's open project
- * is put back afterwards). `report` receives each verdict (FreeToken feedback).
+ * Run every task for every model, one at a time, each in a fresh temp project — scoped to the task
+ * (withRoot), so the app's own folder never changes: the editor, terminal and chat stay on the user's
+ * project while it runs. `report` receives each verdict (FreeToken feedback).
  */
 export async function runBenchmark(models: string[], run: Runner, onEvent: (e: BenchEvent) => void,
   report: (model: string, ok: boolean, reason: string) => void, opts: { maxSteps?: number; taskMs?: number; tasks?: BenchTask[] } = {}): Promise<BenchResult[]> {
   const tasks = opts.tasks ?? TASKS;
-  const userRoot = getRoot();
   const results: BenchResult[] = [];
   cancelled = false;
   try {
@@ -111,7 +111,6 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
         onEvent({ type: "start", model, task: task.id });
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vrun-bench-${task.id}-`));
         for (const [f, t] of Object.entries(task.files)) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), t); }
-        setRoot(dir);
         const sid = `bench-${model}-${task.id}-${Date.now()}`;
         running = sid;
         const t0 = Date.now();
@@ -125,7 +124,7 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
             else if (e.type === "error") error = e.message;
             else if (e.type === "done") resolve();
           };
-          Promise.resolve(run({ sessionId: sid, mode: "agent", text: task.prompt, model, maxSteps: opts.maxSteps ?? 25 }, emit)).catch((e) => { error = String(e); resolve(); });
+          withRoot(dir, () => Promise.resolve(run({ sessionId: sid, mode: "agent", text: task.prompt, model, maxSteps: opts.maxSteps ?? 25 }, emit))).catch((e) => { error = String(e); resolve(); });
         });
         clearTimeout(timer);
         running = null;
@@ -141,7 +140,6 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
     }
   } finally {
     running = null;
-    if (userRoot) setRoot(userRoot); else clearRoot(); // the user's project, exactly as it was
   }
   onEvent({ type: "done", results });
   return results;

@@ -551,6 +551,22 @@ async function main() {
       await page.screenshot({ path: path.join(shots, "benchmark.png") });
       await panel.getByRole("button", { name: "Close benchmark" }).click();
     });
+    await step("after a window reload mid-task, the chat shows the task still running (Stop works) instead of looking idle", async () => {
+      await page.getByRole("button", { name: "New chat" }).click();
+      await page.getByRole("radio", { name: "Agent" }).click();
+      const box = page.getByLabel("Message the AI");
+      await box.fill("Please run the app");
+      await box.press("Enter");
+      await page.getByRole("group", { name: "How should the agent run this task?" }).getByRole("button", { name: /^Step by step/ }).click();
+      await page.getByRole("group", { name: "Command approval" }).waitFor({ timeout: 15000 });
+      await page.waitForTimeout(800); // let the chat save
+      await page.reload();
+      await page.getByRole("button", { name: "src", exact: true }).waitFor({ timeout: 20000 });
+      await page.getByRole("button", { name: "Stop the agent" }).waitFor({ timeout: 10000 });
+      if (await page.getByRole("button", { name: "Send" }).count()) throw new Error("the chat looks idle while its task runs");
+      await page.getByRole("button", { name: "Stop the agent" }).click();
+      await page.getByRole("button", { name: "Send" }).waitFor({ timeout: 15000 });
+    });
     await step("History: the agent's work has snapshots (before, after); restoring one puts the files back, and it can be undone", async () => {
       await page.getByRole("button", { name: "History" }).click();
       const panel = page.getByRole("dialog", { name: "History" });

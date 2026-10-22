@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { loadCredentials } from '@/keys/service';
 import { EMBEDDING_PROVIDERS, pickModality } from '@/router/modalities';
-import { embedTexts } from '@/rag/embed';
 import { loadUserChunks } from '@/rag/service';
-import { topK } from '@/rag/search';
+import { reindexNote, searchDocuments } from '@/rag/ask';
 import { completeText } from '@/server/complete';
 import { sessionUserId } from '@/lib/session';
 import { getDeps } from '@/server/deps';
@@ -21,18 +20,16 @@ export async function POST(req: Request) {
 
   const deps = getDeps();
   const creds = await loadCredentials(deps.db, uid, deps.vaultKey);
-  const pick = pickModality(EMBEDDING_PROVIDERS, creds);
-  if (!pick) return Response.json({ error: { message: 'Connect Gemini or Jina at /connect to search documents.', code: 'no_embed_provider' } }, { status: 400 });
+  if (!pickModality(EMBEDDING_PROVIDERS, creds)) return Response.json({ error: { message: 'Connect Gemini or Jina at /connect to search documents.', code: 'no_embed_provider' } }, { status: 400 });
 
   const chunks = await loadUserChunks(deps.db, uid);
   if (chunks.length === 0) return Response.json({ error: { message: 'Upload a document first.' } }, { status: 400 });
 
-  const c = creds.get(pick.provider)!.creds;
-  const q = await embedTexts(pick.baseUrl, c.key, pick.model, [question], { fetchImpl: deps.fetchImpl });
-  if (!q.ok) return Response.json({ error: { message: `Could not embed the question: ${q.message}` } }, { status: q.status || 502 });
-
-  const hits = topK(q.vectors[0], chunks, TOP_K).filter((h) => h.score > 0.1);
-  if (hits.length === 0) return Response.json({ answer: "I couldn't find anything relevant in your documents.", sources: [] });
+  const found = await searchDocuments(question, chunks, creds, TOP_K, deps.fetchImpl);
+  if (found.error) return Response.json({ error: { message: `Could not embed the question: ${found.error.message}` } }, { status: found.error.status });
+  const reindex = reindexNote(found.unsearchable);
+  const hits = found.hits.filter((h) => h.score > 0.1);
+  if (hits.length === 0) return Response.json({ answer: `I couldn't find anything relevant in your documents.${reindex}`, sources: [] });
 
   const context = hits
     .map((h, i) => `[${i + 1}] (from "${h.item.documentName}")\n${h.item.content}`)
@@ -56,5 +53,5 @@ export async function POST(req: Request) {
     excerpt: h.item.content.slice(0, 240),
     score: Number(h.score.toFixed(3)),
   }));
-  return Response.json({ answer: result.text, provider: result.provider, sources });
+  return Response.json({ answer: `${result.text}${reindex ? `\n\n_${reindex.trim()}_` : ''}`, provider: result.provider, sources });
 }

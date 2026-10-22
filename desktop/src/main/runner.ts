@@ -223,6 +223,8 @@ export async function startApp(cmd: string) {
     cwd: root,
     // unbuffered output, no colors, and dev servers shouldn't pop open an external browser
     env: { ...process.env, PYTHONUNBUFFERED: "1", FORCE_COLOR: "0", NO_COLOR: "1", BROWSER: "none" },
+    // no console window popping up on Windows for every app V-Run runs (its output is in the App panel)
+    windowsHide: true,
     detached: !win,
   });
   proc = p;
@@ -258,7 +260,7 @@ function stopCurrent() {
   const p = proc;
   if (!p?.pid) return false;
   proc = null; exitCode = null;
-  if (process.platform === "win32") spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"], { stdio: "ignore" });
+  if (process.platform === "win32") spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
   else try { process.kill(-p.pid, "SIGTERM"); } catch { p.kill(); }
   append("\n[stopped]\n");
   listener({ type: "exit", code: null });

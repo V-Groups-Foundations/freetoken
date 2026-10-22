@@ -11,7 +11,8 @@ import type { ProviderId } from '@/providers/registry';
  * each entry carries its own base URL so the embed path needs no ProviderDef lookup.
  */
 export const EMBEDDING_PROVIDERS: { provider: string; model: string; baseUrl: string; dimensions: number }[] = [
-  { provider: 'gemini', model: 'text-embedding-004', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', dimensions: 768 },
+  // text-embedding-004 was retired by Google (Jan 2026); gemini-embedding-001 replaces it
+  { provider: 'gemini', model: 'gemini-embedding-001', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', dimensions: 3072 },
   { provider: 'jina', model: 'jina-embeddings-v3', baseUrl: 'https://api.jina.ai/v1', dimensions: 1024 },
 ];
 

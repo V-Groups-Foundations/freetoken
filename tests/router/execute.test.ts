@@ -4,7 +4,7 @@ import { createTestDb, createUser } from '../helpers/db';
 import { fakeFetch, okJson, sse, type Handler } from '../helpers/fake-fetch';
 import { TEST_VAULT_KEY, seedTestModels } from '../helpers/fixtures';
 import type { DB } from '@/db';
-import { models, providerKeys, usageEvents } from '@/db/schema';
+import { models, providerKeys, usageEvents, providerLimits } from '@/db/schema';
 import { createMemoryKV, type KV } from '@/lib/kv';
 import { listKeys, saveKey } from '@/keys/service';
 import { routeChat } from '@/router/execute';
@@ -176,6 +176,40 @@ describe('routeChat', () => {
       await run(() => Response.json({ error: { message: 'Invalid API Key' } }, { status: 403 })).p;
       expect(await keyStatus('groq')).toBe('invalid');
     });
+  });
+
+  describe("providers that report no requests left", () => {
+    const limit = (provider: string, modelId: string, resetAt: Date | null, updatedAt = new Date()) =>
+      db.insert(providerLimits).values({ userId, provider, modelId, limitRequests: 100, remainingRequests: 0, requestsResetAt: resetAt, updatedAt });
+
+    it('when every model is out of requests, the answer is a 429 with when to retry — not a 400 "can\'t handle this request"', async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      const reset = new Date(Date.now() + 10 * 60_000);
+      for (const [p, m] of [['groq', 'llama-70b'], ['gemini', 'flash'], ['groq', 'llama-8b']]) await limit(p, m, reset);
+      const out = await run(() => okJson()).p;
+      expect(out).toMatchObject({ ok: false, status: 429, code: 'all_providers_exhausted' });
+      expect(!out.ok && out.message).toContain(reset.toISOString());
+    });
+
+    it('a "0 left" without a reset time blocks the model for a minute, not forever', async () => {
+      await connect('groq', 'gsk_mine');
+      const old = new Date(Date.now() - 5 * 60_000);
+      for (const m of ['llama-70b', 'llama-8b']) await limit('groq', m, null, old);
+      const out = await run(() => okJson('still answering')).p;
+      expect(out.ok).toBe(true);
+    });
+  });
+
+  it('a client that sets stream_options itself (Claude Code / Codex via FreeToken) still gets an answer from a provider that rejects it', async () => {
+    await connect('groq', 'gsk_mine');
+    const { f, p } = run((_url, init) => (String(init.body).includes('stream_options')
+      ? Response.json({ error: { message: "Unrecognized request argument supplied: stream_options" } }, { status: 400 })
+      : sse(['data: {"choices":[{"delta":{"content":"hi"}}]}\n\n', 'data: [DONE]\n\n'])), { stream: true, stream_options: { include_usage: true } });
+    const out = await p;
+    expect(out.ok).toBe(true);
+    expect(f.calls.length).toBe(2);
+    expect(f.calls[1].body?.stream_options).toBeUndefined();
   });
 
   it('does not fall back on a bad request', async () => {

@@ -193,6 +193,8 @@ export function streamToResponses(upstream: ReadableStream<Uint8Array>, model: s
             if (!data || data === '[DONE]') continue;
             let j: any;
             try { j = JSON.parse(data); } catch { continue; }
+            // the provider broke off mid-answer: report a failed response, not a completed one
+            if (j.error) throw new Error(String(j.error.message ?? j.error));
             if (j.usage) usage = j.usage;
             const d = j.choices?.[0]?.delta;
             if (!d) continue;

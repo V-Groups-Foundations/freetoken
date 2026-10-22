@@ -64,7 +64,7 @@ async function bigFiles(root: string) {
 }
 
 /** Snapshot the project as it is now. Returns the snapshot, or null when nothing changed (or no git). */
-export function snapshot(root: string | null, label: string): Promise<Snapshot | null> {
+export function snapshot(root: string | null, label: string, opts: { always?: boolean } = {}): Promise<Snapshot | null> {
   if (!dir || !root) return Promise.resolve(null);
   return serial(root, async () => {
     if (!(await hasGit())) return null;
@@ -75,9 +75,9 @@ export function snapshot(root: string | null, label: string): Promise<Snapshot |
       const head = await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => "");
       if (head) {
         const changed = (await git(root, ["diff", "--cached", "--name-only", "HEAD"])).trim();
-        if (!changed) return null;
+        if (!changed && !opts.always) return null;
       }
-      await git(root, ["commit", "--quiet", "--no-verify", "--allow-empty-message", "-m", label.replace(/\s+/g, " ").slice(0, 200)]);
+      await git(root, ["commit", "--quiet", "--no-verify", "--allow-empty", "--allow-empty-message", "-m", label.replace(/\s+/g, " ").slice(0, 200)]);
       return (await list(root, 1))[0] ?? null;
     } catch (e) {
       console.error("history snapshot failed", e);
@@ -101,7 +101,9 @@ export async function list(root: string | null, limit = 50): Promise<Snapshot[]>
 /** Files that differ between a snapshot and the project now. */
 export async function changedSince(root: string, id: string) {
   await git(root, ["add", "-A", "--ignore-errors", "--", "."]).catch(() => {});
-  const out = await git(root, ["diff", "--cached", "--name-status", id]);
+  // --no-renames: a renamed file is "deleted + added", so restoring removes the new name (a rename was
+  // reported as R and left both copies behind)
+  const out = await git(root, ["diff", "--cached", "--no-renames", "--name-status", id]);
   return out.split("\n").filter(Boolean).map((l) => { const [status, ...p] = l.split("\t"); return { status: status[0], path: p.join("\t") }; });
 }
 
@@ -112,7 +114,9 @@ export async function changedSince(root: string, id: string) {
 export function restore(root: string | null, id: string): Promise<{ restored: number; removed: string[]; undo: string | null }> {
   if (!dir || !root) return Promise.reject(new Error("History is off."));
   if (!/^[0-9a-f]{7,40}$/i.test(id)) return Promise.reject(new Error("Not a snapshot id."));
-  return snapshot(root, `Before restoring ${id.slice(0, 7)}`).then((undo) => serial(root, async () => {
+  // always recorded (even when nothing changed since the last snapshot): the undo point is the labelled
+  // "Before restoring" entry at the top, as the History panel says
+  return snapshot(root, `Before restoring ${id.slice(0, 7)}`, { always: true }).then((undo) => serial(root, async () => {
     const diff = await changedSince(root, id);
     // created since the snapshot → removed; everything else is checked out from it
     const created = diff.filter((d) => d.status === "A").map((d) => d.path);

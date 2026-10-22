@@ -25,7 +25,7 @@ export default async function ChatPage() {
   return (
     <Chat
       models={models}
-      initialChats={chatList.map((c) => ({ id: c.id, title: c.title }))}
+      initialChats={chatList.map((c) => ({ id: c.id, title: c.title, model: c.model }))}
       activeId={activeId}
       initialMessages={initialMessages.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content, provider: m.provider ?? undefined }))}
     />

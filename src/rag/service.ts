@@ -54,6 +54,9 @@ export interface LoadedChunk {
   documentName: string;
   content: string;
   embedding: number[];
+  /** which provider/model made the embedding: a question must be embedded the same way to compare */
+  embedProvider: string;
+  embedModel: string;
 }
 
 /** Every chunk belonging to this user, with embeddings parsed, ready for cosine search. */
@@ -64,6 +67,8 @@ export async function loadUserChunks(db: DB, userId: string): Promise<LoadedChun
       documentName: documents.name,
       content: docChunks.content,
       embedding: docChunks.embedding,
+      embedProvider: documents.embedProvider,
+      embedModel: documents.embedModel,
     })
     .from(docChunks)
     .innerJoin(documents, eq(docChunks.documentId, documents.id))
@@ -74,7 +79,7 @@ export async function loadUserChunks(db: DB, userId: string): Promise<LoadedChun
     try {
       const embedding = JSON.parse(r.embedding) as number[];
       if (Array.isArray(embedding) && embedding.length) {
-        out.push({ documentId: r.documentId, documentName: r.documentName, content: r.content, embedding });
+        out.push({ documentId: r.documentId, documentName: r.documentName, content: r.content, embedding, embedProvider: r.embedProvider, embedModel: r.embedModel });
       }
     } catch {
       // Skip a corrupt row rather than failing the whole search.
