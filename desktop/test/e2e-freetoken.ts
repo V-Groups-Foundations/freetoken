@@ -1,5 +1,6 @@
 // End-to-end: the real Electron app talking to a (fake) FreeToken server through the UI.
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
@@ -93,7 +94,7 @@ async function main() {
       if (r.length < 5 || !r.every((x) => x.model === "auto-smart")) throw new Error(`${r.length} tool requests`);
     });
     await step("\"run the app\": agent starts it in the App panel, the page opens in Preview, and the agent reads it back", async () => {
-      fs.writeFileSync(path.join(proj, "server.js"), `const h=require('http');const s=h.createServer((q,r)=>{r.writeHead(200,{'content-type':'text/html'});r.end("<title>Test App</title><h1>Hello from test app</h1><script>console.error('boom from page')</script>")});s.listen(0,()=>console.log('Server ready at http://localhost:'+s.address().port));`);
+      fs.writeFileSync(path.join(proj, "server.js"), `const h=require('http');const s=h.createServer((q,r)=>{r.writeHead(200,{'content-type':'text/html'});r.end("<meta name='viewport' content='width=device-width, initial-scale=1'><title>Test App</title><h1>Hello from test app</h1><script>console.error('boom from page')</script>")});s.listen(0,()=>console.log('Server ready at http://localhost:'+s.address().port));`);
       const box = page.getByLabel("Message the AI");
       await box.fill("Please run the app");
       await box.press("Enter");
@@ -157,6 +158,45 @@ async function main() {
       await page.getByLabel("App output").filter({ hasText: "[stopped]" }).waitFor();
       if (await page.getByRole("button", { name: "✦ Fix with AI" }).count()) throw new Error("Fix with AI offered after a manual stop");
       await page.screenshot({ path: path.join(shots, "app-panel.png") });
+    });
+    await step("phone preview: the page gets a real phone viewport in a frame; Open on phone shows a QR code for the LAN address", async () => {
+      // the page inside the preview, as the page itself sees its window
+      const pageWidth = () => app.evaluate(async ({ webContents }) => {
+        const wc = webContents.getAllWebContents().find((w) => /^http:\/\/localhost:\d+/.test(w.getURL()));
+        return wc ? ((await wc.executeJavaScript("[innerWidth, navigator.userAgent.includes('Mobile') && screen.width === innerWidth]")) as [number, boolean]) : null;
+      });
+      // the previous step stopped the test app: start it again and look at it in the Preview tab
+      // a mobile-ready page on a known free port, opened in the preview
+      const port = await new Promise<number>((r) => { const s = net.createServer().listen(0, () => { const p = (s.address() as net.AddressInfo).port; s.close(() => r(p)); }); });
+      fs.writeFileSync(path.join(proj, "phone.js"), `require('http').createServer((q,r)=>{r.writeHead(200,{'content-type':'text/html'});r.end("<meta name='viewport' content='width=device-width, initial-scale=1'><title>Phone test</title><h1>Hi phone</h1>")}).listen(${port},()=>console.log('Phone page at http://localhost:${port}'));`);
+      await page.getByLabel("App command").fill("node phone.js");
+      await page.getByRole("button", { name: "Run", exact: true }).click();
+      await page.getByText(`Phone page at http://localhost:${port}`).first().waitFor({ timeout: 15000 });
+      await page.getByRole("tab", { name: "Preview" }).click();
+      await page.getByLabel("Preview address").fill(`http://localhost:${port}`);
+      await page.getByLabel("Preview address").press("Enter");
+      let desktop: [number, boolean] | null = null;
+      for (let i = 0; i < 40 && !desktop; i++) { await page.waitForTimeout(250); desktop = await pageWidth(); }
+      await page.getByRole("radio", { name: "📱" }).click();
+      await page.locator(".device-frame.phone").waitFor({ timeout: 5000 });
+      let phone: [number, boolean] | null = null;
+      for (let i = 0; i < 20 && phone?.[0] !== 390; i++) { await page.waitForTimeout(250); phone = await pageWidth(); }
+      if (!desktop || desktop[0] === 390 || desktop[1]) throw new Error(`desktop preview looked like a phone: ${JSON.stringify(desktop)}`);
+      if (!phone || phone[0] !== 390 || !phone[1]) throw new Error(`phone preview isn't a phone viewport: ${JSON.stringify(phone)}`);
+      await page.screenshot({ path: path.join(shots, "phone-preview.png") });
+      await page.getByRole("button", { name: "Open on phone" }).click();
+      const panel = page.getByRole("dialog", { name: "Open on phone" });
+      await panel.getByRole("img", { name: /QR code for http:\/\/\d+\.\d+\.\d+\.\d+:\d+/ }).waitFor({ timeout: 10000 });
+      await panel.getByRole("button", { name: "Make HTTPS link" }).waitFor();
+      await page.screenshot({ path: path.join(shots, "open-on-phone.png") });
+      await panel.getByRole("button", { name: "Close" }).click();
+      await page.getByRole("radio", { name: "🖥" }).click();
+      let back: [number, boolean] | null = null;
+      for (let i = 0; i < 20 && (!back || back[0] === 390); i++) { await page.waitForTimeout(250); back = await pageWidth(); }
+      if (!back || back[0] === 390 || back[1]) throw new Error(`back to desktop failed: ${JSON.stringify(back)}`);
+      await page.getByRole("tab", { name: "App" }).click(); // where the next step starts…
+      await page.getByRole("button", { name: "Stop", exact: true }).click(); // …with no app running
+      await page.getByRole("button", { name: "Run", exact: true }).waitFor({ timeout: 10000 });
     });
     await step("a crashing app offers \"Fix with AI\", which sends the error to the chat", async () => {
       await page.getByLabel("App command").fill(`node -e "throw new Error('kaboom')"`);

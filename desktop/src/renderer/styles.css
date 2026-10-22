@@ -604,3 +604,19 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 /* an interrupted task, offered for resuming after a restart */
 .resume-bar { display: flex; align-items: center; gap: 8px; margin: 8px 12px; padding: 8px 10px; border-radius: 8px; font-size: 12px; background: #e0b45c14; border: 1px solid #e0b45c55; color: var(--fg); }
 .resume-bar i { color: var(--fg2); }
+/* Preview: device sizes, the device frame behind the (native) page view, and Open on phone */
+.device-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+.device-switch button { background: none; border: 0; color: var(--fg2); padding: 2px 7px; cursor: pointer; font-size: 12px; }
+.device-switch button.on { background: var(--bg3); color: var(--fg); }
+.preview-host { position: relative; }
+.device-frame { position: absolute; border-radius: 22px; border: 2px solid #3a3f4b; background: #0b0c10; box-shadow: 0 10px 40px #0008; pointer-events: none; }
+.device-frame.tablet { border-radius: 16px; }
+.share-panel { position: absolute; inset: 0; overflow: auto; padding: 14px 16px; background: var(--bg2); display: flex; flex-direction: column; gap: 10px; }
+.share-cols { display: flex; gap: 22px; flex-wrap: wrap; }
+.share-cols section { flex: 1 1 240px; min-width: 220px; display: flex; flex-direction: column; gap: 6px; }
+.share-cols h4 { margin: 0; font-size: 13px; }
+.qr { width: 180px; height: 180px; background: #fff; padding: 6px; border-radius: 8px; }
+.qr svg { width: 100%; height: 100%; display: block; }
+.share-url { font-size: 12px; word-break: break-all; user-select: all; }
+.share-warn { color: #e0b45c; }
+.share-actions { display: flex; gap: 6px; }

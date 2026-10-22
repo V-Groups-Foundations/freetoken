@@ -58,6 +58,10 @@ const api = {
   memoryStatus: () => call("memory:status"),
   skillsList: () => call("skills:list"),
   historyList: () => call("history:list"),
+  previewDevice: (d: object) => call("preview:device", d),
+  shareInfo: () => call("share:info"),
+  shareTunnelStart: () => call("share:tunnel-start"),
+  shareTunnelStop: () => call("share:tunnel-stop"),
   historyRestore: (id: string) => call("history:restore", id),
   /** where a dropped file lives on disk ("" for pasted data, which has no file) */
   pathForFile: (f: File) => { try { return webUtils.getPathForFile(f); } catch { return ""; } },

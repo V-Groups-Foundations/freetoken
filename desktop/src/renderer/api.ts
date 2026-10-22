@@ -74,6 +74,10 @@ interface Api {
   memoryStatus(): Promise<MemoryStatus>;
   skillsList(): Promise<SkillInfo[]>;
   historyList(): Promise<HistorySnapshot[]>;
+  previewDevice(d: { kind: "desktop" | "phone" | "tablet"; scale?: number }): Promise<void>;
+  shareInfo(): Promise<ShareInfo>;
+  shareTunnelStart(): Promise<{ status: "on" | "error" | "off" | "starting"; url?: string; via?: string; message?: string; qr: string | null }>;
+  shareTunnelStop(): Promise<void>;
   historyRestore(id: string): Promise<{ restored: number; removed: string[]; files: string[] }>;
   skillsInstall(source: string): Promise<{ source: string; installed: { name: string; files: number; skipped: number }[]; readme: string }>;
   skillsRemove(name: string): Promise<void>;
@@ -122,6 +126,7 @@ type MemoryFile = { file: string | null; exists: boolean; lines: number; entries
 export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean; model?: string };
 export type TeamSnapshot = { supervisor: string; agents: TeamAgent[] };
 export type ChatAttachment = { name: string; mime?: string; data?: string; path?: string };
+export type ShareInfo = { url: string | null; lan: string | null; reachable: boolean; qr: string | null; advice: string | null; addresses: string[] };
 export type HistorySnapshot = { id: string; time: number; label: string; files: number };
 export type SkillInfo = { name: string; description: string; scope: "user" | "project" | "builtin"; dir: string | null; source?: string };
 export type MemoryStatus = { project: MemoryFile; user: MemoryFile };

@@ -9,6 +9,7 @@ import * as link from "./freetoken-link";
 import * as memory from "./memory";
 import * as runner from "./runner";
 import * as history from "./history";
+import * as share from "./share";
 import * as skills from "./skills";
 import * as team from "./team";
 import * as chats from "./chats";
@@ -252,12 +253,19 @@ function schedulePreviewReload() {
 let previewConsole: string[] = [];
 let previewShown = false;
 
+// what the preview tells sites it is, per device (a real phone/tablet browser, so sites serve their mobile layout)
+const MOBILE_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36";
+const TABLET_UA = "Mozilla/5.0 (Linux; Android 14; Pixel Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+let desktopUA = "";
+let emulating = false;
+
 function ensurePreview() {
   if (preview) return preview;
   const v = new WebContentsView({ webPreferences: { partition: "persist:preview", sandbox: true, contextIsolation: true, nodeIntegration: false } });
   v.setVisible(false);
   win!.contentView.addChildView(v);
   const wc = v.webContents;
+  desktopUA = wc.getUserAgent();
   wc.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) wc.loadURL(url).catch(() => {}); return { action: "deny" }; });
   wc.on("console-message", (e: any, legacyLevel?: number, legacyMessage?: string) => {
     const level = typeof e?.level === "string" ? e.level : ["verbose", "info", "warning", "error"][legacyLevel ?? 1];
@@ -718,6 +726,45 @@ function registerIpc() {
     if (err) throw new Error(err);
   });
   handle("preview:reload", () => preview?.webContents.reload());
+  // phone / tablet preview: a real mobile viewport (width, user agent), scaled to fit the pane
+  handle("preview:device", async (d: { kind: "desktop" | "phone" | "tablet"; scale?: number }) => {
+    // desktop is how the preview starts: nothing to undo unless a device was emulated
+    if (d.kind === "desktop" && !emulating) return;
+    const wc = ensurePreview().webContents;
+    const size = d.kind === "phone" ? { width: 390, height: 844 } : d.kind === "tablet" ? { width: 820, height: 1180 } : null;
+    const ua = d.kind === "phone" ? MOBILE_UA : d.kind === "tablet" ? TABLET_UA : desktopUA;
+    // Chrome's device mode: the page sees a phone-sized viewport (innerWidth 390), touch input and the
+    // mobile flag, rendered scaled down to fit the pane
+    const dbg = wc.debugger;
+    try {
+      if (!dbg.isAttached()) dbg.attach("1.3");
+      if (size) {
+        await dbg.sendCommand("Emulation.setDeviceMetricsOverride", { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: true, scale: Math.max(0.2, Math.min(1, d.scale ?? 1)) });
+        await dbg.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+      } else {
+        await dbg.sendCommand("Emulation.clearDeviceMetricsOverride");
+        await dbg.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: false });
+      }
+    } catch (e) { console.error("device emulation failed", e); }
+    emulating = !!size;
+    if (ua && wc.getUserAgent() !== ua) { wc.setUserAgent(ua); if (wc.getURL()) wc.reload(); }
+  });
+  // open the app on a phone: its LAN address (checked), a QR code; or a public HTTPS link (tunnel)
+  handle("share:info", async () => {
+    const st = runner.appStatus();
+    const current = preview?.webContents.getURL() || st.url || "";
+    if (!/^https?:/i.test(current)) return { url: null, lan: null, reachable: false, qr: null, advice: "Start your app first (or ask the agent to run it).", addresses: share.lanAddresses() };
+    const lan = share.lanUrl(current);
+    const ok = lan ? await share.reachable(lan) : false;
+    return { url: current, lan, reachable: ok, qr: lan && ok ? await share.qrSvg(lan) : null, advice: ok ? null : lan ? share.bindAdvice(st.command) : "This computer isn't on a network.", addresses: share.lanAddresses() };
+  });
+  handle("share:tunnel-start", async () => {
+    const current = preview?.webContents.getURL() || runner.appStatus().url || "";
+    const port = Number(new URL(current).port) || (current.startsWith("https") ? 443 : 80);
+    const s = await share.startTunnel(port);
+    return { ...s, qr: s.status === "on" ? await share.qrSvg(s.url) : null };
+  });
+  handle("share:tunnel-stop", () => share.stopTunnel());
   handle("preview:external", () => { const u = preview?.webContents.getURL(); if (u && /^https?:/i.test(u)) shell.openExternal(u); });
   handle("preview:bounds", (r: { x: number; y: number; width: number; height: number } | null) => {
     previewShown = !!r && r.width > 0 && r.height > 0;
@@ -752,7 +799,7 @@ app.whenReady().then(async () => {
       .catch(() => {});
 });
 app.on("will-quit", () => link.stopServer());
-app.on("before-quit", () => { quitting = true; });
+app.on("before-quit", () => { quitting = true; share.stopTunnel(); });
 app.on("window-all-closed", () => {
   watcher?.close(); watcher = null;
   clearTimeout(changeTimer); clearTimeout(indexTimer);

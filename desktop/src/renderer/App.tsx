@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AppStatus, type Entry, type FtViewState, type GrepHit, type IndexStatus, type PreviewState, type Settings } from "./api";
+import { api, type AppStatus, type Entry, type FtViewState, type GrepHit, type IndexStatus, type PreviewState, type Settings, type ShareInfo } from "./api";
 import { ChatPanel } from "./Chat";
 import { Banner } from "./Logo";
 import ftMark from "./brand/freetoken.png";
@@ -598,25 +598,43 @@ function FreeTokenPane({ covered, onClose, onHub }: { covered: boolean; onClose:
   );
 }
 
+// device sizes the preview can emulate (CSS px of the page's viewport)
+const DEVICES = { phone: { w: 390, h: 844, label: "Phone" }, tablet: { w: 820, h: 1180, label: "Tablet" } } as const;
+type Device = "desktop" | keyof typeof DEVICES;
+
 function Preview({ visible, covered, askAI }: { visible: boolean; covered: boolean; askAI: (text: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<PreviewState>({ url: "", title: "", loading: false });
   const [addr, setAddr] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [device, setDevice] = useState<Device>("desktop");
+  const [frame, setFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const lastScale = useRef(0);
   useEffect(() => api.onPreviewState((s) => { setState(s); setAddr(s.url); setErr(null); }), []);
   useEffect(() => {
     const el = host.current;
     if (!el) return;
     const report = () => {
       const r = el.getBoundingClientRect();
-      api.previewBounds(visible && !covered && r.width > 0 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null).catch(() => {});
+      if (!visible || covered || shareOpen || r.width <= 0) { api.previewBounds(null).catch(() => {}); return; }
+      if (device === "desktop") { setFrame(null); api.previewBounds({ x: r.left, y: r.top, width: r.width, height: r.height }).catch(() => {}); return; }
+      // a phone/tablet: its viewport scaled to fit the pane, centred, inside a device frame
+      const d = DEVICES[device];
+      const scale = Math.min(1, (r.height - 28) / d.h, (r.width - 28) / d.w);
+      const width = Math.round(d.w * scale), height = Math.round(d.h * scale);
+      const left = Math.round((r.width - width) / 2), top = Math.round((r.height - height) / 2);
+      setFrame({ left, top, width, height });
+      if (Math.abs(scale - lastScale.current) > 0.005) { lastScale.current = scale; api.previewDevice({ kind: device, scale }).catch(() => {}); }
+      api.previewBounds({ x: r.left + left, y: r.top + top, width, height }).catch(() => {});
     };
     report();
     const ro = new ResizeObserver(report);
     ro.observe(el);
     window.addEventListener("resize", report);
     return () => { ro.disconnect(); window.removeEventListener("resize", report); api.previewBounds(null).catch(() => {}); };
-  }, [visible, covered]);
+  }, [visible, covered, device, shareOpen]);
+  useEffect(() => { lastScale.current = 0; if (device === "desktop") api.previewDevice({ kind: "desktop" }).catch(() => {}); }, [device]);
   const go = () => addr.trim() && api.previewOpen(addr.trim()).catch((e) => setErr((e as Error).message));
   return (
     <section className="terminal preview" aria-label="Preview">
@@ -624,6 +642,13 @@ function Preview({ visible, covered, askAI }: { visible: boolean; covered: boole
         <button className="btn small ghost" onClick={() => api.previewReload()} title="Reload" aria-label="Reload preview">↻</button>
         <input className="field" aria-label="Preview address" value={addr} onChange={(e) => setAddr(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()} placeholder="http://localhost:3000" />
         <span className="muted">{state.loading ? "Loading…" : state.title}</span>
+        <span className="device-switch" role="radiogroup" aria-label="Preview size">
+          {(["desktop", "phone", "tablet"] as Device[]).map((d) => (
+            <button key={d} role="radio" aria-checked={device === d} className={device === d ? "on" : ""} onClick={() => setDevice(d)}
+              title={d === "desktop" ? "Desktop" : `${DEVICES[d].label} (${DEVICES[d].w}×${DEVICES[d].h}, mobile browser)`}>{d === "desktop" ? "🖥" : d === "phone" ? "📱" : "▭"}</button>
+          ))}
+        </span>
+        <button className={`btn small ghost${shareOpen ? " on" : ""}`} onClick={() => setShareOpen((v) => !v)} disabled={!state.url} aria-expanded={shareOpen} title="Open this page on your phone (QR code, HTTPS link)">Open on phone</button>
         <button className="btn small ghost" onClick={() => api.previewExternal()} disabled={!state.url} title="Open in your browser">↗</button>
         <button className="btn small ai-btn" disabled={!state.url} title="Have the agent look at this page, find errors or visual problems, and fix them"
           onClick={() => askAI(`Look at the page open in the preview (${state.url}) with inspect_preview. Check the console and what is on screen, find any errors or visual problems, and fix them in the code.`)}>✦ Ask AI</button>
@@ -631,8 +656,63 @@ function Preview({ visible, covered, askAI }: { visible: boolean; covered: boole
       {err && <div className="error" role="alert">{err}</div>}
       <div ref={host} className="preview-host">
         {!state.url && <div className="muted preview-empty">Nothing to preview yet. Ask the agent to run your app, or type a URL above.</div>}
+        {frame && !shareOpen && <div className={`device-frame ${device}`} style={{ left: frame.left - 8, top: frame.top - 8, width: frame.width + 16, height: frame.height + 16 }} aria-hidden />}
+        {shareOpen && <SharePanel onClose={() => setShareOpen(false)} />}
       </div>
     </section>
+  );
+}
+
+/** Open the previewed app on a phone: a QR code for the local network, or a public HTTPS link. */
+function SharePanel({ onClose }: { onClose: () => void }) {
+  const [info, setInfo] = useState<ShareInfo | null>(null);
+  const [tunnel, setTunnel] = useState<{ status: string; url?: string; via?: string; message?: string; qr: string | null } | null>(null);
+  useEffect(() => { api.shareInfo().then(setInfo).catch((e) => setInfo({ url: null, lan: null, reachable: false, qr: null, advice: (e as Error).message, addresses: [] })); }, []);
+  async function startTunnel() {
+    setTunnel({ status: "starting", qr: null });
+    setTunnel(await api.shareTunnelStart().catch((e) => ({ status: "error", message: (e as Error).message, qr: null })));
+  }
+  async function stopTunnel() { await api.shareTunnelStop().catch(() => {}); setTunnel(null); }
+  return (
+    <div className="share-panel" role="dialog" aria-label="Open on phone">
+      <div className="mem-head"><b>Open on your phone</b><span className="spacer" /><button className="icon-btn" onClick={onClose} aria-label="Close">✕</button></div>
+      {!info ? <p className="muted small">Checking how your phone can reach the app…</p> : (
+        <div className="share-cols">
+          <section aria-label="Same Wi-Fi">
+            <h4>On the same Wi-Fi</h4>
+            {info.qr ? (
+              <>
+                <div className="qr" role="img" aria-label={`QR code for ${info.lan}`} dangerouslySetInnerHTML={{ __html: info.qr }} />
+                <code className="share-url">{info.lan}</code>
+                <p className="muted small">Scan it with your phone's camera. Your phone must be on the same network as this computer.</p>
+              </>
+            ) : (
+              <p className="small share-warn">{info.lan ? <>Your phone can't reach <code>{info.lan}</code>. {info.advice}</> : info.advice}</p>
+            )}
+          </section>
+          <section aria-label="HTTPS link">
+            <h4>HTTPS link (works anywhere)</h4>
+            <p className="muted small">Phones only allow <b>location</b>, camera and motion sensors on HTTPS pages. This makes a temporary public link to your app — anyone with it can open the app while it's on.</p>
+            {tunnel?.status === "on" && tunnel.url ? (
+              <>
+                {tunnel.qr && <div className="qr" role="img" aria-label={`QR code for ${tunnel.url}`} dangerouslySetInnerHTML={{ __html: tunnel.qr }} />}
+                <code className="share-url">{tunnel.url}</code>
+                <div className="share-actions">
+                  <button className="btn small" onClick={() => navigator.clipboard.writeText(tunnel.url!)}>Copy link</button>
+                  <button className="btn small" onClick={stopTunnel}>Stop sharing</button>
+                </div>
+                <p className="muted small">via {tunnel.via}</p>
+              </>
+            ) : tunnel?.status === "starting" ? <p className="small" role="status">Making the link…</p> : (
+              <>
+                {tunnel?.status === "error" && <p className="small share-warn" role="alert">{tunnel.message}</p>}
+                <button className="btn small primary" disabled={!info.url} onClick={startTunnel}>Make HTTPS link</button>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
   );
 }
 
