@@ -2,7 +2,7 @@
 // streams to the App panel, plus an embedded browser for web apps. The agent drives both through
 // tools, so it sees what the user sees. Electron-specific preview code lives in main.ts behind
 // PreviewHost so this module (and the agent tools) stay testable in plain Node.
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { getRoot } from "./workspace";
 
 // PowerShell 7 (pwsh) understands && and || like bash; Windows PowerShell 5.1 rejects them, which is
@@ -18,9 +18,14 @@ export function windowsShell() {
 export const usingPwsh = () => process.platform === "win32" && windowsShell() !== "powershell.exe";
 
 /** Kill a process and everything it started (a server is usually a grandchild of the shell). */
-export function killTree(p: ChildProcess) {
+/** `wait`: done before returning (on Windows taskkill otherwise runs after us — too late when quitting). */
+export function killTree(p: ChildProcess, wait = false) {
   if (!p.pid) return;
-  if (process.platform === "win32") spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  if (process.platform === "win32") {
+    const args = ["/pid", String(p.pid), "/T", "/F"];
+    if (wait) spawnSync("taskkill", args, { stdio: "ignore", windowsHide: true, timeout: 5000 });
+    else spawn("taskkill", args, { stdio: "ignore", windowsHide: true });
+  }
   else try { process.kill(-p.pid, "SIGKILL"); } catch { try { p.kill("SIGKILL"); } catch { /* gone */ } }
 }
 
@@ -164,7 +169,8 @@ export async function guardCommand(cmd: string): Promise<string | null> {
   const why = (p: { port: number; name: string }) =>
     `Refused: port ${p.port} is ${p.name}, the AI service this agent is running on — stopping it or putting another server on that port cuts off the agent. Use a different port (e.g. npx serve . -p 5173), and never stop ${p.name}.`;
   // stopping every node process takes FreeToken (and V-Run's own helpers) down with it
-  if (/taskkill\b[^\n]*\/im\s+"?node|stop-process\b[^\n]*-name\s+"?node\b|\b(killall|pkill)\s+(-\w+\s+)*node\b|get-process\s+"?node"?\s*\|\s*stop-process/.test(c))
+  // (flags may sit anywhere: Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force)
+  if (/taskkill\b[^\n]*\/im\s+"?node|stop-process\b[^\n]*-name\s+"?node\b|\b(killall|pkill)\s+(-\w+\s+)*node\b|\b(get-process|gps|ps)\b[^|\n]*\bnode\b[^|\n]*\|\s*(stop-process|spps|kill)\b/.test(c))
     return why(ports[0]);
   for (const p of ports) {
     const n = String(p.port);

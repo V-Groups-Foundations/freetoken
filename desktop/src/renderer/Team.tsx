@@ -42,7 +42,7 @@ export function TeamPanel({ sid, autoApprove }: { sid: string; autoApprove: () =
       else if (e.type === "tool_end") add({ kind: "tool", text: e.summary });
       else if (e.type === "error") add({ kind: "error", text: e.message });
       else if (e.type === "approval") {
-        if (auto.current()) { api.approve(sessionId, e.id, true); add({ kind: "note", text: `Auto-approved: ${e.command}` }); }
+        if (auto.current() && !e.always) { api.approve(sessionId, e.id, true); add({ kind: "note", text: `Auto-approved: ${e.command}` }); }
         else setApprovals((p) => [...p, { sid: sessionId, id: e.id, command: e.command, explanation: e.explanation }]);
       } else if (e.type === "done") setApprovals((p) => p.filter((x) => x.sid !== sessionId));
     });

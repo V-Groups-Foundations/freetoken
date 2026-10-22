@@ -86,6 +86,15 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwA
       const got = (await matchSkills(q)).map((s) => s.name);
       if (want ? got[0] !== want : got.length) wrong.push(`${q} → ${got.join(",") || "none"} (want ${want ?? "none"})`);
     }
+    // everyday words ("app", "website", "someone", "run") alone loaded android-app for "send someone the link"
+    for (const q of ["run the app i want to send the link to someone and test it (website UI)", "is it necessary for the person to be on the same network as me? (website UI)"]) {
+      const got = (await matchSkills(q)).map((s) => s.name);
+      if (got.includes("android-app")) wrong.push(`${q} → ${got.join(",")} (want no android-app)`);
+    }
+    for (const [q, want] of [["Make an Android APK of my site", "android-app"], ["Detect which floor someone is on with Wi-Fi scanning", "android-app"]]) {
+      const got = (await matchSkills(q)).map((s) => s.name);
+      if (got[0] !== want) wrong.push(`${q} → ${got.join(",") || "none"} (want ${want})`);
+    }
     return !wrong.length || wrong.join("; ");
   });
 

@@ -371,11 +371,28 @@ async function main() {
       || JSON.stringify({ first, progress, pingPong, third, refused: refused.summary, readOk, sameMove });
   });
 
+  await check("making things public or undoing work always asks (even with Accept all); share_link needs a running app", async () => {
+    // Accept all auto-approved an agent publishing the user's app to Cloudflare Pages
+    const s = ai.getSession("always-ask");
+    s.mode = "agent";
+    const seen: any[] = [];
+    const decline = (e: any) => { if (e.type === "approval") { seen.push(e); s.approvals.get(e.id)?.(false); } };
+    const restore = await ai.execTool(s, "restore_checkpoint", { id: "abc1234" }, decline, "rc1");
+    const cmd = await ai.execTool(s, "run_terminal_command", { command: "node -v" }, decline, "c1");
+    const link = await ai.execTool(s, "share_link", {}, decline, "sl1");
+    return (seen.length === 2 && seen[0].always === true && !seen[1].always && restore.summary === "Restore declined" && cmd.summary.startsWith("Declined")
+      && link.summary === "No app running") || JSON.stringify({ seen, restore: restore.summary, cmd: cmd.summary, link: link.summary });
+  });
+
   await check("a bash command that failed in PowerShell gets the PowerShell way to do it", () => {
     const esc = String.fromCharCode(27);
     const out = `exit code 1\n${esc}[31;1mpkill: ${esc}[31;1mThe term 'pkill' is not recognized as a name of a cmdlet\n${esc}[31;1mtrue: ${esc}[31;1mThe term 'true' is not recognized as a name`;
     const hint = ai.shellHint(out);
-    return (/PowerShell, not bash/.test(hint) && hint.includes("pkill → Stop-Process") && hint.includes("true →") && ai.shellHint("exit code 0\nok") === "") || hint;
+    // 2>/dev/null made `ls node_modules 2>/dev/null || echo missing` say "missing" when it wasn't
+    const devnull = ai.shellHint(`exit code 0\nOut-File: Could not find a part of the path 'C:\\dev\\null'.\nnode_modules missing`);
+    const job = ai.shellHint("Id Name PSJobTypeName State\n1 Job1 BackgroundJob Running", "cloudflared tunnel --url http://localhost:3001 2>&1 &");
+    return (/PowerShell, not bash/.test(hint) && hint.includes("pkill → Stop-Process") && hint.includes("true →") && ai.shellHint("exit code 0\nok") === ""
+      && devnull.includes("2>$null") && devnull.includes("don't trust") && job.includes("run_app") && job.includes("share_link")) || [hint, devnull, job].join(" | ");
   });
 
   await check("saved checks: stored in the project, rerun against the page; a broken feature sends the agent back", async () => {
@@ -446,9 +463,12 @@ async function main() {
     try {
       const refused = await Promise.all([
         "npx serve . -p 3000", "npx http-server -p 3000", "python -m http.server 3000", "npx kill-port 3000",
-        "taskkill /F /IM node.exe", "Stop-Process -Name node -Force", "Get-NetTCPConnection -LocalPort 3000 | % { Stop-Process -Id $_.OwningProcess }",
+        "taskkill /F /IM node.exe", "Stop-Process -Name node -Force",
+        // what an agent ran to "restart" its server: it took FreeToken down
+        "Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1; node server.js", "gps -Name node | kill",
+        "Get-NetTCPConnection -LocalPort 3000 | % { Stop-Process -Id $_.OwningProcess }",
       ].map((c) => runner.guardCommand(c)));
-      const allowed = await Promise.all(["npx serve . -p 5173", "npm run dev -- --port 5173", "node server.js", "npm test", "echo 30000"].map((c) => runner.guardCommand(c)));
+      const allowed = await Promise.all(["npx serve . -p 5173", "npm run dev -- --port 5173", "node server.js", "npm test", "echo 30000", "Get-Process node | Select-Object Id, StartTime"].map((c) => runner.guardCommand(c)));
       const out = ftAi.describeFreeTokenError(new (await import("openai")).default.NotFoundError(404, { message: "The requested path could not be found" }, "404 The requested path could not be found", new Headers()));
       return (refused.every((r) => r?.includes("FreeToken")) && allowed.every((r) => r === null) && out.includes("Something other than FreeToken"))
         || JSON.stringify({ refused, allowed, out });

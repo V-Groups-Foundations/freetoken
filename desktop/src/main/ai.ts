@@ -18,6 +18,7 @@ import * as web from "./web";
 import * as video from "./video";
 import { diffDetail, outputDetail, type ToolDetail } from "./diff";
 import * as runner from "./runner";
+import * as share from "./share";
 import * as history from "./history";
 import * as checks from "./checks";
 import * as publisher from "./publish";
@@ -106,6 +107,7 @@ export const schemas = {
   setup_android: z.object({}).passthrough(),
   build_android_app: z.object({ name: z.string().optional(), app_id: z.string().optional() }).passthrough(),
   publish_site: z.object({ provider: z.enum(["cloudflare", "netlify"]).optional(), name: z.string().optional() }).passthrough(),
+  share_link: z.object({ stop: z.boolean().optional() }).passthrough(),
   save_check: checks.checkSchema,
   run_checks: z.object({ name: z.string().optional() }).passthrough(),
   restore_checkpoint: z.object({ id: z.string(), reason: z.string().optional() }),
@@ -152,7 +154,9 @@ export const TOOLS: Tool[] = [
     }, required: ["name", "steps"] } },
   { name: "run_checks", description: "Run the project's saved click-through checks (all, or one by name) against the running app and report which pass. V-Run also runs them by itself before you finish a task that changed files.",
     input_schema: { type: "object", properties: { name: { type: "string", description: "Only this check (default: all)" } } } },
-  { name: "publish_site", description: "Put the project's website online on a free host (Cloudflare Pages by default, or Netlify) and get its public https address: builds it if the project has a build step, uploads the folder with index.html, signs the user in through the browser the first time. Only static websites (HTML/CSS/JS); a server part needs another host. Needs the user's approval. Use it when the user wants the app online or a link to share.",
+  { name: "share_link", description: "Make a public HTTPS link (a Cloudflare quick tunnel) to the app running now, so someone anywhere can open it — server, WebSocket and all — while it runs on this computer. HTTPS also lets phones use location, camera and sensors. The link changes each time; it stops with stop: true, when the app stops or when V-Run quits. Use this — never ngrok, npx tunnels or cloudflared commands — when the user wants to send someone a link to their running app. Needs the user's approval.",
+    input_schema: { type: "object", properties: { stop: { type: "boolean", description: "Stop the public link instead" } } } },
+  { name: "publish_site", description: "Put the project's website online on a free host (Cloudflare Pages by default, or Netlify) and get its public https address: builds it if the project has a build step, uploads the folder with index.html, signs the user in through the browser the first time. Only static websites (HTML/CSS/JS): an app with its own server (WebSocket, API, database) doesn't work there — use share_link for that. Needs the user's approval. Use it when the user wants a static site online for good.",
     input_schema: { type: "object", properties: {
       provider: { type: "string", enum: ["cloudflare", "netlify"], description: "Where to publish (default: cloudflare, or where it was published before)" },
       name: { type: "string", description: "Site name, becomes the address (default: the project's name)" },
@@ -233,7 +237,7 @@ export type AgentEvent =
   | { type: "network_warning"; providers: string[]; message: string }
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "file_changed"; path: string }
-  | { type: "approval"; id: string; command: string; explanation?: string }
+  | { type: "approval"; id: string; command: string; explanation?: string; always?: boolean }
   | { type: "todos"; todos: { content: string; status: string }[] }
   | { type: "memory"; scope: "project" | "user"; line: string; added: boolean }
   | { type: "skill"; name: string; scope: "project" | "user" }
@@ -470,12 +474,13 @@ export function fuzzyEdit(text: string, oldS: string, newS: string): { text: str
   return `Closest match (${score}/${ol.length} lines) is around lines ${a + 1}-${b}:\n${numbered(fl.slice(a, b).join("\n"), a + 1)}\nCopy the text from there WITHOUT the "NN| " prefixes, or rewrite the whole file with write_file.`;
 }
 
-function askApproval(s: Session, emit: (e: AgentEvent) => void, id: string, command: string, explanation?: string) {
+/** `always`: ask even when the user chose Accept all (making things public, undoing work). */
+function askApproval(s: Session, emit: (e: AgentEvent) => void, id: string, command: string, explanation?: string, always = false) {
   // already stopped: nothing to ask (a listener added to an aborted signal never fires — it would hang)
   if (s.abort?.signal.aborted) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
     s.approvals.set(id, resolve);
-    emit({ type: "approval", id, command, explanation });
+    emit({ type: "approval", id, command, explanation, ...(always ? { always } : {}) });
     s.abort?.signal.addEventListener("abort", () => resolve(false), { once: true });
   }).finally(() => s.approvals.delete(id));
 }
@@ -718,9 +723,14 @@ const PS_FOR: Record<string, string> = {
   wc: "Measure-Object -Line", lsof: "Get-NetTCPConnection -LocalPort <port>", printf: "Write-Output",
 };
 /** When a command failed because it's bash, not PowerShell: what to use instead. */
-export function shellHint(out: string) {
+export function shellHint(out: string, command = "") {
   const missing = [...new Set([...out.matchAll(/The term '([\w.-]+)' is not recognized/g)].map((m) => m[1]))];
   const tips = missing.filter((t) => PS_FOR[t]).map((t) => `${t} → ${PS_FOR[t]}`);
+  // 2>/dev/null is a redirect to the file C:\dev\null: the command fails, and an "|| echo not found"
+  // after it then reports something false
+  if (/[A-Z]:\\dev\\null/i.test(out)) tips.push("2>/dev/null → 2>$null (or -ErrorAction SilentlyContinue); the command above failed, so don't trust what it printed");
+  // a trailing & starts a PowerShell job that ends with this command
+  if (/BackgroundJob/.test(out) || /&\s*$/.test(command)) tips.push("a trailing & → run_app for anything that keeps running (servers, tunnels; share_link for a public link)");
   return tips.length ? `\n\nThis terminal is PowerShell, not bash. Use: ${tips.join("; ")}.` : "";
 }
 
@@ -955,11 +965,27 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       if (plan.problem) return { content: plan.problem, summary: "Nothing to publish" };
       const provider = (input?.provider ?? plan.last?.provider ?? "cloudflare") as publisher.Provider;
       const name = publisher.siteName(input?.name ?? plan.name);
-      if (!(await askApproval(s, emit, id, `Publish to ${provider === "cloudflare" ? "Cloudflare Pages" : "Netlify"} as "${name}"`, `Put ${plan.dir === "." ? "the project's web files" : plan.dir} online${plan.build ? ` (after ${plan.build})` : ""} — anyone with the address can open it:`)))
+      if (!(await askApproval(s, emit, id, `Publish to ${provider === "cloudflare" ? "Cloudflare Pages" : "Netlify"} as "${name}"`, `Put ${plan.dir === "." ? "the project's web files" : plan.dir} online${plan.build ? ` (after ${plan.build})` : ""} — anyone with the address can open it:`, true)))
         return { content: "The user declined to publish.", summary: "Publish declined" };
       const lines: string[] = [];
       const rec = await publisher.publish({ provider, name, build: plan.build, dir: plan.dir ?? "." }, (l) => { lines.push(l); emit({ type: "progress", id, text: l.slice(0, 160) }); });
       return { content: `Published at ${rec.url}${plan.server ? `\n\nNote: the project also has a server part (${plan.server}); a static host doesn't run it — say so to the user if the site needs it.` : ""}`, summary: `Published: ${rec.url}`, detail: outputDetail(lines.slice(-60).join("\n")) };
+    }
+    case "share_link": {
+      if (input?.stop) { share.stopTunnel(); return { content: "Stopped the public link.", summary: "Public link stopped" }; }
+      const now = share.tunnelState();
+      if (now.status === "on") return { content: `A public link is already running: ${now.url} (to port ${now.port}). Stop it with stop: true first to make a new one.`, summary: `Public link: ${now.url}` };
+      const st = runner.appStatus();
+      if (!st.running || !st.url) return { content: "No app with an address is running. Start it with run_app first, then make the link.", summary: "No app running" };
+      const port = Number(new URL(st.url).port) || 80;
+      const prot = runner.protectedPort(port);
+      if (prot) return { content: `Refused: port ${port} is ${prot.name}; a public link to it would put the AI service on the internet.`, summary: "Refused: protected port" };
+      if (!(await askApproval(s, emit, id, `Make a public link to ${st.url}`, "Anyone with the link can open your app while this runs (it stops when you say so, when the app stops, or when V-Run quits):", true)))
+        return { content: "The user declined the public link.", summary: "Public link declined" };
+      emit({ type: "progress", id, text: "Starting a Cloudflare tunnel…" });
+      const t = await share.startTunnel(port);
+      if (t.status !== "on") return { content: `Couldn't make the link: ${t.status === "error" ? t.message : "it was stopped"}`, summary: "No public link" };
+      return { content: `Public link: ${t.url} → ${st.url} (via ${t.via}). Give the user this link. Pages that build their own share links from location.origin must be opened through it to hand out public links — open_preview ${t.url} to check it. The link changes each time it's started.`, summary: `Public link: ${t.url}` };
     }
     case "list_checkpoints": {
       const snaps = await history.list(getRoot(), 30);
@@ -967,7 +993,7 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       return { content: snaps.map((h) => `${h.id.slice(0, 10)}  ${new Date(h.time).toLocaleString()}  ${h.files} file(s)  ${h.label}`).join("\n"), summary: `${snaps.length} snapshots` };
     }
     case "restore_checkpoint": {
-      if (!(await askApproval(s, emit, id, `Restore snapshot ${input.id.slice(0, 10)}`, input.reason ?? "Put the project's files back to this snapshot (the current state is saved first):")))
+      if (!(await askApproval(s, emit, id, `Restore snapshot ${input.id.slice(0, 10)}`, input.reason ?? "Put the project's files back to this snapshot (the current state is saved first):", true)))
         return { content: "The user declined the restore.", summary: "Restore declined" };
       const r = await history.restore(getRoot(), input.id);
       s.pageStale = true;
@@ -1024,7 +1050,7 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       const ok = await askApproval(s, emit, id, input.command, input.explanation);
       if (!ok) return { content: "The user declined to run this command. Ask them or try another approach.", summary: `Declined: ${input.command}` };
       const out = await runCommand(input.command, s.abort?.signal);
-      return { content: out + shellHint(out), summary: `Ran: ${input.command} (${out.split("\n")[0]})` };
+      return { content: out + shellHint(out, String(input.command)), summary: `Ran: ${input.command} (${out.split("\n")[0]})` };
     }
     case "remember": {
       const scope = input.scope ?? "project";

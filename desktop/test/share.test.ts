@@ -9,6 +9,7 @@ async function check(name: string, fn: () => Promise<boolean | string>) {
   catch (e) { failures++; console.log(`FAIL  ${name}\n      ${(e as Error).stack}`); }
 }
 const serve = (host: string) => new Promise<http.Server>((r) => { const s = http.createServer((_q, res) => res.end("hi")); s.listen(0, host, () => r(s)); });
+const node = (js: string) => [process.execPath, "-e", js]; // a stand-in tunnel program
 const portOf = (s: http.Server) => (s.address() as { port: number }).port;
 
 (async () => {
@@ -40,13 +41,23 @@ const portOf = (s: http.Server) => (s.address() as { port: number }).port;
     return (cf === "https://brave-otter-12.trycloudflare.com" && lt === "https://quiet-fox-77.loca.lt" && share.tunnelUrlIn("starting…") === null) || JSON.stringify({ cf, lt });
   });
 
+  await check("the tunnel targets the loopback address the server answers on (0.0.0.0 → 127.0.0.1, ::1 only → [::1])", async () => {
+    // cloudflared --url http://localhost:N tried ::1 for a server bound to 0.0.0.0: every request was a 502
+    const v4 = await serve("0.0.0.0");
+    const v6 = await serve("::1").catch(() => null); // no IPv6 here: only the first half applies
+    try {
+      const a = await share.loopbackUrl(portOf(v4)), b = v6 ? await share.loopbackUrl(portOf(v6)) : `http://[::1]:x`;
+      return (a === `http://127.0.0.1:${portOf(v4)}` && (!v6 || b === `http://[::1]:${portOf(v6)}`)) || JSON.stringify({ a, b });
+    } finally { v4.close(); v6?.close(); }
+  });
+
   await check("a tunnel starts, reports its link, and stops; one that exits early reports why", async () => {
     const states: string[] = [];
     share.onTunnel((s) => states.push(s.status));
-    const on = await share.startTunnel(5173, { command: `node -e "console.log('your url is: https://test-link.loca.lt'); setInterval(() => {}, 1000)"` });
+    const on = await share.startTunnel(5173, { argv: node(`console.log('your url is: https://test-link.loca.lt'); setInterval(() => {}, 1000)`) });
     const running = share.tunnelState();
     share.stopTunnel();
-    const failed = await share.startTunnel(5173, { command: `node -e "console.error('cannot connect'); process.exit(3)"` });
+    const failed = await share.startTunnel(5173, { argv: node(`console.error('cannot connect'); process.exit(3)`) });
     return (on.status === "on" && on.url === "https://test-link.loca.lt" && running.status === "on" && share.tunnelState().status === "error"
       && failed.status === "error" && /exited \(code [1-9]\d*\).*cannot connect/.test(failed.message) && states.join() === "starting,on,off,starting,error")
       || JSON.stringify({ on, failed, states });
@@ -54,18 +65,29 @@ const portOf = (s: http.Server) => (s.address() as { port: number }).port;
 
   await check("a tunnel stopped while starting settles at once and never reports over the next one", async () => {
     // prints its link only after 3 s: still "starting" when it's stopped
-    const slow = share.startTunnel(5173, { command: `node -e "setTimeout(() => console.log('your url is: https://old-link.loca.lt'), 3000); setInterval(() => {}, 1000)"` });
+    const slow = share.startTunnel(5173, { argv: node(`setTimeout(() => console.log('your url is: https://old-link.loca.lt'), 3000); setInterval(() => {}, 1000)`) });
     await new Promise((r) => setTimeout(r, 300));
     share.stopTunnel();
     const t0 = Date.now();
     const first = await slow;
     const settledMs = Date.now() - t0;
-    const next = await share.startTunnel(5173, { command: `node -e "console.log('your url is: https://new-link.loca.lt'); setInterval(() => {}, 1000)"` });
+    const next = await share.startTunnel(5173, { argv: node(`console.log('your url is: https://new-link.loca.lt'); setInterval(() => {}, 1000)`) });
     await new Promise((r) => setTimeout(r, 3500)); // past the old process's link time
     const after = share.tunnelState();
     share.stopTunnel();
     return (first.status === "off" && settledMs < 10_000 && next.status === "on" && after.status === "on" && after.url === "https://new-link.loca.lt")
       || JSON.stringify({ first, settledMs, next, after });
+  });
+
+  await check("stopping a tunnel ends its process before returning (a link must not outlive V-Run when it quits)", async () => {
+    const mark = `vrun-tunnel-${process.pid}-${Date.now()}`;
+    await share.startTunnel(5173, { argv: node(`console.log('your url is: https://${mark}.loca.lt'); setInterval(() => {}, 1000)`) });
+    share.stopTunnel(); // what before-quit does, with nothing after it
+    const { execFileSync } = await import("node:child_process");
+    const left = process.platform === "win32"
+      ? execFileSync("powershell", ["-NoProfile", "-Command", `@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${mark}*' -and $_.Name -eq 'node.exe' }).Count`], { encoding: "utf8" }).trim()
+      : execFileSync("sh", ["-c", `pgrep -fc '${mark}' || true`], { encoding: "utf8" }).trim();
+    return left === "0" || `still running: ${left}`;
   });
 
   console.log(failures ? `\n${failures} failed` : "\nall share checks passed");

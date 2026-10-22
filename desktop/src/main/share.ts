@@ -62,6 +62,7 @@ export function bindAdvice(command: string) {
 
 export type TunnelState = { status: "off" } | { status: "starting"; via: string } | { status: "on"; url: string; via: string; port: number } | { status: "error"; message: string };
 let tunnel: ChildProcess | null = null;
+let starts = 0; // which start (or stop) is the latest: an earlier start still checking ports gives up
 let state: TunnelState = { status: "off" };
 let listener: (s: TunnelState) => void = () => {};
 export const onTunnel = (fn: (s: TunnelState) => void) => { listener = fn; };
@@ -83,17 +84,34 @@ export function tunnelUrlIn(text: string): string | null {
 }
 
 /**
- * Start a public HTTPS link to http://localhost:port. Resolves once the link is known (or fails after
- * 45 s). `command` overrides what's run (tests).
+ * The loopback address a local server answers on. "localhost" can resolve to ::1 or 127.0.0.1, and a
+ * server bound to 0.0.0.0 only answers on 127.0.0.1 (one bound to ::1 only, on [::1]): a tunnel pointed
+ * at the wrong one gets nothing back and its link shows 502.
  */
-export function startTunnel(port: number, opts: { command?: string } = {}): Promise<TunnelState> {
+export async function loopbackUrl(port: number) {
+  for (const h of ["127.0.0.1", "[::1]"]) if (await reachable(`http://${h}:${port}/`, 1500)) return `http://${h}:${port}`;
+  return `http://localhost:${port}`;
+}
+
+/**
+ * Start a public HTTPS link to the app on this port. Resolves once the link is known (or fails after
+ * 45 s). `argv` overrides what's run (tests).
+ */
+export async function startTunnel(port: number, opts: { argv?: string[] } = {}): Promise<TunnelState> {
   stopTunnel();
   const cf = findCloudflared();
-  const via = opts.command ? "custom" : cf ? "cloudflared" : "localtunnel";
-  const cmd = opts.command ?? (cf ? `"${cf}" tunnel --no-autoupdate --url http://localhost:${port}` : `npx --yes localtunnel@2.0.2 --port ${port}`);
+  const via = opts.argv ? "custom" : cf ? "cloudflared" : "localtunnel";
+  const my = ++starts;
   set({ status: "starting", via });
+  const origin = opts.argv ? "" : await loopbackUrl(port);
+  if (my !== starts) return { status: "off" }; // stopped (or started again) meanwhile
   const win = process.platform === "win32";
-  const p = spawn(win ? windowsShell() : "/bin/bash", win ? ["-NoProfile", "-NonInteractive", "-Command", win && cmd.startsWith('"') ? `& ${cmd}` : cmd] : ["-lc", cmd], { windowsHide: true, detached: !win });
+  const local = /\[::1\]/.test(origin) ? "::1" : "127.0.0.1";
+  // the tunnel program itself, not a shell running it: a shell stopped just as it starts the program
+  // leaves the program running on its own — a public link nobody can stop
+  const argv = opts.argv ?? (cf ? [cf, "tunnel", "--no-autoupdate", "--url", origin] : null);
+  const p = argv ? spawn(argv[0], argv.slice(1), { windowsHide: true, detached: !win })
+    : spawn(win ? windowsShell() : "/bin/bash", [...(win ? ["-NoProfile", "-NonInteractive", "-Command"] : ["-lc"]), `npx --yes localtunnel@2.0.2 --port ${port} --local-host ${local}`], { windowsHide: true, detached: !win });
   tunnel = p;
   return new Promise((resolve) => {
     let seen = "";
@@ -118,6 +136,8 @@ export function startTunnel(port: number, opts: { command?: string } = {}): Prom
     p.stdout?.on("data", onData);
     p.stderr?.on("data", onData);
     p.on("error", (e) => finish({ status: "error", message: e.message }));
+    // stopped: settle when the process ends, without waiting for its output pipes to close
+    p.on("exit", () => { if (tunnel !== p) finish({ status: "off" }); });
     p.on("close", (code) => {
       if (tunnel !== p) { finish({ status: "off" }); return; } // stopped: settle (and disarm the timer)
       // still the current tunnel here, so finish() reports it (and clears it)
@@ -129,8 +149,9 @@ export function startTunnel(port: number, opts: { command?: string } = {}): Prom
 }
 
 export function stopTunnel() {
+  starts++;
   const p = tunnel;
   tunnel = null;
-  if (p) killTree(p);
+  if (p) killTree(p, true); // gone before this returns: a public link must not outlive V-Run
   if (state.status !== "off") set({ status: "off" });
 }

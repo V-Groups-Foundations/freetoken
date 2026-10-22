@@ -105,7 +105,7 @@ export async function loadSkill(name: string, file?: string) {
   return { skill: s, text: md.length > MAX_SKILL_CHARS ? `${md.slice(0, MAX_SKILL_CHARS)}\n…(truncated)` : md, files };
 }
 
-const STOP = new Set("ask asks asked other others user users provide provides good great such call calls case cases give gives given guide please thanks thank help helps let lets now later first last next same different something anything thing things way ways really still even every each where there here then them their they those these would could should might will shall must want wants need needs like using used use make made able want also just only very much many more most some any all it is be do so to of in on at as by an or no go up we me my us am if the and for with that this from into your you are use using when what which will can should make made build create add new any all some about how need want like just also have has get one two more most very only than then them they its it's our out".split(" "));
+const STOP = new Set("someone somebody anyone everyone not say says said right run runs running ask asks asked other others user users provide provides good great such call calls case cases give gives given guide please thanks thank help helps let lets now later first last next same different something anything thing things way ways really still even every each where there here then them their they those these would could should might will shall must want wants need needs like using used use make made able want also just only very much many more most some any all it is be do so to of in on at as by an or no go up we me my us am if the and for with that this from into your you are use using when what which will can should make made build create add new any all some about how need want like just also have has get one two more most very only than then them they its it's our out".split(" "));
 // "animate"/"animation"/"animated" → "animat"; "tests"/"testing" → "test"
 const SHORT = new Set(["ui", "ux", "3d", "ai", "js", "db", "pr", "ci", "qa", "go"]);
 const stem = (w: string) => w.replace(/(?:ations?|ings?|ions?|ed|es|ly|e|s)$/, "").slice(0, 6) || w.slice(0, 6);
@@ -157,12 +157,17 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
   });
   debug?.([...scored].sort((a, b) => b.score - a.score).slice(0, 5).map((x) => ({ name: x.s.name, score: Math.round(x.score * 10) / 10, hits: x.hits })));
   // at least two different meaningful words must match: one shared word ("api") isn't a reason
-  const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD && new Set(x.hits).size >= 2);
+  // and words nearly every request has ("app", "website") never make up that pair: "run the app and send
+  // someone the link" isn't a reason to load android-app — unless the request names the skill ("a React app")
+  const lower = plain.toLowerCase();
+  const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD
+    && (new Set(x.hits.filter((h) => !WEAK.has(h))).size >= 2 || lower.includes(x.s.name.toLowerCase().replace(/-/g, " "))));
   strong.sort((a, b) => b.score - a.score);
   // a second skill only when it's nearly as good a match as the first
   return strong.filter((x, i) => i === 0 || x.score >= strong[0].score * 0.9).slice(0, max).map((x) => x.s);
 }
 export const MATCH_THRESHOLD = 4.5;
+const WEAK = new Set(["app", "apps", "website", "site", "page", "web", "project"].map(stem));
 
 /** Skills the user picked for this message (Use in the Skills panel): their instructions, for the context. */
 export async function pickedSkillsContext(names: string[] = [], auto = false) {

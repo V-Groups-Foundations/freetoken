@@ -22,7 +22,7 @@ export type AgentEvent =
   | { type: "skills_used"; names: string[]; auto: boolean }
   | { type: "progress"; id: string; text: string }
   | { type: "file_changed"; path: string }
-  | { type: "approval"; id: string; command: string; explanation?: string }
+  | { type: "approval"; id: string; command: string; explanation?: string; always?: boolean }
   | { type: "todos"; todos: { content: string; status: string }[] }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };

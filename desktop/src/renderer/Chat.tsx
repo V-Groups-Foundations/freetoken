@@ -51,6 +51,7 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   stop_app: { label: "Stop app", verb: "Stopping the app" },
   save_check: { label: "Save check", arg: "name", verb: "Saving a check" },
   publish_site: { label: "Publish", arg: "name", verb: "Publishing the website" },
+  share_link: { label: "Public link", verb: "Making a public link" },
   run_checks: { label: "Run checks", verb: "Re-running the saved checks" },
   list_checkpoints: { label: "Checkpoints", verb: "Looking at the history" },
   restore_checkpoint: { label: "Restore", arg: "id", verb: "Restoring a snapshot" },
@@ -279,7 +280,8 @@ export function ChatPanel(props: {
   useEffect(() => setPick(0), [slashHits.length]);
 
   function apply(e: AgentEvent) {
-    const auto = e.type === "approval" && autoRunRef.current;
+    // Accept all covers commands and edits — never making something public or undoing work (always)
+    const auto = e.type === "approval" && autoRunRef.current && !e.always;
     if (auto) api.approve(sidRef.current, e.id, true);
     else if (e.type === "approval") api.notify("V-Run needs your approval", e.command).catch(() => {});
     const t = turn.current;
