@@ -7,7 +7,7 @@ import { confetti, toast } from '../fx';
 
 type Connected = { last4: string; status: string; excludedFromAuto: boolean } | null;
 
-export function ProviderCard({ provider, connected, oauth = false }: { provider: PublicProvider; connected: Connected; oauth?: boolean }) {
+export function ProviderCard({ provider, connected, oauth = false, unreachable = null }: { provider: PublicProvider; connected: Connected; oauth?: boolean; unreachable?: string | null }) {
   const router = useRouter();
   const [key, setKey] = useState('');
   const [extra, setExtra] = useState('');
@@ -83,6 +83,13 @@ export function ProviderCard({ provider, connected, oauth = false }: { provider:
         </div>
         {badge}
       </div>
+
+      {/* the last requests couldn't reach it from this network (restricted Wi-Fi, firewall) */}
+      {unreachable && (
+        <p role="status" className="rounded-lg border border-[var(--warn,#e0b45c)]/40 bg-[#e0b45c14] px-3 py-2 text-xs leading-relaxed">
+          <b>Unreachable from this network.</b> {unreachable}
+        </p>
+      )}
 
       {/* Primary call to action: open the provider's key page */}
       <a

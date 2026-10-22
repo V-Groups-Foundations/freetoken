@@ -97,6 +97,16 @@ async function main() {
     return !!waited && Date.now() - t0 >= 900 && text.includes("FreeToken says") && !events.some((e) => e.type === "error");
   });
 
+  await check("a provider the network can't reach is reported once per task (restricted Wi-Fi?)", async () => {
+    const events: AI.AgentEvent[] = [];
+    // "I have created" makes the agent take a second step (sent back to do the work): still one warning
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "wifi", mode: "agent", text: "restricted wifi test: I have created it" }, (e) => { events.push(e); if (e.type === "done") r(); }));
+    const warnings = events.filter((e): e is Extract<AI.AgentEvent, { type: "network_warning" }> => e.type === "network_warning");
+    const nothing = ft.rateLimitWait(Object.assign(new Error("Gemini (Google) couldn't be reached from this network."), { status: 503 }), 0);
+    return (warnings.length === 1 && warnings[0].providers[0] === "gemini" && /Gemini \(Google\).*restricted Wi-Fi/.test(warnings[0].message) && nothing === null)
+      || JSON.stringify({ warnings, nothing });
+  });
+
   await check("an empty reply is never sent back as an empty assistant message (providers reject that)", async () => {
     const before = fake.requests.length;
     const events: AI.AgentEvent[] = [];

@@ -218,6 +218,8 @@ export type AgentEvent =
   | { type: "usage"; input: number; output: number }
   /** the model now answering (FreeToken auto routing picks per request): its task kind, and what it fell back from */
   | { type: "model"; model: string; task?: string; fallbacks?: string }
+  /** providers FreeToken couldn't reach from this network (restricted Wi-Fi, firewall) */
+  | { type: "network_warning"; providers: string[]; message: string }
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "file_changed"; path: string }
   | { type: "approval"; id: string; command: string; explanation?: string }

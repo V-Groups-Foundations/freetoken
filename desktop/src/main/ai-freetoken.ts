@@ -175,6 +175,8 @@ const CUT_OFF = "\n\nIMPORTANT: your last reply was cut off by the provider whil
 
 export function rateLimitWait(e: unknown, waits: number): number | null {
   const err = e as { status?: number; headers?: Headers | Record<string, string> } | null;
+  // FreeToken couldn't reach any provider from this network: retrying here won't change that
+  if (/couldn't be reached from this network|network_unreachable/i.test(String((e as Error)?.message ?? ""))) return null;
   if (err?.status && err.status >= 500 && err.status < 600) return waits < 2 ? 2000 * (waits + 1) : null;
   // a stream that broke off mid-answer ("Upstream idle timeout exceeded", a reset connection): free
   // providers drop long generations now and then — ask again rather than ending the whole task
@@ -215,6 +217,14 @@ export function thinkSplitter() {
 }
 
 const clip = (s: string, n: number) => (s.length > n ? `…(${s.length - n} chars omitted)…\n${s.slice(-n)}` : s);
+
+const PROVIDER_NAMES: Record<string, string> = { gemini: "Gemini (Google)", groq: "Groq", openrouter: "OpenRouter", github: "GitHub Models", cohere: "Cohere", nvidia: "NVIDIA", cloudflare: "Cloudflare" };
+/** What to tell the user when FreeToken couldn't reach providers from their network. */
+export function unreachableMessage(providers: string[]) {
+  const names = providers.map((p) => PROVIDER_NAMES[p] ?? p.charAt(0).toUpperCase() + p.slice(1));
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+  return `${list} couldn't be reached from this network — you might be on a restricted Wi-Fi (school, office and public networks often block AI services, Google's especially). Other models answered instead; to use ${names.length > 1 ? "them" : "it"}, try another network, a phone hotspot or a VPN.`;
+}
 
 /** Tell FreeToken how a model's answer worked out (fire and forget): auto routing learns from it. */
 export function reportModel(model: string | null, good: boolean, reason: string) {
@@ -291,6 +301,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   try {
     const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"), req.worker);
     let stepModel: string | null = null, shownModel: string | null = null;
+    const warnedUnreachable = new Set<string>();
     const turnModels = new Set<string>();
     for (let turn = 0; turn < (req.maxSteps ?? MAX_STEPS); turn++) {
       let text = "";
@@ -314,6 +325,12 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
           }, { signal: s.abort.signal, maxRetries: 0, ...(role ? { headers: { "x-freetoken-task": role } } : {}) }).withResponse(); // retries happen below, visibly (rateLimitWait)
           // which model FreeToken picked: what it gets right or wrong is reported back so routing learns
           stepModel = response.headers.get("x-freetoken-provider");
+          // providers the user's network couldn't reach: say so once per task (restricted Wi-Fi?)
+          const unreachable = (response.headers.get("x-freetoken-unreachable") ?? "").split(",").map((p) => p.trim()).filter((p) => p && !warnedUnreachable.has(p));
+          if (unreachable.length) {
+            for (const p of unreachable) warnedUnreachable.add(p);
+            emit({ type: "network_warning", providers: unreachable, message: unreachableMessage(unreachable) });
+          }
           if (stepModel) turnModels.add(stepModel);
           // show the user which model works on this, and when FreeToken switches to another one
           if (stepModel && stepModel !== shownModel) {

@@ -6,6 +6,7 @@ import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
 import { estimateTokens, learnedScores, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
 import { detectTask, type Task } from './quality';
+import { noteReachable, noteUnreachable, unreachableHint } from '@/providers/network';
 
 /** 400s caused by the model, its size limits or a gateway's upstream rather than the request (Groq: "Failed to call
  * a function"; OpenRouter / Kilo: "Provider returned error"). Another model can take them. */
@@ -111,6 +112,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
   // models tried before the one that answered, and why they didn't (shown to the user by clients)
   const skipped: string[] = [];
+  // providers that couldn't be reached from this network (blocked / no connection) this request
+  const unreachable = new Set<string>();
+  let otherFailures = 0;
   for (const m of candidates) {
     if (cooling.has(m.provider)) continue; // a model of this provider failed earlier in this loop
     const def = getProvider(m.provider);
@@ -128,6 +132,10 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     if (!r.ok) {
       const e = r.error;
       skipped.push(`${m.provider}/${m.modelId} (${e.kind.replace('_', ' ')})`);
+      if (e.kind === 'network' || e.kind === 'blocked') {
+        unreachable.add(m.provider);
+        await noteUnreachable(deps.kv, userId, m.provider, { kind: e.kind, message: e.message, at: now() });
+      } else otherFailures++;
       console.warn(`[router] ${m.provider}/${m.modelId} failed (${e.kind}${'status' in e && e.status ? ` ${e.status}` : ''}): ${String(e.message).slice(0, 300)}`);
       await recordUsage(deps.db, {
         ...usageBase, promptTokens: 0, completionTokens: 0, latencyMs: now() - started,
@@ -141,6 +149,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
         // Retired/unavailable model: skip just this model, leave the provider's others usable.
         continue;
       }
+      // the network's doing (blocked page, no connection) never marks the key invalid
       if (e.kind === 'auth') {
         await markInvalid(deps.db, userId, m.provider);
       } else {
@@ -153,6 +162,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     }
 
     await touchKey(deps.db, userId, m.provider);
+    await noteReachable(deps.kv, userId, m.provider);
     const live = parseRateHeaders(r.response.headers, now());
     if (live) {
       await saveLimits(deps.db, userId, m.provider, m.modelId, live).catch((err) => console.error('limit save failed', err));
@@ -163,6 +173,8 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       // which kind of task auto routing saw, and what it fell back from (clients show which model did what)
       'x-freetoken-task': task,
       ...(skipped.length ? { 'x-freetoken-fallbacks': skipped.join(', ') } : {}),
+      // clients warn the user: these couldn't be reached from their network (restricted Wi-Fi?)
+      ...(unreachable.size ? { 'x-freetoken-unreachable': [...unreachable].join(',') } : {}),
     };
 
     if (stream && r.response.body) {
@@ -202,6 +214,10 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     return { ok: true, response: Response.json(json, { headers }) };
   }
 
+  // nothing answered and it was the network every time: say so, instead of "out of quota"
+  if (unreachable.size && !otherFailures) {
+    return fail(503, 'network_unreachable', unreachableHint([...unreachable]));
+  }
   const earliest = resetTimes.length ? Math.min(...resetTimes) : null;
   return fail(
     429,

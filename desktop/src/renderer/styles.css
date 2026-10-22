@@ -648,3 +648,6 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .bench-table th { white-space: nowrap; }
 .bench-table td.bench-result { white-space: nowrap; }
 .bench-table th, .bench-table td { padding: 4px 4px; }
+/* a provider couldn't be reached from this network */
+.net-warning { display: flex; gap: 8px; align-items: baseline; font-size: 12px; line-height: 1.5; color: var(--fg); padding: 6px 10px; border-radius: 8px; background: #e0b45c14; border: 1px solid #e0b45c55; }
+.net-warning > span:first-child { color: #e0b45c; }

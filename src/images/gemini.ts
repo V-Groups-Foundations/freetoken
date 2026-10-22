@@ -3,6 +3,7 @@
 
 import type { FetchFn } from '@/providers/client';
 import type { GenerateInput, GenerateResult } from './generate';
+import { describeNetworkFailure, looksLikeWebPage, unreachableHint } from '@/providers/network';
 
 const MODEL = 'gemini-2.5-flash-image';
 
@@ -32,6 +33,11 @@ export async function generateImageGemini(
     );
     if (!res.ok) {
       let msg: string;
+      const body = await res.clone().text().catch(() => '');
+      if (res.status < 500 && looksLikeWebPage(res.headers.get('content-type'), body)) {
+        // a firewall / proxy / Wi-Fi login page, not Google: the key is fine, the network isn't
+        return { ok: false, status: res.status, message: `${unreachableHint(['gemini'])} (The network answered with its own page, HTTP ${res.status}.) Or switch to the FLUX engine.` };
+      }
       if (res.status === 401 || res.status === 403) {
         msg = 'Gemini rejected your key.';
       } else if (res.status === 429) {
@@ -51,7 +57,9 @@ export async function generateImageGemini(
     }
     return { ok: true, dataUrl: `data:${img.mimeType ?? 'image/png'};base64,${img.data}` };
   } catch (e) {
-    const message = e instanceof Error && e.name === 'AbortError' ? 'Gemini image generation timed out.' : 'Could not reach Gemini.';
+    const message = e instanceof Error && e.name === 'AbortError'
+      ? 'Gemini image generation timed out.'
+      : `Could not reach Gemini: ${describeNetworkFailure(e)}. ${unreachableHint(['gemini'])} Or switch to the FLUX engine.`;
     return { ok: false, status: 0, message };
   } finally {
     clearTimeout(timer);

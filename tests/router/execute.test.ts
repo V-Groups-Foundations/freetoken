@@ -6,7 +6,7 @@ import { TEST_VAULT_KEY, seedTestModels } from '../helpers/fixtures';
 import type { DB } from '@/db';
 import { models, providerKeys, usageEvents } from '@/db/schema';
 import { createMemoryKV, type KV } from '@/lib/kv';
-import { saveKey } from '@/keys/service';
+import { listKeys, saveKey } from '@/keys/service';
 import { routeChat } from '@/router/execute';
 import { listUserModels } from '@/router/models';
 
@@ -125,6 +125,46 @@ describe('routeChat', () => {
     expect(out.ok && out.response.headers.get('x-freetoken-task')).toBe('reasoning');
     const guessed = await run(() => okJson()).p; // without it, the kind is read from the request
     expect(guessed.ok && guessed.response.headers.get('x-freetoken-task')).toBe('chat');
+  });
+
+  describe('restricted networks (school / office Wi-Fi, firewalls)', () => {
+    const blockedPage = () => new Response('<!DOCTYPE html><html><body>Access to this site is blocked by your network administrator</body></html>', { status: 403, headers: { 'content-type': 'text/html' } });
+    const dropped = () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) }); };
+    const keyStatus = async (provider: string) => (await listKeys(db, userId)).find((k) => k.provider === provider)?.status;
+
+    it("a firewall's block page is the network, not a bad key: the key stays valid, routing moves on, the answer says what was unreachable", async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      const out = await run((url) => (url.includes(GROQ) ? blockedPage() : okJson('from gemini'))).p;
+      expect(out.ok).toBe(true);
+      expect(out.ok && out.response.headers.get('x-freetoken-unreachable')).toBe('groq');
+      expect(out.ok && out.response.headers.get('x-freetoken-fallbacks')).toMatch(/\(blocked\)/);
+      expect(await keyStatus('groq')).toBe('valid');
+    });
+
+    it('a dropped connection counts as the network too', async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      const out = await run((url) => (url.includes(GROQ) ? dropped() : okJson('from gemini'))).p;
+      expect(out.ok && out.response.headers.get('x-freetoken-unreachable')).toBe('groq');
+      expect(out.ok && out.response.headers.get('x-freetoken-fallbacks')).toMatch(/\(network\)/);
+    });
+
+    it('when nothing can be reached, the error says the network may be restricted (not "out of quota")', async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      const out = await run((url) => (url.includes(GROQ) ? blockedPage() : dropped())).p;
+      expect(out).toMatchObject({ ok: false, status: 503, code: 'network_unreachable' });
+      expect(!out.ok && out.message).toMatch(/restricted Wi-Fi/);
+      expect(!out.ok && out.message).toMatch(/Gemini \(Google\)/);
+      expect(await keyStatus('gemini')).toBe('valid');
+    });
+
+    it('a real 403 from the API (JSON) is still a rejected key', async () => {
+      await connect('groq', 'gsk_mine');
+      await run(() => Response.json({ error: { message: 'Invalid API Key' } }, { status: 403 })).p;
+      expect(await keyStatus('groq')).toBe('invalid');
+    });
   });
 
   it('does not fall back on a bad request', async () => {

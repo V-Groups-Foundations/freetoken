@@ -44,14 +44,21 @@ describe('callChat', () => {
     expect(f.calls[0].url).toBe('https://integrate.api.nvidia.com/v1/chat/completions');
     expect(f.calls[0].auth).toBe('Bearer nvapi-x');
   });
-  it('returns normalized errors and treats network failures as timeout', async () => {
+  it('returns normalized errors; a dropped connection is the network, no answer in time is a timeout', async () => {
     const r1 = await callChat(getProvider('groq')!, { key: 'k', extra: null }, {}, {
       fetchImpl: fakeFetch(() => new Response('nope', { status: 401 })).fn,
     });
     expect(r1).toMatchObject({ ok: false, error: { kind: 'auth' } });
     const r2 = await callChat(getProvider('groq')!, { key: 'k', extra: null }, {}, {
-      fetchImpl: (async () => { throw new TypeError('fetch failed'); }) as typeof fetch,
+      fetchImpl: (async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) }); }) as typeof fetch,
     });
-    expect(r2).toMatchObject({ ok: false, error: { kind: 'timeout' } });
+    expect(r2).toMatchObject({ ok: false, error: { kind: 'network', message: expect.stringContaining('DNS') } });
+    const r3 = await callChat(getProvider('groq')!, { key: 'k', extra: null }, {}, { fetchImpl: (async (_u: unknown, init?: RequestInit) => new Promise<Response>((_r, reject) => init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))))) as typeof fetch, timeoutMs: 50 });
+    expect(r3).toMatchObject({ ok: false, error: { kind: 'timeout' } });
+    // a firewall's block page (HTML) is "blocked", not a rejected key
+    const r4 = await callChat(getProvider('groq')!, { key: 'k', extra: null }, {}, {
+      fetchImpl: fakeFetch(() => new Response('<html><body>Blocked by policy</body></html>', { status: 403, headers: { 'content-type': 'text/html' } })).fn,
+    });
+    expect(r4).toMatchObject({ ok: false, error: { kind: 'blocked' } });
   });
 });

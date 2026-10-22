@@ -14,6 +14,7 @@ export type AgentEvent =
   | { type: "tool_end"; id: string; ok: boolean; summary: string; detail?: ToolDetail }
   | { type: "usage"; input: number; output: number }
   | { type: "model"; model: string; task?: string; fallbacks?: string }
+  | { type: "network_warning"; providers: string[]; message: string }
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "memory"; scope: "project" | "user"; line: string; added: boolean }
   | { type: "skill"; name: string; scope: "project" | "user" }

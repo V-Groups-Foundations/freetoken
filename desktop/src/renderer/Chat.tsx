@@ -30,7 +30,9 @@ type Item =
   | { kind: "note"; text: string }
   | { kind: "skills"; names: string[]; auto: boolean }
   // which model is working on this; a switch says what it moved away from
-  | { kind: "model"; model: string; task?: string; fallbacks?: string; switched: boolean };
+  | { kind: "model"; model: string; task?: string; fallbacks?: string; switched: boolean }
+  // a provider couldn't be reached from this network (restricted Wi-Fi?)
+  | { kind: "net"; text: string };
 
 // display name, the input field shown in brackets, and the status-line verb
 const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
@@ -328,6 +330,9 @@ export function ChatPanel(props: {
           break;
         case "skill":
           next.push({ kind: "note", text: `Learned skill${e.name.includes(",") ? "s" : ""}: ${e.name}` });
+          break;
+        case "network_warning":
+          next.push({ kind: "net", text: e.message });
           break;
         case "model":
           next.push({ kind: "model", model: e.model, task: e.task, fallbacks: e.fallbacks, switched });
@@ -690,6 +695,7 @@ export function ChatPanel(props: {
               case "thinking": return <Thinking key={i} t={r} />;
               case "history": return <History key={i} name={r.name} messages={r.messages} />;
               case "note": return <div key={i} className="mem-note" role="status"><span aria-hidden>◆</span>{r.text}</div>;
+              case "net": return <div key={i} className="net-warning" role="alert"><span aria-hidden>⚠</span><span>{r.text}</span></div>;
               case "model": return (
                 <div key={i} className={`model-row${r.switched ? " switched" : ""}`} title={`${r.model}${r.fallbacks ? `\nTried first: ${r.fallbacks}` : ""}`}>
                   <span aria-hidden>{r.switched ? "↪" : "◇"}</span>

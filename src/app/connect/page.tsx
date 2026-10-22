@@ -5,6 +5,8 @@ import { requireUserId } from '@/lib/session';
 import { PROVIDERS, starterEnabled, toPublicProvider } from '@/providers/registry';
 import { SERVICES, toPublicService } from '@/services/registry';
 import { ProviderCard } from './provider-card';
+import { getDeps } from '@/server/deps';
+import { netStatus, unreachableHint } from '@/providers/network';
 import { QuickConnect } from './quick-connect';
 import { ServiceCard } from './service-card';
 
@@ -21,6 +23,10 @@ export default async function ConnectPage({
   const connectedCount = keyList.filter((k) => k.status === 'valid' && offered.has(k.provider)).length;
   const { connected, error, welcome } = await searchParams;
   const connectedIds = keyList.filter((k) => k.status === 'valid').map((k) => k.provider);
+  // providers the user's last requests couldn't reach (restricted Wi-Fi?) — remembered for 30 minutes
+  const kv = getDeps().kv;
+  const unreachable = new Map((await Promise.all(PROVIDERS.map(async (p) => [p.id, await netStatus(kv, uid, p.id)] as const)))
+    .filter(([, s]) => s).map(([id, s]) => [id, `${s!.message.replace(/^./, (c) => c.toUpperCase())}. ${unreachableHint([id]).replace(/^.*? couldn't be reached from this network\. /, '')}`]));
 
   return (
     <section className="grid-bg relative space-y-8">
@@ -87,7 +93,7 @@ export default async function ConnectPage({
       </div>
       <div className="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {PROVIDERS.map((p) => (
-          <ProviderCard key={p.id} provider={toPublicProvider(p)} connected={keys.get(p.id) ?? null} oauth={p.id === 'openrouter'} />
+          <ProviderCard key={p.id} provider={toPublicProvider(p)} connected={keys.get(p.id) ?? null} oauth={p.id === 'openrouter'} unreachable={unreachable.get(p.id) ?? null} />
         ))}
       </div>
 

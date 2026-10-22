@@ -70,7 +70,11 @@ describe('validateKey', () => {
   it('saves with a note when the provider is slow or hiccuping (timeout / 5xx)', async () => {
     const serverErr = await validateKey(groq, creds, fakeFetch(() => new Response('<html>down</html>', { status: 503 })).fn);
     expect(serverErr).toMatchObject({ ok: true, note: expect.stringContaining('slow') });
-    const timedOut = await validateKey(groq, creds, fakeFetch(() => { throw new Error('aborted'); }).fn);
-    expect(timedOut).toMatchObject({ ok: true, note: expect.stringContaining('slow') });
+  });
+  it("saves with an explanation when the network can't reach the provider (restricted Wi-Fi)", async () => {
+    const dropped = await validateKey(groq, creds, fakeFetch(() => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) }); }).fn);
+    expect(dropped).toMatchObject({ ok: true, note: expect.stringContaining('restricted Wi-Fi') });
+    const blocked = await validateKey(groq, creds, fakeFetch(() => new Response('<!DOCTYPE html><title>Blocked</title>', { status: 403, headers: { 'content-type': 'text/html' } })).fn);
+    expect(blocked).toMatchObject({ ok: true, note: expect.stringContaining("couldn't be checked") });
   });
 });

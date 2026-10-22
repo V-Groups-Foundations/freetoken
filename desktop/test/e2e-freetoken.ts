@@ -476,6 +476,14 @@ async function main() {
       await page.getByRole("button", { name: proj }).click();
       await page.getByRole("button", { name: "src", exact: true }).waitFor({ timeout: 10000 });
     });
+    await step("a provider the network can't reach shows a restricted Wi-Fi warning in the chat", async () => {
+      const box = page.getByLabel("Message the AI");
+      await box.fill("restricted wifi test: what is in hello.ts?");
+      await box.press("Enter");
+      await page.locator(".net-warning", { hasText: "Gemini (Google) couldn't be reached from this network" }).waitFor({ timeout: 15000 });
+      await page.getByRole("button", { name: "Send" }).waitFor({ timeout: 15000 });
+      await page.screenshot({ path: path.join(shots, "network-warning.png") });
+    });
     await step("/benchmark: pick models, run the tasks, see a pass/fail table (a model that only chats fails every task)", async () => {
       const box = page.getByLabel("Message the AI");
       await box.fill("/benchmark");

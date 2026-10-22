@@ -1,6 +1,8 @@
 import type { ProviderDef } from './registry';
+import { describeNetworkFailure, looksLikeWebPage } from './network';
 
-export type ErrorKind = 'rate_limit' | 'auth' | 'server' | 'timeout' | 'bad_request' | 'not_found';
+/** network = never got an answer (DNS, refused, reset, swapped certificate); blocked = a web page came back instead of the API */
+export type ErrorKind = 'rate_limit' | 'auth' | 'server' | 'timeout' | 'bad_request' | 'not_found' | 'network' | 'blocked';
 
 export interface ProviderError {
   kind: ErrorKind;
@@ -38,6 +40,10 @@ export function parseRetryAfter(value: string | null): number | undefined {
 }
 
 export function normalizeError(status: number, headers: Headers, bodyText: string): ProviderError {
+  // a firewall / proxy / Wi-Fi login page (HTML, not the API's JSON) — the network's doing, not the key's
+  if (status < 500 && looksLikeWebPage(headers.get('content-type'), bodyText)) {
+    return { kind: 'blocked', status, message: `the network answered with its own web page instead of the API (HTTP ${status}) — a firewall, proxy or Wi-Fi login page` };
+  }
   const message = extractMessage(bodyText) ?? `HTTP ${status}`;
   // Groq answers 413 when a request exceeds its per-minute token budget.
   if (status === 429 || status === 413) {
@@ -75,7 +81,9 @@ export async function postJson(
     const text = await res.text().catch(() => '');
     return { ok: false, error: normalizeError(res.status, res.headers, text) };
   } catch (e) {
-    return { ok: false, error: { kind: 'timeout', status: 0, message: e instanceof Error ? e.message : 'network error' } };
+    // our own time limit → timeout; anything else never got an answer → the network
+    if (ctrl.signal.aborted) return { ok: false, error: { kind: 'timeout', status: 0, message: 'no answer in time' } };
+    return { ok: false, error: { kind: 'network', status: 0, message: describeNetworkFailure(e) } };
   } finally {
     clearTimeout(timer);
   }
@@ -114,7 +122,9 @@ export async function callTranscription(
     const text = await res.text().catch(() => '');
     return { ok: false, error: normalizeError(res.status, res.headers, text) };
   } catch (e) {
-    return { ok: false, error: { kind: 'timeout', status: 0, message: e instanceof Error ? e.message : 'network error' } };
+    // our own time limit → timeout; anything else never got an answer → the network
+    if (ctrl.signal.aborted) return { ok: false, error: { kind: 'timeout', status: 0, message: 'no answer in time' } };
+    return { ok: false, error: { kind: 'network', status: 0, message: describeNetworkFailure(e) } };
   } finally {
     clearTimeout(timer);
   }

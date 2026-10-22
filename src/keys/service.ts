@@ -4,6 +4,7 @@ import { providerKeys } from '@/db/schema';
 import { decrypt, encrypt } from '@/lib/vault';
 import { callChat, type Credentials, type FetchFn } from '@/providers/client';
 import type { ProviderDef } from '@/providers/registry';
+import { unreachableHint } from '@/providers/network';
 
 const byUserProvider = (userId: string, provider: string) =>
   and(eq(providerKeys.userId, userId), eq(providerKeys.provider, provider));
@@ -80,6 +81,11 @@ export async function validateKey(
   if (r.error.kind === 'rate_limit') return { ok: true, note: 'Key works but is currently rate-limited.' };
   if (r.error.kind === 'auth') return { ok: false, message: 'The provider rejected this key.' };
   if (r.error.kind === 'not_found' || r.error.status === 404) return { ok: true, note: 'Key saved, but the test model is unavailable, so the key could not be fully verified.' };
+  // The network can't reach the provider (restricted Wi-Fi, firewall): not the key's fault — save it,
+  // and say why it couldn't be checked.
+  if (r.error.kind === 'network' || r.error.kind === 'blocked') {
+    return { ok: true, note: `Key saved, but it couldn't be checked: ${r.error.message}. ${unreachableHint([def.id])}` };
+  }
   // A slow or hiccuping provider (timeout / 5xx) is not a bad key — save it rather than block it.
   if (r.error.kind === 'timeout' || r.error.kind === 'server') {
     return { ok: true, note: 'Key saved, but the provider was slow to respond, so it could not be fully verified. It should still work.' };
