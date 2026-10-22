@@ -18,11 +18,66 @@ async function check(name: string, fn: () => Promise<boolean | string> | boolean
     return ids.every((i) => /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(i)) && ids[0] === "com.vrun.mytracker" || JSON.stringify(ids);
   });
 
-  await check("the prerequisite check finds Java 21 and the SDK, or says exactly what to install", async () => {
+  await check("the prerequisite check finds Android Studio, the SDK and a Java the build tools run on (21–24), or says what's missing", async () => {
     const c = await android.checkAndroid();
-    const consistent = (!!c.java && c.java.version >= 21) === !c.problems.some((p) => /Java/.test(p)) && !!c.sdk === !c.problems.some((p) => /SDK/.test(p));
-    return (consistent && c.problems.every((p) => /Android Studio/.test(p))) || JSON.stringify(c);
+    const javaOk = !!c.java && c.java.version >= 21 && c.java.version <= 24;
+    const consistent = javaOk === !c.missing.java && javaOk === !c.problems.some((p) => /Java/.test(p))
+      && !!c.sdk === !c.missing.sdk && (c.missing.studio === (!c.studio && !c.sdk));
+    // anything missing either can be set up here, or comes with the download link
+    const helpful = c.problems.every((p) => /Set up|developer\.android\.com\/studio|open Android Studio/.test(p));
+    return (consistent && helpful) || JSON.stringify(c);
   });
+
+  // Set up, with fakes: nothing is installed or downloaded for real; V-Run's tools folder is a temp home
+  const realHome = process.env.USERPROFILE, realHOME = process.env.HOME;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-home-"));
+  process.env.USERPROFILE = home; process.env.HOME = home;
+  const state = (o: Partial<android.AndroidCheck["missing"]> & { installer?: "winget" | "brew" | null; at?: string }): android.AndroidCheck => {
+    const { installer, at, ...flags } = o;
+    const missing = { studio: false, java: false, sdk: false, ...flags };
+    return { java: missing.java ? null : { home: "x", version: 21 }, sdk: missing.sdk ? null : "sdk", adb: null, studio: at ?? (missing.studio ? null : "studio64.exe"),
+      installer: installer ?? null, missing, problems: Object.entries(missing).filter(([, v]) => v).map(([k]) => k) };
+  };
+  const noFetch = (() => { throw new Error("no download expected"); }) as unknown as typeof fetch;
+
+  await check("set up: no way to install Android Studio here → the error gives the download link", async () => {
+    try { await android.setupAndroid(() => {}, { check: async () => state({ studio: true, sdk: true }), fetchImpl: noFetch }); return "no error"; }
+    catch (e) { return /developer\.android\.com\/studio/.test((e as Error).message) || (e as Error).message; }
+  });
+
+  await check("set up: installs Android Studio with winget, then opens it so its setup downloads the SDK", async () => {
+    const ran: string[] = [], opened: string[] = [];
+    const states = [state({ studio: true, sdk: true, installer: "winget" }), state({ sdk: true, at: "C:/AS/studio64.exe" }), state({ sdk: true, at: "C:/AS/studio64.exe" })];
+    let i = 0;
+    await android.setupAndroid(() => {}, { check: async () => states[Math.min(i++, states.length - 1)], exec: async (cmd) => { ran.push(cmd); return { code: 0, out: "" }; }, fetchImpl: noFetch, open: (s) => opened.push(s) });
+    return (ran.length === 1 && /winget install --id Google\.AndroidStudio --exact/.test(ran[0]) && opened.join() === "C:/AS/studio64.exe") || JSON.stringify({ ran, opened });
+  });
+
+  await check("set up: a failed install says so and gives the download link", async () => {
+    try { await android.setupAndroid(() => {}, { check: async () => state({ studio: true, sdk: true, installer: "winget" }), exec: async () => ({ code: 1, out: "" }), fetchImpl: noFetch }); return "no error"; }
+    catch (e) { return /didn't work.*developer\.android\.com\/studio/.test((e as Error).message) || (e as Error).message; }
+  });
+
+  await check("set up: Java 21 is downloaded from Adoptium into V-Run's own tools folder and unpacked there", async () => {
+    // a stand-in JDK archive: jdk-21.0.9+10/bin/java(.exe)
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-jdkzip-"));
+    const top = path.join(src, "jdk-21.0.9+10", "bin");
+    fs.mkdirSync(top, { recursive: true });
+    fs.writeFileSync(path.join(top, process.platform === "win32" ? "java.exe" : "java"), "stand-in");
+    const archive = path.join(src, process.platform === "win32" ? "jdk.zip" : "jdk.tar.gz");
+    const tar = process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+    const { execFileSync } = await import("node:child_process");
+    execFileSync(tar, process.platform === "win32" ? ["-a", "-cf", archive, "-C", src, "jdk-21.0.9+10"] : ["-czf", archive, "-C", src, "jdk-21.0.9+10"]);
+    const urls: string[] = [];
+    const fakeFetch = (async (u: string) => { urls.push(u); return new Response(fs.readFileSync(archive), { headers: { "content-length": String(fs.statSync(archive).size) } }); }) as unknown as typeof fetch;
+    let n = 0;
+    await android.setupAndroid(() => {}, { check: async () => (n++ === 0 ? state({ java: true }) : state({})), fetchImpl: fakeFetch, open: () => {} });
+    const java = path.join(home, ".vrun", "tools", "jdk-21", "bin", process.platform === "win32" ? "java.exe" : "java");
+    const leftovers = fs.readdirSync(path.join(home, ".vrun", "tools")).filter((f) => f !== "jdk-21");
+    return (urls.length === 1 && urls[0] === android.jdkUrl() && /adoptium\.net\/v3\/binary\/latest\/21\/ga\//.test(urls[0]) && fs.existsSync(java) && leftovers.length === 0)
+      || JSON.stringify({ urls, java: fs.existsSync(java), leftovers });
+  });
+  process.env.USERPROFILE = realHome; process.env.HOME = realHOME;
 
   await check("the Wi-Fi plugin is registered in MainActivity and gets its permissions (idempotent)", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-and-"));

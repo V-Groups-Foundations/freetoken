@@ -13,6 +13,17 @@ import { planPublish, siteName, stageSite } from "./publish";
 
 const win = process.platform === "win32";
 const CAP = "8"; // Capacitor major version: JDK 21, compileSdk 36, Android 7+ (API 24)
+/** Where to get Android Studio by hand when V-Run can't install it. */
+export const STUDIO_URL = "https://developer.android.com/studio";
+// Capacitor 8's Android project builds with Gradle 8.14, which runs on Java 21–24 — not on the Java 25
+// that new Android Studio versions bundle ("Unsupported class file major version 69")
+const JAVA_MIN = 21, JAVA_MAX = 24;
+/** V-Run's own tools (a private JDK 21 when no usable Java is installed). */
+export const toolsDir = () => path.join(os.homedir(), ".vrun", "tools");
+const jdkDist = () => path.join(toolsDir(), "jdk-21");
+/** The private JDK's home (on a Mac the JDK sits inside Contents/Home). */
+const privateJdk = () => (fs.existsSync(path.join(jdkDist(), "Contents", "Home")) ? path.join(jdkDist(), "Contents", "Home") : jdkDist());
+const javaFits = (v: number) => v >= JAVA_MIN && v <= JAVA_MAX;
 
 // ---------------------------------------------------------------- what's installed
 
@@ -23,10 +34,10 @@ function javaVersion(java: string): Promise<number | null> {
   }));
 }
 
-/** JDK candidates: JAVA_HOME, Android Studio's bundled one, then PATH. */
+/** JDK candidates: V-Run's own JDK 21, JAVA_HOME, Android Studio's bundled one, then PATH. */
 function javaCandidates() {
   const exe = win ? "java.exe" : "java";
-  const homes = [process.env.JAVA_HOME,
+  const homes = [privateJdk(), process.env.JAVA_HOME,
     ...(win ? ["C:\\Program Files\\Android\\Android Studio\\jbr", path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Android Studio", "jbr")]
       : ["/Applications/Android Studio.app/Contents/jbr/Contents/Home", "/opt/android-studio/jbr", path.join(os.homedir(), "android-studio", "jbr")])].filter(Boolean) as string[];
   const fromHomes = homes.map((h) => ({ home: h, java: path.join(h, "bin", exe) })).filter((c) => fs.existsSync(c.java));
@@ -41,23 +52,56 @@ export function findSdk(): string | null {
   return dirs.find((d) => fs.existsSync(path.join(d, "platforms")) || fs.existsSync(path.join(d, "platform-tools"))) ?? null;
 }
 
-export interface AndroidCheck { java: { home: string; version: number } | null; sdk: string | null; adb: string | null; problems: string[] }
+/** Android Studio itself (its launcher), if installed. */
+export function findStudio(): string | null {
+  const c = win ? [path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Android", "Android Studio", "bin", "studio64.exe"), path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Android Studio", "bin", "studio64.exe")]
+    : process.platform === "darwin" ? ["/Applications/Android Studio.app", path.join(os.homedir(), "Applications", "Android Studio.app")]
+      : ["/opt/android-studio/bin/studio.sh", path.join(os.homedir(), "android-studio", "bin", "studio.sh"), "/snap/bin/android-studio"];
+  return c.find((p) => fs.existsSync(p)) ?? null;
+}
+
+/** A package manager V-Run can install Android Studio with: winget (Windows) or Homebrew (Mac). */
+async function findInstaller(): Promise<"winget" | "brew" | null> {
+  const has = (cmd: string, args: string[]) => new Promise<boolean>((resolve) => execFile(cmd, args, { windowsHide: true, timeout: 20_000 }, (e) => resolve(!e)));
+  if (win) return (await has("winget", ["--version"])) ? "winget" : null;
+  if (process.platform === "darwin") return (await has("brew", ["--version"])) ? "brew" : null;
+  return null; // Linux: the snap / tarball needs sudo or a desktop install — the download page explains it
+}
+
+export interface AndroidCheck {
+  java: { home: string; version: number } | null;
+  sdk: string | null;
+  adb: string | null;
+  /** Android Studio's launcher, if installed */
+  studio: string | null;
+  /** how V-Run can install Android Studio here, if it can */
+  installer: "winget" | "brew" | null;
+  /** what "Set up" would do: install Android Studio, get Java 21, open Android Studio to finish its setup */
+  missing: { studio: boolean; java: boolean; sdk: boolean };
+  problems: string[];
+}
 
 export async function checkAndroid(): Promise<AndroidCheck> {
+  // the first Java the build tools can run on; else the first one found (to say why it can't be used)
   let java: AndroidCheck["java"] = null;
   for (const c of javaCandidates()) {
     const v = await javaVersion(c.java);
-    if (v && v >= 21) { java = { home: c.home, version: v }; break; }
+    if (v && javaFits(v)) { java = { home: c.home, version: v }; break; }
     if (v && !java) java = { home: c.home, version: v };
   }
   const sdk = findSdk();
+  const studio = findStudio();
+  const installer = studio || sdk ? null : await findInstaller();
   const adbPath = sdk ? path.join(sdk, "platform-tools", win ? "adb.exe" : "adb") : null;
+  const missing = { studio: !studio && !sdk, java: !java || !javaFits(java.version), sdk: !sdk };
   const problems: string[] = [];
-  const studio = "Install Android Studio (developer.android.com/studio) — it brings the Android SDK and Java — open it once so it finishes setting up, then try again.";
-  if (!java) problems.push(`Java (JDK 21) isn't installed. ${studio}`);
-  else if (java.version < 21) problems.push(`Java ${java.version} is too old — Android builds need JDK 21. ${studio}`);
-  if (!sdk) problems.push(`The Android SDK isn't installed. ${studio}`);
-  return { java: java && java.version >= 21 ? java : java, sdk, adb: adbPath && fs.existsSync(adbPath) ? adbPath : null, problems };
+  const setup = "Press Set up and V-Run gets what's missing (it asks first)";
+  if (missing.studio) problems.push(`Android Studio isn't installed (it brings the Android SDK). ${installer ? `${setup}, or download it from ${STUDIO_URL}.` : `Download it from ${STUDIO_URL}, install it and open it once, then check again.`}`);
+  else if (missing.sdk) problems.push("The Android SDK isn't set up yet: open Android Studio once and let its setup finish (it downloads the SDK), then check again.");
+  if (!java) problems.push(`Java (JDK 21) isn't installed. ${setup}.`);
+  else if (java.version < JAVA_MIN) problems.push(`Java ${java.version} is too old — Android builds need Java 21. ${setup}.`);
+  else if (java.version > JAVA_MAX) problems.push(`Java ${java.version} (the one Android Studio comes with) is too new for Android's build tools, which run on Java 21–24. ${setup} — it adds Java 21 just for V-Run.`);
+  return { java: java && javaFits(java.version) ? java : java, sdk, adb: adbPath && fs.existsSync(adbPath) ? adbPath : null, studio, installer, missing, problems };
 }
 
 // ---------------------------------------------------------------- the native Wi-Fi plugin
@@ -223,6 +267,88 @@ const run: Exec = (cmd, cwd, log, env) => new Promise((resolve) => {
   p.on("close", (code) => { if (current === p) current = null; resolve({ code, out: out.slice(-200_000) }); });
 });
 export function cancelAndroid() { if (current) killTree(current); }
+
+// ---------------------------------------------------------------- getting the tools (the user agreed first)
+
+/** The official Eclipse Temurin JDK 21 for this computer, from Adoptium. */
+export function jdkUrl(platform = process.platform, arch = process.arch) {
+  const o = platform === "win32" ? "windows" : platform === "darwin" ? "mac" : "linux";
+  return `https://api.adoptium.net/v3/binary/latest/21/ga/${o}/${arch === "arm64" ? "aarch64" : "x64"}/jdk/hotspot/normal/eclipse`;
+}
+
+/** Download a JDK 21 into V-Run's tools folder (no admin rights needed; nothing else on the computer changes). */
+export async function getJdk21(log: Log, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const dir = toolsDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const archive = path.join(dir, win ? "jdk-21-download.zip" : "jdk-21-download.tar.gz");
+  log("Downloading Java 21 (Eclipse Temurin, about 190 MB)…");
+  const res = await fetchImpl(jdkUrl());
+  if (!res.ok || !res.body) throw new Error(`Couldn't download Java 21 (HTTP ${res.status}).`);
+  const total = Number(res.headers.get("content-length")) || 0;
+  const out = fs.createWriteStream(archive);
+  let got = 0, shown = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    got += value.length;
+    if (!out.write(value)) await new Promise<void>((r) => out.once("drain", () => r()));
+    const pct = total ? Math.floor((got / total) * 10) * 10 : 0;
+    if (pct > shown) { shown = pct; log(`  ${pct}%`); }
+  }
+  await new Promise<void>((resolve, reject) => out.end((e?: Error | null) => (e ? reject(e) : resolve())));
+  // unpack beside it, then keep the one JDK folder as tools/jdk-21
+  const unpack = path.join(dir, "jdk-21-unpack");
+  fs.rmSync(unpack, { recursive: true, force: true });
+  fs.mkdirSync(unpack);
+  // Windows' own tar (bsdtar) reads zip files; a Git-for-Windows tar earlier on PATH can't
+  const tar = win ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+  const err = await new Promise<string | null>((resolve) => execFile(tar, ["-xf", archive, "-C", unpack], { windowsHide: true, maxBuffer: 16 << 20 }, (e, _o, se) => resolve(e ? `${e.message} ${se}`.trim() : null)));
+  if (err) throw new Error(`Couldn't unpack Java 21: ${err.slice(0, 300)}`);
+  const top = fs.readdirSync(unpack).map((n) => path.join(unpack, n)).find((p) => fs.statSync(p).isDirectory());
+  const home = top && (fs.existsSync(path.join(top, "Contents", "Home")) ? path.join(top, "Contents", "Home") : top);
+  if (!home || !fs.existsSync(path.join(home, "bin", win ? "java.exe" : "java"))) throw new Error("The Java 21 download didn't contain a JDK.");
+  fs.rmSync(jdkDist(), { recursive: true, force: true });
+  fs.renameSync(top!, jdkDist());
+  fs.rmSync(unpack, { recursive: true, force: true });
+  fs.rmSync(archive, { force: true });
+  log(`Java 21 is ready (${privateJdk()}).`);
+  return privateJdk();
+}
+
+/** Open Android Studio (its first run downloads the Android SDK). */
+export function openStudio(studio: string) {
+  const p = process.platform === "darwin" ? spawn("open", ["-a", studio], { detached: true, stdio: "ignore" })
+    : spawn(studio, [], { detached: true, stdio: "ignore", windowsHide: false });
+  p.on("error", () => {});
+  p.unref();
+}
+
+/**
+ * Get what building an Android app needs — the user has agreed: Android Studio (with winget / Homebrew;
+ * without one, the error gives the download link), Java 21 when there's no usable Java, and Android
+ * Studio opened when its SDK isn't set up yet. Returns the check afterwards.
+ */
+export async function setupAndroid(log: Log, deps: { exec?: Exec; fetchImpl?: typeof fetch; check?: () => Promise<AndroidCheck>; open?: (studio: string) => void } = {}): Promise<AndroidCheck> {
+  const check = deps.check ?? checkAndroid;
+  let c = await check();
+  if (c.missing.studio) {
+    if (!c.installer) throw new Error(`V-Run can't install Android Studio on this computer by itself. Download it from ${STUDIO_URL}, install it, open it once, then check again.`);
+    const cmd = c.installer === "winget"
+      ? "winget install --id Google.AndroidStudio --exact --silent --accept-package-agreements --accept-source-agreements"
+      : "brew install --cask android-studio";
+    log(`Installing Android Studio (about 1.5 GB) with ${c.installer}…`);
+    const r = await (deps.exec ?? run)(cmd, os.homedir(), log);
+    if (r.code !== 0) throw new Error(`Installing Android Studio didn't work (see the log). Download it from ${STUDIO_URL} instead, install it, then check again.`);
+    c = await check();
+  }
+  if (c.missing.java) { await getJdk21(log, deps.fetchImpl); c = await check(); }
+  if (c.missing.sdk && c.studio) {
+    (deps.open ?? openStudio)(c.studio);
+    log("Android Studio is open: click through its setup (it downloads the Android SDK), then check again.");
+  }
+  return c;
+}
 
 /** com.<you>.<app> — a valid Android application id from a name. */
 export const appIdFor = (name: string) => `com.vrun.${siteName(name).replace(/-/g, "").replace(/^(\d)/, "app$1").slice(0, 30) || "app"}`;

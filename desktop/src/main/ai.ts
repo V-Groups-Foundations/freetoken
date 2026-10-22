@@ -20,6 +20,7 @@ import * as runner from "./runner";
 import * as history from "./history";
 import * as checks from "./checks";
 import * as publisher from "./publish";
+import * as android from "./android";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, exists, getRoot, listDir, readText, resolveInRoot, writeText } from "./workspace";
 
@@ -101,6 +102,8 @@ export const schemas = {
   app_input: z.object({ text: z.string() }),
   stop_app: z.object({}).passthrough(),
   list_checkpoints: z.object({}).passthrough(),
+  setup_android: z.object({}).passthrough(),
+  build_android_app: z.object({ name: z.string().optional(), app_id: z.string().optional() }).passthrough(),
   publish_site: z.object({ provider: z.enum(["cloudflare", "netlify"]).optional(), name: z.string().optional() }).passthrough(),
   save_check: checks.checkSchema,
   run_checks: z.object({ name: z.string().optional() }).passthrough(),
@@ -152,6 +155,13 @@ export const TOOLS: Tool[] = [
     input_schema: { type: "object", properties: {
       provider: { type: "string", enum: ["cloudflare", "netlify"], description: "Where to publish (default: cloudflare, or where it was published before)" },
       name: { type: "string", description: "Site name, becomes the address (default: the project's name)" },
+    } } },
+  { name: "setup_android", description: "Check that this computer can build Android (phone) apps — Android Studio, the Android SDK, Java 21 — and get what's missing. Call it FIRST whenever the user wants a phone / Android app or an APK. If something is missing it asks the user before installing anything (Android Studio with winget or Homebrew, about 1.5 GB; Java 21 into V-Run's own folder, about 190 MB); if they decline, or it can't install here, tell them the download link it returns.",
+    input_schema: { type: "object", properties: {} } },
+  { name: "build_android_app", description: "Build the project's website into an Android app (APK) with Capacitor, including native Wi-Fi scanning (window.VRunWifi). Call setup_android first. Needs the user's approval. Returns where the APK is; the user can install it from Publish → Android app (USB) or copy it to their phone.",
+    input_schema: { type: "object", properties: {
+      name: { type: "string", description: "The app's name (default: the project's name)" },
+      app_id: { type: "string", description: "Android app id like com.yourname.app (default: made from the name)" },
     } } },
   { name: "list_checkpoints", description: "List the project's snapshots (V-Run takes one before each task, at every finished plan step and after the task), newest first, with ids. Use it when the user wants to undo recent work or when your last changes made things worse.",
     input_schema: { type: "object", properties: {} } },
@@ -637,7 +647,7 @@ function planNotes(s: Session, name: string, input: any): string {
 
 const WRITES = new Set(["edit_file", "write_file", "delete_file"]);
 /** Tools that change things: a Team-mode supervisor may only use them once it has started agents. */
-const ACTS = new Set([...WRITES, "run_terminal_command", "run_app", "export_video"]);
+const ACTS = new Set([...WRITES, "run_terminal_command", "run_app", "export_video", "setup_android", "build_android_app"]);
 /** Messages from the team (another agent changed a file this one read, the supervisor wrote…) ride along. */
 function withNotices(s: Session, r: ToolOutput): ToolOutput {
   const n = team.takeNotices(s.id);
@@ -870,6 +880,37 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       const failed = results.filter((r) => !r.ok).length;
       s.pageStale = true; // the checks clicked around: reload before the next inspect
       return { content: `${checks.describeResults(results)}${broken.length ? `\n(unreadable check files: ${broken.join(", ")})` : ""}`, summary: failed ? `${failed} of ${results.length} checks fail` : `All ${results.length} checks pass` };
+    }
+    case "setup_android": {
+      const c = await android.checkAndroid();
+      const status = () => `Android Studio: ${c.missing.studio ? "missing" : "installed"}; Android SDK: ${c.sdk ? "ready" : "not set up"}; Java: ${c.missing.java ? (c.java ? `${c.java.version} (can't build with it)` : "missing") : c.java!.version}.`;
+      if (!c.problems.length) return { content: `Ready to build Android apps. ${status()}`, summary: "Android tools ready" };
+      const steps: string[] = [];
+      if (c.missing.studio && c.installer) steps.push(`install Android Studio with ${c.installer} (about 1.5 GB from Google)`);
+      if (c.missing.java) steps.push("download Java 21 (Eclipse Temurin, about 190 MB) into V-Run's own folder");
+      if (c.missing.sdk && (c.studio || (c.missing.studio && c.installer))) steps.push("open Android Studio so its setup downloads the Android SDK");
+      const manual = `Download Android Studio from ${android.STUDIO_URL}, install it and open it once (it downloads the Android SDK), then try again.`;
+      if (!steps.length) return { content: `${status()}\n${c.problems.join("\n")}\nV-Run can't install this here by itself — tell the user: ${manual}`, summary: "Android tools missing — download link given" };
+      if (!(await askApproval(s, emit, id, `Set up Android: ${steps.join(", then ")}`, "Building phone apps needs Android's tools, which aren't all on this computer yet. V-Run will:")))
+        return { content: `The user declined installing the Android tools. Tell them they can install them later: ${manual} (or Publish → Android app → Set up).`, summary: "Android setup declined" };
+      const lines: string[] = [];
+      try {
+        const after = await android.setupAndroid((l) => { lines.push(l); emit({ type: "progress", id, text: l.slice(0, 160) }); });
+        const left = after.problems.length ? `\nStill needed: ${after.problems.join(" ")}${after.missing.sdk ? " Ask the user to finish Android Studio's setup window, then call setup_android again." : ""}` : "\nReady to build Android apps.";
+        return { content: `Set up done.${left}`, summary: after.problems.length ? "Android setup: one step left" : "Android tools ready", detail: outputDetail(lines.slice(-60).join("\n")) };
+      } catch (e) {
+        return { content: `${(e as Error).message}\nTell the user: ${manual}`, summary: "Android setup failed — download link given", detail: outputDetail(lines.slice(-60).join("\n")) };
+      }
+    }
+    case "build_android_app": {
+      const c = await android.checkAndroid();
+      if (c.problems.length) return { content: `Can't build yet: ${c.problems.join(" ")} Call setup_android first.`, summary: "Android tools missing" };
+      const name = String(input?.name ?? publisher.planPublish().name ?? "My App").trim() || "My App";
+      if (!(await askApproval(s, emit, id, `Build the Android app "${name}"`, "Wrap the website in an Android app and build the APK (installs Capacitor into the project and adds an android/ folder):")))
+        return { content: "The user declined the Android build.", summary: "Android build declined" };
+      const lines: string[] = [];
+      const r = await android.buildAndroid({ name, appId: input?.app_id, build: true }, (l) => { lines.push(l); emit({ type: "progress", id, text: l.slice(0, 160) }); });
+      return { content: `APK built: ${r.apk}\nApp id: ${r.appId}. The user can install it from Publish → Android app (USB debugging on), or copy the APK to the phone. Rebuild after changing the site.`, summary: "Android app built", detail: outputDetail(lines.slice(-60).join("\n")) };
     }
     case "publish_site": {
       const plan = publisher.planPublish();

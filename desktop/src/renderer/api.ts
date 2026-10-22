@@ -1,3 +1,4 @@
+type AndroidCheck = { java: { home: string; version: number } | null; sdk: string | null; adb: string | null; studio: string | null; installer: "winget" | "brew" | null; missing: { studio: boolean; java: boolean; sdk: boolean }; problems: string[] };
 // Typed access to the preload bridge.
 export interface Entry { name: string; path: string; dir: boolean }
 export interface GrepHit { path: string; line: number; text: string }
@@ -87,7 +88,11 @@ interface Api {
   benchStart(models: string[]): Promise<BenchResult[]>;
   benchCancel(): Promise<void>;
   onBenchEvent(fn: (e: { type: "start"; model: string; task: string } | { type: "result"; result: BenchResult } | { type: "done"; results: BenchResult[] }) => void): Unsub;
-  androidCheck(): Promise<{ java: { home: string; version: number } | null; sdk: string | null; adb: string | null; problems: string[] }>;
+  androidCheck(): Promise<AndroidCheck>;
+  /** get what's missing (the user agreed): Android Studio, Java 21, Android Studio opened to finish setup */
+  androidSetup(): Promise<AndroidCheck>;
+  androidOpenStudio(): Promise<boolean>;
+  androidDownloadPage(): Promise<void>;
   androidBuild(o: { name: string; appId?: string; build: boolean }): Promise<{ prepared: boolean; apk: string | null; appId: string; webDir: string }>;
   androidInstall(apk: string): Promise<boolean>;
   androidReveal(path: string): Promise<void>;

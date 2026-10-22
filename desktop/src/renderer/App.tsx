@@ -752,6 +752,15 @@ function PublishPanel({ onClose }: { onClose: () => void }) {
 }
 
 /** Android app: the website wrapped as a native app (with Wi-Fi scanning), built into an APK. */
+/** What "Set up" would do here, in words (empty: nothing V-Run can do by itself). */
+function setupSteps(c: Awaited<ReturnType<typeof api.androidCheck>>) {
+  const steps: string[] = [];
+  if (c.missing.studio && c.installer) steps.push(`install Android Studio with ${c.installer} (about 1.5 GB from Google${c.installer === "winget" ? "; Windows may ask for permission" : ""})`);
+  if (c.missing.java) steps.push("download Java 21 (Eclipse Temurin, about 190 MB) into V-Run's own folder — nothing else on your computer changes");
+  if (c.missing.sdk && (c.studio || (c.missing.studio && c.installer))) steps.push("open Android Studio so its setup can download the Android SDK");
+  return steps;
+}
+
 function AndroidPanel() {
   type Check = Awaited<ReturnType<typeof api.androidCheck>>;
   const [check, setCheck] = useState<Check | null>(null);
@@ -759,9 +768,11 @@ function AndroidPanel() {
   const [appId, setAppId] = useState("");
   const [log, setLog] = useState<string[]>([]);
   const [run, setRun] = useState<{ status: "idle" | "running" | "done" | "error"; apk?: string | null; message?: string; installed?: boolean }>({ status: "idle" });
+  const [confirmSetup, setConfirmSetup] = useState(false);
+  const [setupBusy, setSetupBusy] = useState(false);
   const logBox = useRef<HTMLPreElement>(null);
   useEffect(() => {
-    api.androidCheck().then(setCheck).catch(() => setCheck({ java: null, sdk: null, adb: null, problems: ["Couldn't check the Android tools."] }));
+    api.androidCheck().then(setCheck).catch(() => setCheck({ java: null, sdk: null, adb: null, studio: null, installer: null, missing: { studio: false, java: false, sdk: false }, problems: ["Couldn't check the Android tools."] }));
     api.publishPlan().then((p) => setName((n) => n || p.name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))).catch(() => {});
     return api.onAndroidLog((l) => setLog((x) => [...x.slice(-400), l]));
   }, []);
@@ -776,18 +787,47 @@ function AndroidPanel() {
     try { await api.androidInstall(run.apk!); setRun((r) => ({ ...r, installed: true })); }
     catch (e) { setRun((r) => ({ ...r, status: "error", message: clean(e) })); }
   }
+  async function recheck() { setCheck(null); setCheck(await api.androidCheck().catch(() => null)); }
+  async function setup() {
+    setConfirmSetup(false); setLog([]); setSetupBusy(true);
+    try { setCheck(await api.androidSetup()); }
+    catch (e) { setRun({ status: "error", message: clean(e) }); }
+    finally { setSetupBusy(false); }
+  }
   const ready = !!check && check.problems.length === 0;
   return (
     <>
       <p className="muted small">Wraps your website in a native Android app — with <b>Wi-Fi scanning</b>, which a web page can't do (your page calls <code>await VRunWifi.scan()</code>). Builds an APK you can install on your phone.</p>
       {!check ? <p className="muted small">Checking the Android tools…</p> : (
         <ul className="android-checks">
-          <li className={check.java && check.java.version >= 21 ? "ok" : "bad"}>{check.java && check.java.version >= 21 ? `Java ${check.java.version}` : "Java 21 (JDK)"}</li>
-          <li className={check.sdk ? "ok" : "bad"}>{check.sdk ? "Android SDK" : "Android SDK"}</li>
+          <li className={check.missing.studio || check.missing.sdk ? "bad" : "ok"}>{check.missing.studio ? "Android Studio" : check.missing.sdk ? "Android SDK (open Android Studio once)" : "Android Studio + SDK"}</li>
+          <li className={check.missing.java ? "bad" : "ok"}>{check.missing.java ? "Java 21 (JDK)" : `Java ${check.java!.version}`}</li>
           <li className={check.adb ? "ok" : "muted"}>{check.adb ? "adb (install over USB)" : "adb — optional, for installing over USB"}</li>
         </ul>
       )}
-      {check && check.problems.length > 0 && <p className="small share-warn">{check.problems[0]} You can still <b>Prepare</b> the Android project now and build it later (or open it in Android Studio).</p>}
+      {check && check.problems.length > 0 && (
+        <div className="android-setup" role="region" aria-label="Android setup">
+          <p className="small share-warn">{check.problems.join(" ")}</p>
+          {confirmSetup ? (
+            // nothing is downloaded or installed until the user says yes, knowing what and how big
+            <div role="group" aria-label="Confirm Android setup">
+              <p className="small">V-Run will {setupSteps(check).join(", then ")}. Continue?</p>
+              <div className="share-actions">
+                <button className="btn small primary" onClick={setup}>Yes, set it up</button>
+                <button className="btn small" onClick={() => setConfirmSetup(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="share-actions">
+              {setupSteps(check).length > 0 && <button className="btn small primary" disabled={setupBusy} onClick={() => setConfirmSetup(true)}>{setupBusy ? "Setting up…" : "Set up…"}</button>}
+              {check.missing.sdk && check.studio && <button className="btn small" onClick={() => api.androidOpenStudio()}>Open Android Studio</button>}
+              {check.missing.studio && <button className="btn small" onClick={() => api.androidDownloadPage()}>Download page</button>}
+              <button className="btn small" disabled={setupBusy} onClick={recheck}>Check again</button>
+            </div>
+          )}
+          <p className="muted small">You can still <b>Prepare</b> the Android project now and build it later (or open it in Android Studio).</p>
+        </div>
+      )}
       <div className="publish-form">
         <label>App name<input value={name} onChange={(e) => setName(e.target.value)} disabled={run.status === "running"} aria-label="App name" /></label>
         <label>App id<input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="com.vrun.yourapp" disabled={run.status === "running"} aria-label="App id" /></label>

@@ -8,9 +8,20 @@ description: "Turn a website into a native Android app (APK) with V-Run's Publis
 A web page on a phone can't scan Wi-Fi networks or read signal strengths. V-Run wraps the project's site
 in a native Android app (Capacitor 8) that can, and builds an APK.
 
+## First: the tools (always, before building)
+- Call **`setup_android`** first whenever the user wants a phone app. It checks Android Studio, the
+  Android SDK and Java 21. If something is missing it **asks the user** before installing anything
+  (Android Studio with winget / Homebrew, ~1.5 GB; Java 21 into V-Run's own folder, ~190 MB) and opens
+  Android Studio so its setup downloads the SDK. If they decline or it can't install here, give them the
+  link it returns (https://developer.android.com/studio) — never install tools some other way.
+- Android Studio's own Java (25) is too new for the build tools (Gradle 8 runs on Java 21–24): that's
+  why V-Run adds its own Java 21. Don't change Gradle or Java versions in `android/` to work around it.
+- After the user finishes Android Studio's first-run setup, call `setup_android` again, then
+  **`build_android_app`** (asks for approval) to get the APK.
+
 ## How the user gets the app
-- **Preview → Publish → Android app**: *Build APK* (needs Java 21 + the Android SDK — Android Studio
-  installs both) or *Prepare only* (makes the `android/` project without those tools).
+- **Preview → Publish → Android app**: *Set up…* (the same tools check and install, with a confirmation),
+  *Build APK*, or *Prepare only* (makes the `android/` project without those tools).
 - *Install on phone (USB)* installs it with adb (USB debugging on). Or copy the APK to the phone.
 - Rebuild after every change to the site: the app carries its own copy of the site.
 - Don't edit `android/` by hand unless needed; V-Run adds the Wi-Fi plugin (`WifiScanPlugin.java`, its

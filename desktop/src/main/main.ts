@@ -823,6 +823,10 @@ function registerIpc() {
     clearRoot();
   });
   handle("android:check", () => android.checkAndroid());
+  // the user agreed in the panel: install Android Studio / get Java 21 / open Android Studio to finish setup
+  handle("android:setup", () => android.setupAndroid((line) => send("android-log", line)));
+  handle("android:open-studio", () => { const s = android.findStudio(); if (s) android.openStudio(s); return !!s; });
+  handle("android:download-page", () => shell.openExternal(android.STUDIO_URL));
   handle("android:build", (o: { name: string; appId?: string; build: boolean }) => android.buildAndroid(o, (line) => send("android-log", line)));
   handle("android:install", (apk: string) => android.installApk(String(apk), (line) => send("android-log", line)));
   handle("android:reveal", (p: string) => shell.showItemInFolder(String(p)));
