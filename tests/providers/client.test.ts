@@ -22,6 +22,11 @@ describe('normalizeError', () => {
     expect(normalizeError(410, h(), '').kind).toBe('not_found'); // EOL model
 
     expect(normalizeError(400, h(), '{"error":"bad"}')).toMatchObject({ kind: 'bad_request', message: 'bad' });
+    // a 400 about the model itself (LLM7: "Model 'X' is currently unavailable"): skip just that model
+    expect(normalizeError(400, h(), `{"error":{"message":"Model 'DeepSeek-V4-Flash-0731' is currently unavailable."}}`).kind).toBe('not_found');
+    expect(normalizeError(400, h(), '{"error":{"message":"The model `foo` does not exist"}}').kind).toBe('not_found');
+    expect(normalizeError(400, h(), '{"error":{"message":"Unknown model: foo"}}').kind).toBe('not_found');
+    expect(normalizeError(400, h(), '{"error":{"message":"temperature must be at most 2"}}').kind).toBe('bad_request');
   });
   it('survives non-JSON (HTML) bodies', () => {
     const e = normalizeError(502, h(), '<html>Bad Gateway</html>');

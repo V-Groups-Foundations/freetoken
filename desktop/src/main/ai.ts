@@ -3,6 +3,7 @@
 // the main process (the API key never reaches the renderer) and run the same kind of tools here.
 import Anthropic from "@anthropic-ai/sdk";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -278,6 +279,8 @@ export interface Session {
   /** recent actions, for spotting loops; warnings this turn; stuck → the next step goes to a reasoning model */
   actions?: { sig: string; out: string; changed: boolean }[];
   loopWarnings?: number;
+  /** every version each file had this turn (hashes): writing one back is undoing, not progress */
+  fileStates?: Map<string, Set<string>>;
   stuck?: boolean;
   mustStop?: boolean;
   /** saved checks were rerun this task (regression gate), and files changed since the last run */
@@ -614,6 +617,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.summaryNudged = false;
   s.actions = [];
   s.loopWarnings = 0;
+  s.fileStates = new Map();
   s.stuck = false;
   s.mustStop = false;
   s.checkGates = 0;
@@ -658,9 +662,10 @@ function withNotices(s: Session, r: ToolOutput): ToolOutput {
 
 /** Runs a tool; in Team mode, file changes go through the coordinator (ownership, stale reads, notices). */
 export async function execTool(s: Session, name: ToolName, input: any, emit: (e: AgentEvent) => void, id: string): Promise<ToolOutput> {
-  // Team mode means a team: the supervisor delegates first, and only integrates afterwards
-  if (s.mode === "team" && ACTS.has(name) && !team.hasAgents(s.id)) {
-    return { content: "Not yet: this is Team mode, so the work is done by agents. Split the job into 2-4 parts with separate files and start an agent for each with spawn_agent (a self-contained task each: goal, files it owns, the shared contract, how to verify). You can read files to plan first. Once agents have started, you can edit too (for shared contracts and integration).", summary: "Team mode: start agents first" };
+  // Team mode means a team: the supervisor delegates the changes first, and only integrates afterwards.
+  // Running things (the app, an install, a check) isn't the work itself, so it never waits for a team.
+  if (s.mode === "team" && WRITES.has(name) && !team.hasAgents(s.id)) {
+    return { content: "Not yet: this is Team mode, so the changes are made by agents. Split the job into 2-4 parts with separate files and start an agent for each with spawn_agent (a self-contained task each: goal, files it owns, the shared contract, how to verify). You can read files, run commands and run the app to plan first. Once agents have started, you can edit too (for shared contracts and integration). If the request needs no file changes (run the app, answer a question), just do it: no agents needed.", summary: "Team mode: start agents first" };
   }
   let rel: string | null = null;
   if ((WRITES.has(name) || name === "read_file") && typeof input?.path === "string") { try { rel = resolveInRoot(input.path).rel; } catch { /* the tool reports it */ } }
@@ -674,6 +679,9 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   if (s.mustStop && ACTS.has(name)) {
     return { content: "Stopped: you were going in circles. Don't run or change anything else now — reply to the user: what's blocking you, what you tried, and what you need from them.", summary: "Stopped — going in circles" };
   }
+  const versions = rel && WRITES.has(name) ? ((s.fileStates ??= new Map()).get(rel) ?? new Set<string>()) : null;
+  const before = rel && versions ? await fileVersion(rel) : "";
+  if (rel && versions) { versions.add(before); s.fileStates!.set(rel, versions); }
   let r: ToolOutput;
   try { r = await runTool(s, name, input, emit, id); }
   catch (e) {
@@ -682,7 +690,15 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
     if (loop) throw new Error(`${(e as Error).message}${loop}`);
     throw e;
   }
-  const loop = noteAction(s, name, input, r.summary, !!rel && WRITES.has(name), emit);
+  // toggling a setting back and forth changes files without getting anywhere
+  let undone = false;
+  if (rel && versions) {
+    const now = await fileVersion(rel);
+    undone = now !== before && versions.has(now); // (an edit that changed nothing isn't an undo)
+    versions.add(now);
+    if (undone) r = { ...r, content: `${r.content}\n\nNote: this puts ${rel} back the way it already was earlier in this task — it undoes your own change. Toggling things back and forth isn't progress: find the cause first.` };
+  }
+  const loop = noteAction(s, name, input, r.summary, !!rel && WRITES.has(name) && !undone, emit);
   if (loop) r = { ...r, content: r.content + loop };
   if (rel && WRITES.has(name)) { s.pageStale = true; s.filesSinceGate = true; }
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
@@ -691,6 +707,26 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   if (rel && WRITES.has(name)) team.noteWrite(s.id, rel, r.summary);
   const plan = planNotes(s, name, input);
   return withNotices(s, plan ? { ...r, content: r.content + plan } : r);
+}
+
+/** PowerShell equivalents of the bash tools models reach for out of habit. */
+const PS_FOR: Record<string, string> = {
+  pkill: "Stop-Process -Id <PID> (find it with Get-NetTCPConnection -LocalPort <port> or Get-Process)",
+  kill: "Stop-Process -Id <PID>", head: "Select-Object -First N", tail: "Select-Object -Last N (or Get-Content file -Tail N)",
+  grep: "Select-String", cat: "Get-Content", ls: "Get-ChildItem", rm: "Remove-Item", touch: "New-Item -ItemType File",
+  which: "Get-Command", export: "$env:NAME = \"value\"", true: "(nothing: just leave it out)", sed: "(-replace on Get-Content)",
+  wc: "Measure-Object -Line", lsof: "Get-NetTCPConnection -LocalPort <port>", printf: "Write-Output",
+};
+/** When a command failed because it's bash, not PowerShell: what to use instead. */
+export function shellHint(out: string) {
+  const missing = [...new Set([...out.matchAll(/The term '([\w.-]+)' is not recognized/g)].map((m) => m[1]))];
+  const tips = missing.filter((t) => PS_FOR[t]).map((t) => `${t} → ${PS_FOR[t]}`);
+  return tips.length ? `\n\nThis terminal is PowerShell, not bash. Use: ${tips.join("; ")}.` : "";
+}
+
+/** A file's current content as a short hash ("none" when it doesn't exist). */
+async function fileVersion(rel: string) {
+  try { return createHash("sha1").update(await readText(rel)).digest("hex"); } catch { return "none"; }
 }
 
 // ---------------------------------------------------------------- going in circles
@@ -727,7 +763,9 @@ export function noteAction(s: Session, name: string, input: any, outcome: string
   const last = key(recent[recent.length - 1]);
   const sameMove = recent.filter((a) => key(a) === last).length;
   const distinct = new Set(recent.map(key)).size;
-  const looping = sameMove >= 3 || (recent.length >= LOOP_WINDOW && distinct <= 3);
+  // inspecting the page over and over with a different script each time, changing nothing: still circling
+  const inspections = actions.slice(-8).filter((a) => a.sig.startsWith("inspect:")).length;
+  const looping = sameMove >= 3 || (recent.length >= LOOP_WINDOW && distinct <= 3) || (name === "inspect_preview" && inspections >= 6);
   if (!looping) return "";
   actions.length = 0; // a fresh window: the next warning needs fresh repetition
   s.loopWarnings = (s.loopWarnings ?? 0) + 1;
@@ -986,7 +1024,7 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       const ok = await askApproval(s, emit, id, input.command, input.explanation);
       if (!ok) return { content: "The user declined to run this command. Ask them or try another approach.", summary: `Declined: ${input.command}` };
       const out = await runCommand(input.command, s.abort?.signal);
-      return { content: out, summary: `Ran: ${input.command} (${out.split("\n")[0]})` };
+      return { content: out + shellHint(out), summary: `Ran: ${input.command} (${out.split("\n")[0]})` };
     }
     case "remember": {
       const scope = input.scope ?? "project";
@@ -1098,7 +1136,7 @@ function recentUserText(messages: { role: string; content: unknown }[]) {
 /** `task` (the request, plus recent ones) switches on task-specific guidance such as the web design brief. */
 const SUPERVISOR_BRIEF = `
 # Team mode — you are the supervisor
-You lead a team of worker agents that work IN PARALLEL on the same project. The user chose Team mode because they want the job done by a team: you MUST split it between at least 2 agents with spawn_agent before any code is written. Until you have started agents, you can only read and plan — edits and commands are refused.
+You lead a team of worker agents that work IN PARALLEL on the same project. The user chose Team mode because they want the job done by a team: you MUST split it between at least 2 agents with spawn_agent before any code is written. Until you have started agents, file edits are refused — but you can read, run commands and run the app. A request that changes no files (run the app, check it, answer a question) needs no agents: just do it.
 1. Understand first: read the key files and make a todo list (todo_write).
 2. Split the work into 2–${team.MAX_RUNNING} workstreams that touch DIFFERENT files (e.g. api / frontend / tests / docs). If the project is one big file (say a single index.html), don't give it to two agents: let one agent own that file (markup and wiring) and have the others create NEW files it loads — e.g. js/map.js, js/tracking.js, css/app.css — with the names and functions spelled out in every task. If parts depend on each other, settle the contract first — spell out the shared types/interfaces/API shape identically in every task (you may also write shared contract files yourself once the agents have started).
 3. spawn_agent for each workstream: a short role name, the files it owns, and a self-contained task (workers can't see this conversation): goal, context, the contract, constraints, how to verify, what to report.

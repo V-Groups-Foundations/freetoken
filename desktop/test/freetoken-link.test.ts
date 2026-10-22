@@ -356,8 +356,26 @@ async function main() {
     const waits = [1, 2, 3, 4, 5, 6].map(() => ai.noteAction(s2, "wait_for_agents", {}, "Agents still working", false));
     const probes = ["a", "b", "c", "d"].map((x) => ai.noteAction(s2, "inspect_preview", { script: "app.state" }, `state ${x}`, false));
     if (waits.some(Boolean) || probes.some(Boolean) || s2.stuck) return JSON.stringify({ waits, probes });
+    // but six page inspections with nothing changed in between is circling, even with a different script each time
+    const s3 = ai.getSession("loops-3");
+    ai.startTurnState(s3, { sessionId: "loops-3", mode: "agent", text: "fix the page" });
+    const many = [1, 2, 3, 4, 5, 6].map((x) => ai.noteAction(s3, "inspect_preview", { script: `probe${"x".repeat(x)}` }, "Inspected — 2 console errors", false));
+    if (many.slice(0, 5).some(Boolean) || !many[5].includes("going in circles")) return JSON.stringify({ many });
+    // and changing a file back to how it was earlier in the task undoes, it doesn't progress
+    const s4 = ai.getSession("loops-4");
+    ai.startTurnState(s4, { sessionId: "loops-4", mode: "agent", text: "fix the page" });
+    const w = (c: string, id: string) => ai.execTool(s4, "write_file", { path: "toggle.js", contents: c }, () => {}, id);
+    const t1 = await w("alpha: true", "t1"), t2 = await w("alpha: false", "t2"), t3 = await w("alpha: true", "t3");
+    if (/undoes/.test(t1.content + t2.content) || !/undoes your own change/.test(t3.content) || (s4.actions ?? []).length === 0) return JSON.stringify({ t1: t1.content, t2: t2.content, t3: t3.content, actions: s4.actions });
     return (first && progress && pingPong && third.includes("STOP") && s.mustStop === true && refused.summary.includes("going in circles") && readOk && sameMove)
       || JSON.stringify({ first, progress, pingPong, third, refused: refused.summary, readOk, sameMove });
+  });
+
+  await check("a bash command that failed in PowerShell gets the PowerShell way to do it", () => {
+    const esc = String.fromCharCode(27);
+    const out = `exit code 1\n${esc}[31;1mpkill: ${esc}[31;1mThe term 'pkill' is not recognized as a name of a cmdlet\n${esc}[31;1mtrue: ${esc}[31;1mThe term 'true' is not recognized as a name`;
+    const hint = ai.shellHint(out);
+    return (/PowerShell, not bash/.test(hint) && hint.includes("pkill → Stop-Process") && hint.includes("true →") && ai.shellHint("exit code 0\nok") === "") || hint;
   });
 
   await check("saved checks: stored in the project, rerun against the page; a broken feature sends the agent back", async () => {

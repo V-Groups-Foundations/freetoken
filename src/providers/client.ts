@@ -39,6 +39,8 @@ export function parseRetryAfter(value: string | null): number | undefined {
   return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 }
 
+const MODEL_GONE = /\bmodel\b.{0,80}\b(unavailable|not available|does not exist|not found|decommissioned|no longer (available|supported))|\b(unknown|no such|invalid) model\b/i;
+
 export function normalizeError(status: number, headers: Headers, bodyText: string): ProviderError {
   // a firewall / proxy / Wi-Fi login page (HTML, not the API's JSON) — the network's doing, not the key's
   if (status < 500 && looksLikeWebPage(headers.get('content-type'), bodyText)) {
@@ -60,6 +62,8 @@ export function normalizeError(status: number, headers: Headers, bodyText: strin
   // 404 = model retired/not on this key's plan; 410 = model reached end-of-life. Either way
   // skip just this model (and never let a dead test model block an otherwise-valid key).
   if (status === 404 || status === 410) return { kind: 'not_found', status, message };
+  // some providers say the same with a 400 (LLM7: "Model 'X' is currently unavailable.")
+  if (status === 400 && MODEL_GONE.test(message)) return { kind: 'not_found', status, message };
   if (status >= 500) return { kind: 'server', status, message };
   return { kind: 'bad_request', status, message };
 }

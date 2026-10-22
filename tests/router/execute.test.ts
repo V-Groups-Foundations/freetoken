@@ -117,6 +117,15 @@ describe('routeChat', () => {
     expect(out.ok).toBe(true);
   });
 
+  it("falls back when a model answers 400 'currently unavailable' (LLM7), instead of failing the request", async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    const out = await run((url) => (url.includes(GROQ)
+      ? new Response(JSON.stringify({ error: { message: "Model 'DeepSeek-V4-Flash-0731' is currently unavailable." } }), { status: 400 })
+      : okJson('from gemini'))).p;
+    expect(out.ok).toBe(true);
+  });
+
   it('routes for the task kind the client names (a planner asks for reasoning)', async () => {
     await connect('groq', 'gsk_mine');
     const f = fakeFetch(() => okJson());

@@ -78,7 +78,7 @@ function startServer(): Promise<{ url: string; close: () => void }> {
       && snaps.at(-1).agents.find((x: any) => x.name === "b").files.includes("x.ts") || JSON.stringify({ blockedB, notice, staleB, freshB, blockedSup, afterAssign });
   });
 
-  await check("Team mode: the supervisor can't write or run anything until it has started agents", async () => {
+  await check("Team mode: the supervisor can't change files until it has started agents, but can run things", async () => {
     team.resetTeams();
     team.configureTeam({ run: () => new Promise(() => {}), stop: () => {}, getSession: ai.getSession, forward: () => {}, onTeam: () => {} });
     const s = ai.getSession("sup-guard");
@@ -87,13 +87,17 @@ function startServer(): Promise<{ url: string; close: () => void }> {
     const before = await write();
     const blockedOnDisk = !fs.existsSync(path.join(proj, "src", "solo.ts"));
     const read = await ai.execTool(s, "list_dir", { path: "." }, () => {}, "r1");
+    // running things (the app, an install, a check) is not "doing the work": no team needed for that
+    const approve = (e: any) => { if (e.type === "approval") s.approvals.get(e.id)?.(true); }; // the user says yes
+    const cmd = await ai.execTool(s, "run_terminal_command", { command: "node -v" }, approve, "c1");
     await ai.execTool(s, "spawn_agent", { name: "ui", task: "Build the UI part of the app.", files: ["src/ui.ts"] }, () => {}, "sp1");
     const after = await write();
     const agentMode = ai.getSession("solo-agent");
     agentMode.mode = "agent";
     const solo = await ai.execTool(agentMode, "write_file", { path: "src/solo2.ts", contents: "y" }, () => {}, "w2");
     return before.summary === "Team mode: start agents first" && blockedOnDisk && !read.summary.includes("start agents")
-      && after.summary.startsWith("Created") && solo.summary.startsWith("Created") || JSON.stringify({ before: before.summary, after: after.summary, solo: solo.summary });
+      && !cmd.summary.includes("start agents") && /v\d+\./.test(cmd.content)
+      && after.summary.startsWith("Created") && solo.summary.startsWith("Created") || JSON.stringify({ before: before.summary, cmd: cmd.summary, after: after.summary, solo: solo.summary });
   });
 
   // ---- a whole team through the real agent loop
