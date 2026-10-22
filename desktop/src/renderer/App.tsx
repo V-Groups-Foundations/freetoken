@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AppStatus, type Entry, type FtViewState, type GrepHit, type IndexStatus, type PreviewState, type Settings, type ShareInfo } from "./api";
+import { api, type AppStatus, type Entry, type FtViewState, type GrepHit, type IndexStatus, type PreviewState, type Settings, type ShareInfo, type PublishPlan } from "./api";
 import { ChatPanel } from "./Chat";
 import { Banner } from "./Logo";
 import ftMark from "./brand/freetoken.png";
@@ -610,6 +610,8 @@ function Preview({ visible, covered, askAI }: { visible: boolean; covered: boole
   const [device, setDevice] = useState<Device>("desktop");
   const [frame, setFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const panelOpen = shareOpen || publishOpen;
   const lastScale = useRef(0);
   useEffect(() => api.onPreviewState((s) => { setState(s); setAddr(s.url); setErr(null); }), []);
   useEffect(() => {
@@ -617,7 +619,7 @@ function Preview({ visible, covered, askAI }: { visible: boolean; covered: boole
     if (!el) return;
     const report = () => {
       const r = el.getBoundingClientRect();
-      if (!visible || covered || shareOpen || r.width <= 0) { api.previewBounds(null).catch(() => {}); return; }
+      if (!visible || covered || panelOpen || r.width <= 0) { api.previewBounds(null).catch(() => {}); return; }
       if (device === "desktop") { setFrame(null); api.previewBounds({ x: r.left, y: r.top, width: r.width, height: r.height }).catch(() => {}); return; }
       // a phone/tablet: its viewport scaled to fit the pane, centred, inside a device frame
       const d = DEVICES[device];
@@ -633,7 +635,7 @@ function Preview({ visible, covered, askAI }: { visible: boolean; covered: boole
     ro.observe(el);
     window.addEventListener("resize", report);
     return () => { ro.disconnect(); window.removeEventListener("resize", report); api.previewBounds(null).catch(() => {}); };
-  }, [visible, covered, device, shareOpen]);
+  }, [visible, covered, device, panelOpen]);
   useEffect(() => { lastScale.current = 0; if (device === "desktop") api.previewDevice({ kind: "desktop" }).catch(() => {}); }, [device]);
   const go = () => addr.trim() && api.previewOpen(addr.trim()).catch((e) => setErr((e as Error).message));
   return (
@@ -648,7 +650,8 @@ function Preview({ visible, covered, askAI }: { visible: boolean; covered: boole
               title={d === "desktop" ? "Desktop" : `${DEVICES[d].label} (${DEVICES[d].w}×${DEVICES[d].h}, mobile browser)`}>{d === "desktop" ? "🖥" : d === "phone" ? "📱" : "▭"}</button>
           ))}
         </span>
-        <button className={`btn small ghost${shareOpen ? " on" : ""}`} onClick={() => setShareOpen((v) => !v)} disabled={!state.url} aria-expanded={shareOpen} title="Open this page on your phone (QR code, HTTPS link)">Open on phone</button>
+        <button className={`btn small ghost${shareOpen ? " on" : ""}`} onClick={() => { setShareOpen((v) => !v); setPublishOpen(false); }} disabled={!state.url} aria-expanded={shareOpen} title="Open this page on your phone (QR code, HTTPS link)">Open on phone</button>
+        <button className={`btn small ghost${publishOpen ? " on" : ""}`} onClick={() => { setPublishOpen((v) => !v); setShareOpen(false); }} aria-expanded={publishOpen} title="Put your website online, or build an Android app">Publish</button>
         <button className="btn small ghost" onClick={() => api.previewExternal()} disabled={!state.url} title="Open in your browser">↗</button>
         <button className="btn small ai-btn" disabled={!state.url} title="Have the agent look at this page, find errors or visual problems, and fix them"
           onClick={() => askAI(`Look at the page open in the preview (${state.url}) with inspect_preview. Check the console and what is on screen, find any errors or visual problems, and fix them in the code.`)}>✦ Ask AI</button>
@@ -656,11 +659,93 @@ function Preview({ visible, covered, askAI }: { visible: boolean; covered: boole
       {err && <div className="error" role="alert">{err}</div>}
       <div ref={host} className="preview-host">
         {!state.url && <div className="muted preview-empty">Nothing to preview yet. Ask the agent to run your app, or type a URL above.</div>}
-        {frame && !shareOpen && <div className={`device-frame ${device}`} style={{ left: frame.left - 8, top: frame.top - 8, width: frame.width + 16, height: frame.height + 16 }} aria-hidden />}
+        {frame && !panelOpen && <div className={`device-frame ${device}`} style={{ left: frame.left - 8, top: frame.top - 8, width: frame.width + 16, height: frame.height + 16 }} aria-hidden />}
         {shareOpen && <SharePanel onClose={() => setShareOpen(false)} />}
+        {publishOpen && <PublishPanel onClose={() => setPublishOpen(false)} />}
       </div>
     </section>
   );
+}
+
+/** Publish: the website online on a free host (and, in its own tab, the Android app). */
+function PublishPanel({ onClose }: { onClose: () => void }) {
+  const [tab, setTab] = useState<"web" | "android">("web");
+  const [plan, setPlan] = useState<PublishPlan | null>(null);
+  const [provider, setProvider] = useState<"cloudflare" | "netlify">("cloudflare");
+  const [name, setName] = useState("");
+  const [build, setBuild] = useState("");
+  const [dir, setDir] = useState("");
+  const [log, setLog] = useState<string[]>([]);
+  const [run, setRun] = useState<{ status: "idle" | "running" | "done" | "error"; url?: string; qr?: string; message?: string }>({ status: "idle" });
+  const logBox = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    api.publishPlan().then((p) => {
+      setPlan(p); setName(p.name); setBuild(p.build ?? ""); setDir(p.dir ?? ".");
+      if (p.last?.provider === "netlify" || p.last?.provider === "cloudflare") setProvider(p.last.provider);
+    }).catch(() => {});
+    return api.onPublishLog((l) => setLog((x) => [...x.slice(-400), l]));
+  }, []);
+  useEffect(() => { logBox.current?.scrollTo({ top: logBox.current.scrollHeight }); }, [log]);
+  async function go() {
+    setLog([]); setRun({ status: "running" });
+    try { const r = await api.publishStart({ provider, name, build: build.trim() || null, dir: dir.trim() || "." }); setRun({ status: "done", url: r.url, qr: r.qr }); }
+    catch (e) { setRun({ status: "error", message: (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }); }
+  }
+  return (
+    <div className="share-panel publish-panel" role="dialog" aria-label="Publish">
+      <div className="mem-head">
+        <b>Publish</b>
+        <span className="device-switch publish-tabs" role="tablist">
+          <button role="tab" aria-selected={tab === "web"} className={tab === "web" ? "on" : ""} onClick={() => setTab("web")}>Website</button>
+          <button role="tab" aria-selected={tab === "android"} className={tab === "android" ? "on" : ""} onClick={() => setTab("android")}>Android app</button>
+        </span>
+        <span className="spacer" />
+        <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+      </div>
+      {tab === "android" ? <AndroidPanel /> : !plan ? <p className="muted small">Looking at the project…</p> : plan.problem ? <p className="small share-warn">{plan.problem}</p> : (
+        <>
+          <p className="muted small">Puts your website online for free, with a public <b>https://</b> address you can share. The first time, you sign in to the host in your browser.</p>
+          <div className="publish-form">
+            <label>Host
+              <select value={provider} onChange={(e) => setProvider(e.target.value as "cloudflare" | "netlify")} disabled={run.status === "running"}>
+                <option value="cloudflare">Cloudflare Pages (recommended)</option>
+                <option value="netlify">Netlify</option>
+              </select>
+            </label>
+            <label>Site name<input value={name} onChange={(e) => setName(e.target.value)} disabled={run.status === "running"} aria-label="Site name" /></label>
+            <label>Build command<input value={build} onChange={(e) => setBuild(e.target.value)} placeholder="none" disabled={run.status === "running"} aria-label="Build command" /></label>
+            <label>Folder<input value={dir} onChange={(e) => setDir(e.target.value)} disabled={run.status === "running"} aria-label="Folder to publish" /></label>
+          </div>
+          <p className="muted small">Address: <code>{provider === "cloudflare" ? `https://${name || "…"}.pages.dev` : `https://${name || "…"}.netlify.app`}</code>{plan.last && <> · last published {new Date(plan.last.at).toLocaleString()} at <a href={plan.last.url} onClick={(e) => { e.preventDefault(); window.open(plan.last!.url); }}>{plan.last.url}</a></>}</p>
+          {plan.server && <p className="small share-warn">This project also has a server part ({plan.server}). A website host doesn't run it — the pages go online, but anything that needs the server (live sharing, saving) won't work until the server is hosted too.</p>}
+          <div className="share-actions">
+            {run.status === "running"
+              ? <button className="btn small" onClick={() => api.publishCancel()}>Cancel</button>
+              : <button className="btn small primary" onClick={go} disabled={!name.trim()}>{plan.last ? "Publish again" : "Publish"}</button>}
+          </div>
+          {run.status === "done" && run.url && (
+            <div className="publish-done" role="status">
+              <div className="qr" role="img" aria-label={`QR code for ${run.url}`} dangerouslySetInnerHTML={{ __html: run.qr ?? "" }} />
+              <div>
+                <b>It's online</b>
+                <code className="share-url">{run.url}</code>
+                <div className="share-actions">
+                  <button className="btn small" onClick={() => navigator.clipboard.writeText(run.url!)}>Copy link</button>
+                  <button className="btn small" onClick={() => window.open(run.url)}>Open</button>
+                </div>
+              </div>
+            </div>
+          )}
+          {run.status === "error" && <p className="small share-warn" role="alert">{run.message}</p>}
+          {log.length > 0 && <pre ref={logBox} className="publish-log" aria-label="Publish log">{log.join("\n")}</pre>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function AndroidPanel() {
+  return <p className="muted small">Android builds arrive with the next update.</p>;
 }
 
 /** Open the previewed app on a phone: a QR code for the local network, or a public HTTPS link. */

@@ -198,6 +198,23 @@ async function main() {
       await page.getByRole("button", { name: "Stop", exact: true }).click(); // …with no app running
       await page.getByRole("button", { name: "Run", exact: true }).waitFor({ timeout: 10000 });
     });
+    await step("Publish: the panel shows what will go online (host, site name, folder) and the Android tab", async () => {
+      fs.writeFileSync(path.join(proj, "index.html"), "<h1>site</h1>");
+      await page.getByRole("tab", { name: "Preview" }).click();
+      await page.getByRole("button", { name: "Publish" }).click();
+      const panel = page.getByRole("dialog", { name: "Publish" });
+      await panel.getByLabel("Site name").waitFor({ timeout: 10000 });
+      const name = await panel.getByLabel("Site name").inputValue();
+      if (!/^cursor-remake-ftproj-/.test(name)) throw new Error(`site name: ${name}`);
+      if ((await panel.getByLabel("Folder to publish").inputValue()) !== ".") throw new Error("folder isn't the project folder");
+      await panel.getByText(`https://${name}.pages.dev`).waitFor();
+      await page.screenshot({ path: path.join(shots, "publish.png") });
+      await panel.getByRole("tab", { name: "Android app" }).click();
+      await panel.getByRole("tab", { name: "Website" }).click();
+      await panel.getByRole("button", { name: "Close" }).click();
+      fs.rmSync(path.join(proj, "index.html"));
+      await page.getByRole("tab", { name: "App" }).click();
+    });
     await step("a crashing app offers \"Fix with AI\", which sends the error to the chat", async () => {
       await page.getByLabel("App command").fill(`node -e "throw new Error('kaboom')"`);
       await page.getByRole("button", { name: "Run", exact: true }).click();

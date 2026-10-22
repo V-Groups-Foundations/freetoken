@@ -620,3 +620,11 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .share-url { font-size: 12px; word-break: break-all; user-select: all; }
 .share-warn { color: #e0b45c; }
 .share-actions { display: flex; gap: 6px; }
+/* Publish */
+.publish-tabs { margin-left: 10px; }
+.publish-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 12px; }
+.publish-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--fg2); }
+.publish-form input, .publish-form select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; }
+.publish-done { display: flex; gap: 14px; align-items: center; }
+.publish-done > div:last-child { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.publish-log { max-height: 220px; overflow: auto; margin: 0; padding: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 11px; white-space: pre-wrap; }

@@ -10,6 +10,7 @@ import * as memory from "./memory";
 import * as runner from "./runner";
 import * as history from "./history";
 import * as share from "./share";
+import * as publisher from "./publish";
 import * as skills from "./skills";
 import * as team from "./team";
 import * as chats from "./chats";
@@ -765,6 +766,13 @@ function registerIpc() {
     return { ...s, qr: s.status === "on" ? await share.qrSvg(s.url) : null };
   });
   handle("share:tunnel-stop", () => share.stopTunnel());
+  // Publish: the website online on a free host
+  handle("publish:plan", () => publisher.planPublish());
+  handle("publish:start", async (o: { provider: publisher.Provider; name: string; build: string | null; dir: string }) => {
+    const rec = await publisher.publish(o, (line) => send("publish-log", line));
+    return { ...rec, qr: await share.qrSvg(rec.url) };
+  });
+  handle("publish:cancel", () => publisher.cancelPublish());
   handle("preview:external", () => { const u = preview?.webContents.getURL(); if (u && /^https?:/i.test(u)) shell.openExternal(u); });
   handle("preview:bounds", (r: { x: number; y: number; width: number; height: number } | null) => {
     previewShown = !!r && r.width > 0 && r.height > 0;

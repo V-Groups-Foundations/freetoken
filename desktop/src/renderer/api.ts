@@ -76,6 +76,10 @@ interface Api {
   historyList(): Promise<HistorySnapshot[]>;
   previewDevice(d: { kind: "desktop" | "phone" | "tablet"; scale?: number }): Promise<void>;
   shareInfo(): Promise<ShareInfo>;
+  publishPlan(): Promise<PublishPlan>;
+  publishStart(o: { provider: "cloudflare" | "netlify"; name: string; build: string | null; dir: string }): Promise<{ provider: string; name: string; url: string; at: number; qr: string }>;
+  publishCancel(): Promise<void>;
+  onPublishLog(fn: (line: string) => void): Unsub;
   shareTunnelStart(): Promise<{ status: "on" | "error" | "off" | "starting"; url?: string; via?: string; message?: string; qr: string | null }>;
   shareTunnelStop(): Promise<void>;
   historyRestore(id: string): Promise<{ restored: number; removed: string[]; files: string[] }>;
@@ -126,6 +130,7 @@ type MemoryFile = { file: string | null; exists: boolean; lines: number; entries
 export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean; model?: string };
 export type TeamSnapshot = { supervisor: string; agents: TeamAgent[] };
 export type ChatAttachment = { name: string; mime?: string; data?: string; path?: string };
+export type PublishPlan = { name: string; build: string | null; dir: string | null; server: string | null; last: { provider: string; name: string; url: string; at: number } | null; problem: string | null };
 export type ShareInfo = { url: string | null; lan: string | null; reachable: boolean; qr: string | null; advice: string | null; addresses: string[] };
 export type HistorySnapshot = { id: string; time: number; label: string; files: number };
 export type SkillInfo = { name: string; description: string; scope: "user" | "project" | "builtin"; dir: string | null; source?: string };

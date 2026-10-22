@@ -47,6 +47,7 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   app_input: { label: "App input", arg: "text", verb: "Typing into the app" },
   stop_app: { label: "Stop app", verb: "Stopping the app" },
   save_check: { label: "Save check", arg: "name", verb: "Saving a check" },
+  publish_site: { label: "Publish", arg: "name", verb: "Publishing the website" },
   run_checks: { label: "Run checks", verb: "Re-running the saved checks" },
   list_checkpoints: { label: "Checkpoints", verb: "Looking at the history" },
   restore_checkpoint: { label: "Restore", arg: "id", verb: "Restoring a snapshot" },

@@ -13,7 +13,7 @@
     "start": "electron .",
     "test": "tsx test/core.test.ts",
     "e2e": "tsx test/e2e.ts",
-    "test:all": "tsx test/core.test.ts && tsx test/freetoken.test.ts && tsx test/freetoken-link.test.ts && tsx test/team.test.ts && tsx test/attachments.test.ts && tsx test/history.test.ts && tsx test/share.test.ts",
+    "test:all": "tsx test/core.test.ts && tsx test/freetoken.test.ts && tsx test/freetoken-link.test.ts && tsx test/team.test.ts && tsx test/attachments.test.ts && tsx test/history.test.ts && tsx test/share.test.ts && tsx test/publish.test.ts",
     "e2e:ft": "tsx test/e2e-freetoken.ts"
   },
   "dependencies": {

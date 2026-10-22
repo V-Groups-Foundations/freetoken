@@ -19,6 +19,7 @@ import { diffDetail, outputDetail, type ToolDetail } from "./diff";
 import * as runner from "./runner";
 import * as history from "./history";
 import * as checks from "./checks";
+import * as publisher from "./publish";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, exists, getRoot, listDir, readText, resolveInRoot, writeText } from "./workspace";
 
@@ -100,6 +101,7 @@ export const schemas = {
   app_input: z.object({ text: z.string() }),
   stop_app: z.object({}).passthrough(),
   list_checkpoints: z.object({}).passthrough(),
+  publish_site: z.object({ provider: z.enum(["cloudflare", "netlify"]).optional(), name: z.string().optional() }).passthrough(),
   save_check: checks.checkSchema,
   run_checks: z.object({ name: z.string().optional() }).passthrough(),
   restore_checkpoint: z.object({ id: z.string(), reason: z.string().optional() }),
@@ -146,6 +148,11 @@ export const TOOLS: Tool[] = [
     }, required: ["name", "steps"] } },
   { name: "run_checks", description: "Run the project's saved click-through checks (all, or one by name) against the running app and report which pass. V-Run also runs them by itself before you finish a task that changed files.",
     input_schema: { type: "object", properties: { name: { type: "string", description: "Only this check (default: all)" } } } },
+  { name: "publish_site", description: "Put the project's website online on a free host (Cloudflare Pages by default, or Netlify) and get its public https address: builds it if the project has a build step, uploads the folder with index.html, signs the user in through the browser the first time. Only static websites (HTML/CSS/JS); a server part needs another host. Needs the user's approval. Use it when the user wants the app online or a link to share.",
+    input_schema: { type: "object", properties: {
+      provider: { type: "string", enum: ["cloudflare", "netlify"], description: "Where to publish (default: cloudflare, or where it was published before)" },
+      name: { type: "string", description: "Site name, becomes the address (default: the project's name)" },
+    } } },
   { name: "list_checkpoints", description: "List the project's snapshots (V-Run takes one before each task, at every finished plan step and after the task), newest first, with ids. Use it when the user wants to undo recent work or when your last changes made things worse.",
     input_schema: { type: "object", properties: {} } },
   { name: "restore_checkpoint", description: "Put the project back to a snapshot from list_checkpoints: changed and deleted files come back, files created since are removed. The current state is snapshotted first, so it can be undone. Needs the user's approval.",
@@ -851,6 +858,17 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       const failed = results.filter((r) => !r.ok).length;
       s.pageStale = true; // the checks clicked around: reload before the next inspect
       return { content: `${checks.describeResults(results)}${broken.length ? `\n(unreadable check files: ${broken.join(", ")})` : ""}`, summary: failed ? `${failed} of ${results.length} checks fail` : `All ${results.length} checks pass` };
+    }
+    case "publish_site": {
+      const plan = publisher.planPublish();
+      if (plan.problem) return { content: plan.problem, summary: "Nothing to publish" };
+      const provider = (input?.provider ?? plan.last?.provider ?? "cloudflare") as publisher.Provider;
+      const name = publisher.siteName(input?.name ?? plan.name);
+      if (!(await askApproval(s, emit, id, `Publish to ${provider === "cloudflare" ? "Cloudflare Pages" : "Netlify"} as "${name}"`, `Put ${plan.dir === "." ? "the project's web files" : plan.dir} online${plan.build ? ` (after ${plan.build})` : ""} — anyone with the address can open it:`)))
+        return { content: "The user declined to publish.", summary: "Publish declined" };
+      const lines: string[] = [];
+      const rec = await publisher.publish({ provider, name, build: plan.build, dir: plan.dir ?? "." }, (l) => { lines.push(l); emit({ type: "progress", id, text: l.slice(0, 160) }); });
+      return { content: `Published at ${rec.url}${plan.server ? `\n\nNote: the project also has a server part (${plan.server}); a static host doesn't run it — say so to the user if the site needs it.` : ""}`, summary: `Published: ${rec.url}`, detail: outputDetail(lines.slice(-60).join("\n")) };
     }
     case "list_checkpoints": {
       const snaps = await history.list(getRoot(), 30);
