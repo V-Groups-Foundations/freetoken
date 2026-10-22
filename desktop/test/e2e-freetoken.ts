@@ -333,7 +333,7 @@ async function main() {
     await step("skills: the panel lists every skill by source; a matching request loads one by itself and the chat says so", async () => {
       await page.getByRole("button", { name: "Skills" }).click();
       const panel = page.getByRole("dialog", { name: "Skills" });
-      await panel.getByRole("region", { name: "Built in" }).locator(".skill-group-title", { hasText: "24" }).waitFor({ timeout: 5000 });
+      await panel.getByRole("region", { name: "Built in" }).locator(".skill-group-title", { hasText: "25" }).waitFor({ timeout: 5000 });
       if (await panel.getByRole("button", { name: "Use", exact: true }).count()) throw new Error("Use buttons still shown");
       await panel.getByPlaceholder(/Search \d+ skills/).fill("anim");
       await panel.locator(".skill-row", { hasText: "web-animation" }).waitFor();

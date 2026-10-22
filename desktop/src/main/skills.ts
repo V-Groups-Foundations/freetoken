@@ -122,6 +122,7 @@ const ALIASES: Record<string, string[]> = {
   animate: ["animation"], motion: ["animation"], scroll: ["scroll", "animation"],
   redesign: ["redesign", "restyle"], restyle: ["redesign", "restyle"], look: ["design", "ui"], ugly: ["design", "polish"], modern: ["design"], nicer: ["polish", "design"],
   commit: ["git"], branch: ["git"], pr: ["git"], endpoint: ["api"], rest: ["api"],
+  apk: ["apk", "android"], android: ["android", "apk"], wifi: ["wi-fi", "wifi"], "wi-fi": ["wi-fi", "wifi"], indoor: ["indoor", "floor"], capacitor: ["android", "capacitor"],
 };
 const words = (t: string, expand = false) => {
   const out = new Set<string>();

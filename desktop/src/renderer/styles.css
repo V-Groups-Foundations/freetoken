@@ -628,3 +628,8 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .publish-done { display: flex; gap: 14px; align-items: center; }
 .publish-done > div:last-child { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .publish-log { max-height: 220px; overflow: auto; margin: 0; padding: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 11px; white-space: pre-wrap; }
+.android-checks { list-style: none; margin: 0; padding: 0; display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; }
+.android-checks li::before { content: "✓ "; color: #4ec98a; }
+.android-checks li.bad::before { content: "✗ "; color: #e0b45c; }
+.android-checks li.muted { color: var(--fg2); }
+.android-checks li.muted::before { content: "– "; color: var(--fg2); }

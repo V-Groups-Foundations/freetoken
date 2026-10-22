@@ -77,6 +77,12 @@ interface Api {
   previewDevice(d: { kind: "desktop" | "phone" | "tablet"; scale?: number }): Promise<void>;
   shareInfo(): Promise<ShareInfo>;
   publishPlan(): Promise<PublishPlan>;
+  androidCheck(): Promise<{ java: { home: string; version: number } | null; sdk: string | null; adb: string | null; problems: string[] }>;
+  androidBuild(o: { name: string; appId?: string; build: boolean }): Promise<{ prepared: boolean; apk: string | null; appId: string; webDir: string }>;
+  androidInstall(apk: string): Promise<boolean>;
+  androidReveal(path: string): Promise<void>;
+  androidCancel(): Promise<void>;
+  onAndroidLog(fn: (line: string) => void): Unsub;
   publishStart(o: { provider: "cloudflare" | "netlify"; name: string; build: string | null; dir: string }): Promise<{ provider: string; name: string; url: string; at: number; qr: string }>;
   publishCancel(): Promise<void>;
   onPublishLog(fn: (line: string) => void): Unsub;

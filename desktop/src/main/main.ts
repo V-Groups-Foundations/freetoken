@@ -11,6 +11,7 @@ import * as runner from "./runner";
 import * as history from "./history";
 import * as share from "./share";
 import * as publisher from "./publish";
+import * as android from "./android";
 import * as skills from "./skills";
 import * as team from "./team";
 import * as chats from "./chats";
@@ -773,6 +774,12 @@ function registerIpc() {
     return { ...rec, qr: await share.qrSvg(rec.url) };
   });
   handle("publish:cancel", () => publisher.cancelPublish());
+  // Android app: check the tools, prepare / build the APK, install it on a USB-connected phone
+  handle("android:check", () => android.checkAndroid());
+  handle("android:build", (o: { name: string; appId?: string; build: boolean }) => android.buildAndroid(o, (line) => send("android-log", line)));
+  handle("android:install", (apk: string) => android.installApk(String(apk), (line) => send("android-log", line)));
+  handle("android:reveal", (p: string) => shell.showItemInFolder(String(p)));
+  handle("android:cancel", () => android.cancelAndroid());
   handle("preview:external", () => { const u = preview?.webContents.getURL(); if (u && /^https?:/i.test(u)) shell.openExternal(u); });
   handle("preview:bounds", (r: { x: number; y: number; width: number; height: number } | null) => {
     previewShown = !!r && r.width > 0 && r.height > 0;

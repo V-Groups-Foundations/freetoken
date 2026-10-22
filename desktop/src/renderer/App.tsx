@@ -744,8 +744,72 @@ function PublishPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Android app: the website wrapped as a native app (with Wi-Fi scanning), built into an APK. */
 function AndroidPanel() {
-  return <p className="muted small">Android builds arrive with the next update.</p>;
+  type Check = Awaited<ReturnType<typeof api.androidCheck>>;
+  const [check, setCheck] = useState<Check | null>(null);
+  const [name, setName] = useState("");
+  const [appId, setAppId] = useState("");
+  const [log, setLog] = useState<string[]>([]);
+  const [run, setRun] = useState<{ status: "idle" | "running" | "done" | "error"; apk?: string | null; message?: string; installed?: boolean }>({ status: "idle" });
+  const logBox = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    api.androidCheck().then(setCheck).catch(() => setCheck({ java: null, sdk: null, adb: null, problems: ["Couldn't check the Android tools."] }));
+    api.publishPlan().then((p) => setName((n) => n || p.name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))).catch(() => {});
+    return api.onAndroidLog((l) => setLog((x) => [...x.slice(-400), l]));
+  }, []);
+  useEffect(() => { logBox.current?.scrollTo({ top: logBox.current.scrollHeight }); }, [log]);
+  const clean = (e: unknown) => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+  async function go(build: boolean) {
+    setLog([]); setRun({ status: "running" });
+    try { const r = await api.androidBuild({ name, appId: appId.trim() || undefined, build }); setRun({ status: "done", apk: r.apk }); }
+    catch (e) { setRun({ status: "error", message: clean(e) }); }
+  }
+  async function install() {
+    try { await api.androidInstall(run.apk!); setRun((r) => ({ ...r, installed: true })); }
+    catch (e) { setRun((r) => ({ ...r, status: "error", message: clean(e) })); }
+  }
+  const ready = !!check && check.problems.length === 0;
+  return (
+    <>
+      <p className="muted small">Wraps your website in a native Android app — with <b>Wi-Fi scanning</b>, which a web page can't do (your page calls <code>await VRunWifi.scan()</code>). Builds an APK you can install on your phone.</p>
+      {!check ? <p className="muted small">Checking the Android tools…</p> : (
+        <ul className="android-checks">
+          <li className={check.java && check.java.version >= 21 ? "ok" : "bad"}>{check.java && check.java.version >= 21 ? `Java ${check.java.version}` : "Java 21 (JDK)"}</li>
+          <li className={check.sdk ? "ok" : "bad"}>{check.sdk ? "Android SDK" : "Android SDK"}</li>
+          <li className={check.adb ? "ok" : "muted"}>{check.adb ? "adb (install over USB)" : "adb — optional, for installing over USB"}</li>
+        </ul>
+      )}
+      {check && check.problems.length > 0 && <p className="small share-warn">{check.problems[0]} You can still <b>Prepare</b> the Android project now and build it later (or open it in Android Studio).</p>}
+      <div className="publish-form">
+        <label>App name<input value={name} onChange={(e) => setName(e.target.value)} disabled={run.status === "running"} aria-label="App name" /></label>
+        <label>App id<input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="com.vrun.yourapp" disabled={run.status === "running"} aria-label="App id" /></label>
+      </div>
+      <div className="share-actions">
+        {run.status === "running" ? <button className="btn small" onClick={() => api.androidCancel()}>Cancel</button> : (
+          <>
+            <button className="btn small primary" disabled={!ready || !name.trim()} onClick={() => go(true)} title={ready ? "Prepare and build the APK" : "Needs Java 21 and the Android SDK"}>Build APK</button>
+            <button className="btn small" disabled={!name.trim()} onClick={() => go(false)} title="Make the android/ project (no build tools needed)">Prepare only</button>
+          </>
+        )}
+      </div>
+      {run.status === "done" && (
+        <div className="publish-done" role="status">
+          <div>
+            {run.apk ? <><b>APK ready</b><code className="share-url">{run.apk}</code></> : <b>Android project ready (android/) — build it here once Java and the SDK are installed, or open it in Android Studio.</b>}
+            {run.apk && (
+              <div className="share-actions">
+                <button className="btn small" onClick={() => api.androidReveal(run.apk!)}>Show in folder</button>
+                <button className="btn small" disabled={!check?.adb} onClick={install}>{run.installed ? "Installed ✓" : "Install on phone (USB)"}</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {run.status === "error" && <p className="small share-warn" role="alert" style={{ whiteSpace: "pre-wrap" }}>{run.message}</p>}
+      {log.length > 0 && <pre ref={logBox} className="publish-log" aria-label="Android log">{log.join("\n")}</pre>}
+    </>
+  );
 }
 
 /** Open the previewed app on a phone: a QR code for the local network, or a public HTTPS link. */
