@@ -438,7 +438,10 @@ function SettingsDialog({ onClose, onOpenFreeToken }: { onClose: () => void; onO
                 {[...new Set(["auto-smart", "auto-fast", ftModel, ...(ftModels ?? [])])].map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
             </label>
-            <div className="row"><button className="btn" onClick={test}>Test connection</button></div>
+            <div className="row">
+              <button className="btn" onClick={test}>Test connection</button>
+              <button className="btn" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent("vrun-open-benchmark")); }} title="Run the same coding tasks on several of your models and compare them">Benchmark my models…</button>
+            </div>
           </>
         )}
         <p className="muted">Keys and tokens are stored encrypted with your OS keychain (Electron safeStorage).</p>

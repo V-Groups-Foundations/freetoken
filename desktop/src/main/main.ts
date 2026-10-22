@@ -12,6 +12,7 @@ import * as history from "./history";
 import * as share from "./share";
 import * as publisher from "./publish";
 import * as android from "./android";
+import * as bench from "./bench";
 import * as skills from "./skills";
 import * as team from "./team";
 import * as chats from "./chats";
@@ -484,6 +485,12 @@ function registerIpc() {
   handle("index:search", (q: string) => index.search(q, 20));
 
   handle("ai:chat", (req: ai.ChatRequest) => {
+    // a benchmark has the workspace (it runs in throwaway projects): no chat tasks meanwhile
+    if (bench.benchmarkRunning()) {
+      send("agent-event", { sessionId: req.sessionId, event: { type: "error", message: "A model benchmark is running — wait for it to finish, or cancel it in /benchmark." } });
+      send("agent-event", { sessionId: req.sessionId, event: { type: "done", stopReason: "error" } });
+      return true;
+    }
     let emit = (event: ai.AgentEvent) => send("agent-event", { sessionId: req.sessionId, event });
     // a chat continuing a FreeToken project writes each finished turn back to the project
     const projectId = chatLinks.get(req.sessionId);
@@ -780,6 +787,22 @@ function registerIpc() {
   handle("android:install", (apk: string) => android.installApk(String(apk), (line) => send("android-log", line)));
   handle("android:reveal", (p: string) => shell.showItemInFolder(String(p)));
   handle("android:cancel", () => android.cancelAndroid());
+  // Benchmark: the same coding tasks for each chosen model (through FreeToken), graded by running them
+  const benchFile = () => path.join(app.getPath("userData"), "benchmark.json");
+  handle("bench:models", async () => {
+    if (!useFreeToken()) throw new Error("Benchmarking compares FreeToken's models: switch the provider to FreeToken in Settings.");
+    return (await ft.listModels()).filter((m) => !/^auto-/.test(m));
+  });
+  handle("bench:last", () => { try { return JSON.parse(fs.readFileSync(benchFile(), "utf8")); } catch { return null; } });
+  handle("bench:scores", () => ft.routerScores("agent").catch(() => null));
+  handle("bench:start", async (models: string[]) => {
+    if (bench.benchmarkRunning()) throw new Error("A benchmark is already running.");
+    if (runningTasks.size) throw new Error("Wait for the agent to finish first — the benchmark needs the workspace to itself.");
+    const results = await bench.runBenchmark(models.map(String).slice(0, 6), (req, emit) => ft.chatFreeToken(req, emit), (e) => send("bench-event", e), (m, ok, reason) => ft.reportModel(m, ok, reason));
+    try { fs.writeFileSync(benchFile(), JSON.stringify({ at: Date.now(), results })); } catch { /* not worth failing over */ }
+    return results;
+  });
+  handle("bench:cancel", () => bench.cancelBenchmark());
   handle("preview:external", () => { const u = preview?.webContents.getURL(); if (u && /^https?:/i.test(u)) shell.openExternal(u); });
   handle("preview:bounds", (r: { x: number; y: number; width: number; height: number } | null) => {
     previewShown = !!r && r.width > 0 && r.height > 0;

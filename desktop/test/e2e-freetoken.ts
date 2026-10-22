@@ -476,6 +476,19 @@ async function main() {
       await page.getByRole("button", { name: proj }).click();
       await page.getByRole("button", { name: "src", exact: true }).waitFor({ timeout: 10000 });
     });
+    await step("/benchmark: pick models, run the tasks, see a pass/fail table (a model that only chats fails every task)", async () => {
+      const box = page.getByLabel("Message the AI");
+      await box.fill("/benchmark");
+      await box.press("Enter");
+      const panel = page.getByRole("dialog", { name: "Benchmark" });
+      await panel.getByRole("group", { name: "Models to benchmark" }).getByRole("checkbox").first().waitFor({ timeout: 10000 });
+      await panel.getByRole("button", { name: /^Run benchmark \(1 model\)/ }).click();
+      await panel.locator(".bench-table td.fail").nth(3).waitFor({ timeout: 120000 }); // all four tasks graded
+      if (await panel.locator(".bench-table td.pass").count()) throw new Error("a model that changes nothing passed a task");
+      await panel.locator(".bench-result", { hasText: "0/4" }).waitFor();
+      await page.screenshot({ path: path.join(shots, "benchmark.png") });
+      await panel.getByRole("button", { name: "Close benchmark" }).click();
+    });
     await step("History: the agent's work has snapshots (before, after); restoring one puts the files back, and it can be undone", async () => {
       await page.getByRole("button", { name: "History" }).click();
       const panel = page.getByRole("dialog", { name: "History" });

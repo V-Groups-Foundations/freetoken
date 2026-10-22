@@ -12,6 +12,8 @@ export function setRoot(dir: string) {
   root = fs.realpathSync(path.resolve(dir));
   ignore = loadIgnore(root);
 }
+/** Close the folder (back to no project open). */
+export function clearRoot() { root = null; ignore = () => false; }
 export const reloadIgnore = () => { if (root) ignore = loadIgnore(root); };
 export const isIgnored = (rel: string, isDir = false) => {
   const p = rel.split(path.sep).join("/");

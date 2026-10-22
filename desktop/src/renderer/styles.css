@@ -633,3 +633,18 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .android-checks li.bad::before { content: "✗ "; color: #e0b45c; }
 .android-checks li.muted { color: var(--fg2); }
 .android-checks li.muted::before { content: "– "; color: var(--fg2); }
+/* Benchmark */
+.bench-panel { max-height: 78vh; overflow: auto; }
+.bench-models { display: flex; flex-wrap: wrap; gap: 4px 14px; max-height: 140px; overflow: auto; }
+.bench-model { font-size: 12px; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.bench-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.bench-table th, .bench-table td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: center; }
+.bench-table th:first-child, .bench-table td:first-child { text-align: left; }
+.bench-table th { font-weight: 500; color: var(--fg2); }
+.bench-table td.pass { color: #4ec98a; }
+.bench-table td.fail { color: #e0b45c; }
+.bench-scores ol { margin: 6px 0 0; padding-left: 20px; }
+.bench-table td:first-child { white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.bench-table th { white-space: nowrap; }
+.bench-table td.bench-result { white-space: nowrap; }
+.bench-table th, .bench-table td { padding: 4px 4px; }

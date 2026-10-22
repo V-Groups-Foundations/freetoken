@@ -97,6 +97,16 @@ async function main() {
     return !!waited && Date.now() - t0 >= 900 && text.includes("FreeToken says") && !events.some((e) => e.type === "error");
   });
 
+  await check("an empty reply is never sent back as an empty assistant message (providers reject that)", async () => {
+    const before = fake.requests.length;
+    const events: AI.AgentEvent[] = [];
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "empty", mode: "agent", text: "empty reply test" }, (e) => { events.push(e); if (e.type === "done") r(); }));
+    const sent = fake.requests.slice(before).flatMap((b: any) => b.messages);
+    const emptyAssistant = sent.filter((m: any) => m.role === "assistant" && !m.content && !m.tool_calls?.length);
+    const asked = sent.some((m: any) => /ended without saying anything/.test(String(m.content)));
+    return (emptyAssistant.length === 0 && asked && !events.some((e) => e.type === "error")) || JSON.stringify({ emptyAssistant, asked });
+  });
+
   await check("a reply cut off by the output limit is dropped and asked again in smaller steps", async () => {
     const events: AI.AgentEvent[] = [];
     await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "toolong", mode: "ask", text: "too long test" }, (e) => { events.push(e); if (e.type === "done") r(); }));

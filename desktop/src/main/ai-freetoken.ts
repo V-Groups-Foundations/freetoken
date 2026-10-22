@@ -128,6 +128,14 @@ export function describeFreeTokenError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** How FreeToken's auto routing ranks the user's models for a kind of task (null on an older FreeToken). */
+export async function routerScores(task = "agent"): Promise<{ task: string; models: { model: string; tier: string; quality: number; learned: number; score: number }[] } | null> {
+  const token = cfg.token();
+  if (!token) return null;
+  const r = await fetch(`${cfg.url().replace(/\/+$/, "")}/router/scores?task=${encodeURIComponent(task)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
+  return r?.ok ? r.json() : null;
+}
+
 export async function listModels(): Promise<string[]> {
   const page = await client().models.list();
   return page.data.map((m) => m.id);
@@ -284,7 +292,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
     const system = await systemPrompt(req.mode, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-4).map((m) => String(m.content).slice(-2000)).join("\n"), req.worker);
     let stepModel: string | null = null, shownModel: string | null = null;
     const turnModels = new Set<string>();
-    for (let turn = 0; turn < MAX_STEPS; turn++) {
+    for (let turn = 0; turn < (req.maxSteps ?? MAX_STEPS); turn++) {
       let text = "";
       let calls: { id: string; name: string; args: string }[] = [];
       let finish: string | null = null;
@@ -299,7 +307,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         const role = stepRole(s, req, turn);
         try {
           const { data: stream, response } = await client().chat.completions.create({
-            model: cfg.model() || "auto-smart",
+            model: req.model || cfg.model() || "auto-smart",
             messages: [{ role: "system", content: ask }, ...context],
             tools,
             stream: true,
@@ -365,7 +373,9 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         emit({ type: "text", delta: "\n\n*That reply was too long — continuing in smaller steps…*\n\n" });
         continue;
       }
-      msgs.push({
+      // an empty reply (no text, no tool calls) isn't recorded: providers reject a transcript containing
+      // one ("must have non-empty content or tool calls") on every later request
+      if (text || uses.length) msgs.push({
         role: "assistant",
         content: text || null,
         ...(uses.length ? { tool_calls: uses.map((u) => ({ id: u.id, type: "function" as const, function: { name: u.name, arguments: u.args || "{}" } })) } : {}),

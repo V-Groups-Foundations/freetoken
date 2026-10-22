@@ -77,6 +77,12 @@ interface Api {
   previewDevice(d: { kind: "desktop" | "phone" | "tablet"; scale?: number }): Promise<void>;
   shareInfo(): Promise<ShareInfo>;
   publishPlan(): Promise<PublishPlan>;
+  benchModels(): Promise<string[]>;
+  benchLast(): Promise<{ at: number; results: BenchResult[] } | null>;
+  benchScores(): Promise<RouterScores | null>;
+  benchStart(models: string[]): Promise<BenchResult[]>;
+  benchCancel(): Promise<void>;
+  onBenchEvent(fn: (e: { type: "start"; model: string; task: string } | { type: "result"; result: BenchResult } | { type: "done"; results: BenchResult[] }) => void): Unsub;
   androidCheck(): Promise<{ java: { home: string; version: number } | null; sdk: string | null; adb: string | null; problems: string[] }>;
   androidBuild(o: { name: string; appId?: string; build: boolean }): Promise<{ prepared: boolean; apk: string | null; appId: string; webDir: string }>;
   androidInstall(apk: string): Promise<boolean>;
@@ -136,6 +142,8 @@ type MemoryFile = { file: string | null; exists: boolean; lines: number; entries
 export type TeamAgent = { sid: string; name: string; task: string; status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped"; activity: string; files: string[]; report: string; question?: string; reviewer?: boolean; model?: string };
 export type TeamSnapshot = { supervisor: string; agents: TeamAgent[] };
 export type ChatAttachment = { name: string; mime?: string; data?: string; path?: string };
+export type BenchResult = { model: string; task: string; ok: boolean; why: string | null; ms: number; steps: number; tokens: number };
+export type RouterScores = { task: string; models: { model: string; tier: string; quality: number; learned: number; score: number }[] };
 export type PublishPlan = { name: string; build: string | null; dir: string | null; server: string | null; last: { provider: string; name: string; url: string; at: number } | null; problem: string | null };
 export type ShareInfo = { url: string | null; lan: string | null; reachable: boolean; qr: string | null; advice: string | null; addresses: string[] };
 export type HistorySnapshot = { id: string; time: number; label: string; files: number };

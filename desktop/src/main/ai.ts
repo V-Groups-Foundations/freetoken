@@ -1022,6 +1022,10 @@ export interface ChatRequest {
   /** skills the user picked for this message */
   skills?: string[];
   context?: { activeFile?: string; selection?: { path: string; start: number; end: number; text: string }; openFiles?: string[]; mentionedFiles?: string[] };
+  /** a specific model for this task instead of the configured one (the benchmark runs each model in turn) */
+  model?: string;
+  /** a smaller step limit for this task (the benchmark caps each task) */
+  maxSteps?: number;
 }
 
 /** The last few things the user asked (follow-ups like "make it nicer" keep the web brief on). */
@@ -1141,7 +1145,7 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
   try {
     const system = await systemPrompt(req.mode, `${recentUserText(s.messages)}\n${req.text}`, req.worker);
     emit({ type: "model", model: `anthropic/${config.model()}` });
-    for (let turn = 0; turn < MAX_STEPS; turn++) {
+    for (let turn = 0; turn < (req.maxSteps ?? MAX_STEPS); turn++) {
       const stream = client().beta.messages.stream({
         model: config.model(),
         max_tokens: 64000,

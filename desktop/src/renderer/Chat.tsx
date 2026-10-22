@@ -8,6 +8,7 @@ import { Logo } from "./Logo";
 import { Markdown, OpenFileContext } from "./Markdown";
 import { SkillsPanel } from "./Skills";
 import { HistoryPanel } from "./History";
+import { BenchmarkPanel } from "./Benchmark";
 import { TeamPanel } from "./Team";
 import { providerOf, shortModel, taskLabel } from "./models";
 
@@ -72,7 +73,7 @@ const EXPLORE = new Set(["read_file", "list_dir", "grep_search", "file_search", 
 const FILE_ARG = new Set(["read_file", "edit_file", "write_file"]);
 const THINKING = ["Thinking", "Reasoning", "Working", "Planning", "Considering"];
 const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
-const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/check", "Have the agent run the app, look at it and fix what is broken"], ["/history", "Snapshots of your project: restore any point"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/team", "Switch to Team mode (several agents in parallel)"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
+const SLASH: [string, string][] = [["/init", "Have the agent write V.md, this project's memory"], ["/memory", "Show what V-Run remembers (V.md)"], ["/skills", "Skills: what V-Run knows how to do; install from GitHub"], ["/check", "Have the agent run the app, look at it and fix what is broken"], ["/history", "Snapshots of your project: restore any point"], ["/benchmark", "Compare your FreeToken models on real coding tasks"], ["/new", "Start a new chat"], ["/clear", "Clear the conversation"], ["/agent", "Switch to Agent mode"], ["/team", "Switch to Team mode (several agents in parallel)"], ["/plan", "Switch to Plan mode (investigate, then propose)"], ["/ask", "Switch to Ask mode (read-only)"]];
 const SUGGEST = ["Explain how this project is structured", "Run the app and check it works", "Find and fix a bug in the open file", "Write tests for the open file"];
 const MODES: { id: Mode; label: string; hint: string; placeholder: string }[] = [
   { id: "agent", label: "Agent", hint: "Reads, edits and runs things — asks before running commands", placeholder: "Ask the agent to build, fix or run something…" },
@@ -167,6 +168,12 @@ export function ChatPanel(props: {
   const [memOpen, setMemOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [benchOpen, setBenchOpen] = useState(false);
+  useEffect(() => {
+    const open = () => { setBenchOpen(true); setHistoryOpen(false); setSkillsOpen(false); };
+    window.addEventListener("vrun-open-benchmark", open);
+    return () => window.removeEventListener("vrun-open-benchmark", open);
+  }, []);
   // a task that was running when V-Run closed: offered for resuming
   const [interrupted, setInterrupted] = useState<{ text: string; mode: string; startedAt: number } | null>(null);
   // pasted / dropped files and skills picked for the next message
@@ -376,6 +383,7 @@ export function ChatPanel(props: {
     if (/^\/(ask|agent|plan|team)$/.test(text)) { setMode(text.slice(1) as Mode); setInput(""); return; }
     if (text === "/memory") { setInput(""); setMemOpen(true); refreshMem(); return; }
     if (text === "/skills") { setInput(""); setMemOpen(false); setSkillsOpen(true); return; }
+    if (text === "/benchmark") { setInput(""); setMemOpen(false); setSkillsOpen(false); setHistoryOpen(false); setBenchOpen(true); return; }
     if (text === "/history") { setInput(""); setMemOpen(false); setSkillsOpen(false); setHistoryOpen(true); return; }
     if (text === "/init") { setInput(""); return send(INIT_PROMPT, "agent", run); }
     // "# something" is a note to remember, not a message (Ctrl+Enter: personal memory)
@@ -615,6 +623,7 @@ export function ChatPanel(props: {
           <button className="btn small" onClick={() => { setInterrupted(null); api.chatDismissInterrupted(sidRef.current).catch(() => {}); }}>Dismiss</button>
         </div>
       )}
+      {benchOpen && <BenchmarkPanel busy={busy} onClose={() => setBenchOpen(false)} />}
       {historyOpen && <HistoryPanel busy={busy} onClose={() => setHistoryOpen(false)} onRestored={(files) => { props.onFilesChanged(files); refreshPending(); }} />}
       {skillsOpen && <SkillsPanel busy={busy} onClose={() => setSkillsOpen(false)} onPrefill={(t) => setInput(t)} onAsk={(t) => send(t)} />}
       {memOpen && (

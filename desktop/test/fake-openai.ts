@@ -174,6 +174,8 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
       }
       // V-Run's reports on how each model did (routing feedback): not a chat request
       if (pathOnly.endsWith("/feedback")) { feedback.push(body); return res.end('{"ok":true}'); }
+      // anything that isn't a chat request (e.g. /router/scores, which this fake doesn't have): 404, like an older FreeToken
+      if (!Array.isArray(body?.messages)) { res.writeHead(404, { "content-type": "application/json" }); return res.end('{"error":"not found"}'); }
       requests.push(body);
       // the task kind V-Run asked for (a reasoning model to plan / get unstuck), kept for the tests
       Object.defineProperty(body, "task", { value: req.headers["x-freetoken-task"], enumerable: false });
@@ -189,6 +191,13 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
         return res.end(JSON.stringify({ error: { message: "Tool call validation failed: attempted to call tool 'repo_browser.print_tree' which was not in request.tools", type: "invalid_request_error", code: "tool_use_failed" } }));
       }
       // mimic a model spending its whole output budget (finish_reason "length") until told to take smaller steps
+      // mimic a model that answers with nothing at all (no text, no tool calls) until asked for a summary
+      if (/empty reply test/i.test(lastUserText(body)) && !body.messages.some((m: any) => /ended without saying anything/.test(String(m.content)))) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({ id: "empty", object: "chat.completion.chunk", created: 0, model: "fake/model", choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "stop" }] })}\n\n`);
+        res.write("data: [DONE]\n\n");
+        return res.end();
+      }
       if (/too long test/i.test(lastUserText(body)) && !body.messages.some((m: any) => /hit the output limit/.test(String(m.content)))) {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(`data: ${JSON.stringify({ id: "len", object: "chat.completion.chunk", created: 0, model: "fake/model", choices: [{ index: 0, delta: { role: "assistant", content: "Let me write everything at on" }, finish_reason: "length" }] })}\n\n`);
