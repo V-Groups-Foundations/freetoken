@@ -58,9 +58,10 @@ export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boo
     try {
       let result = await callEngine(clean, engine);
 
-      // Gemini's free image tier throttles hard — fall back to the keyless FLUX engine so you still get an image.
-      if (!result.dataUrl && engine === 'gemini' && result.status === 429) {
-        toast('Gemini was rate-limited — used FLUX instead');
+      // Gemini rate-limited, or the key is a free one (Google gives those no image quota: 402) — still
+      // make the image, with the keyless FLUX engine, and say why
+      if (!result.dataUrl && engine === 'gemini' && (result.status === 429 || result.status === 402)) {
+        toast(result.status === 402 ? 'Gemini images need a paid key — made it with FLUX (free) instead' : 'Gemini was rate-limited — used FLUX instead');
         result = await callEngine(clean, 'pollinations');
       }
 
@@ -125,12 +126,19 @@ export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boo
                 type="button"
                 onClick={() => setEngine('gemini')}
                 data-active={engine === 'gemini'}
+                title="Needs a paid Gemini key (billing on) — free keys get no image quota from Google"
                 className="px-3 py-1.5 font-semibold text-[var(--muted)] transition data-[active=true]:bg-[var(--brand)] data-[active=true]:text-white"
               >
-                Gemini
+                Gemini (paid key)
               </button>
             </div>
           </div>
+        )}
+        {geminiConnected && engine === 'gemini' && (
+          <p role="note" className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs">
+            Gemini images need a <b>paid</b> Gemini key: Google gives free keys no image quota (yours still works for chat).
+            Turn on billing for it in Google AI Studio — or use <b>FLUX</b>, which is free with no key. With a free key, FreeToken makes the image with FLUX instead.
+          </p>
         )}
         {engine === 'pollinations' && (
           <div className="flex items-center gap-2 text-xs">

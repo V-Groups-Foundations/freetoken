@@ -1,11 +1,16 @@
-// Text-to-image via Gemini (BYO free key) — uses the native generateContent image modality.
-// An alternative to the keyless Pollinations engine for users who've connected Gemini.
+// Text-to-image via Gemini — uses the native generateContent image modality. Needs a PAID Gemini key:
+// Google gives free keys no image quota ("free_tier … limit: 0" on every image model). An alternative to
+// the keyless Pollinations (FLUX) engine for users with billing turned on.
 
 import type { FetchFn } from '@/providers/client';
 import type { GenerateInput, GenerateResult } from './generate';
 import { describeNetworkFailure, looksLikeWebPage, unreachableHint } from '@/providers/network';
 
-const MODEL = 'gemini-2.5-flash-image';
+const MODEL = 'gemini-3.1-flash-image'; // gemini-2.5-flash-image was retired
+
+/** What a free key gets when it asks for an image. */
+export const PAID_KEY_MESSAGE =
+  'Gemini images need a paid Gemini key — Google gives free keys no image quota (your free key still works for chat). Turn on billing for the key in Google AI Studio, or use FLUX: free, no key.';
 
 export async function generateImageGemini(
   input: GenerateInput,
@@ -40,6 +45,9 @@ export async function generateImageGemini(
       }
       if (res.status === 401 || res.status === 403) {
         msg = 'Gemini rejected your key.';
+      } else if (res.status === 429 && /free_tier/i.test(body) && /limit:\s*0\b/.test(body)) {
+        // not a rate limit: this key's free tier has no image quota at all — waiting won't help
+        return { ok: false, status: 402, message: PAID_KEY_MESSAGE };
       } else if (res.status === 429) {
         msg = "Gemini's free image tier is rate-limited right now. Wait a minute and retry, or switch to the FLUX engine (free, no limit).";
       } else {
