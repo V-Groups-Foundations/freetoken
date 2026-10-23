@@ -42,6 +42,25 @@ export async function recentFailures(db: DB, userId: string, start: Date) {
 }
 
 /**
+ * Per provider: calls that failed since `start` with nothing succeeding after them, and when it last
+ * succeeded. A provider the network blocks (or that's gone) keeps failing this way; the KV note of an
+ * unreachable provider doesn't survive a restart, this does.
+ */
+export async function failingProviders(db: DB, userId: string, start: Date) {
+  const lastOk = sql`(select max(o.created_at) from usage_events o where o.user_id = ${usageEvents.userId} and o.provider = ${usageEvents.provider} and o.status = 'ok')`;
+  const rows = await db
+    .select({
+      provider: usageEvents.provider,
+      failures: sql<number>`(count(*) filter (where ${usageEvents.status} = 'error' and ${usageEvents.createdAt} > coalesce(${lastOk}, 'epoch'::timestamp)))::int`,
+      lastOk: sql<number | null>`(extract(epoch from max(${lastOk})) * 1000)::float8`,
+    })
+    .from(usageEvents)
+    .where(and(eq(usageEvents.userId, userId), gte(usageEvents.createdAt, start)))
+    .groupBy(usageEvents.userId, usageEvents.provider);
+  return new Map(rows.map((r) => [r.provider, { failures: r.failures, lastOk: r.lastOk == null ? null : new Date(Number(r.lastOk)) }]));
+}
+
+/**
  * What auto routing has learned about each model for one kind of task since `start`: how often its
  * requests succeed (rate limits don't count — that's quota, not quality) and what clients reported
  * about its answers. A score adjustment per provider/model; models with little history get ~0.

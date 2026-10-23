@@ -150,9 +150,10 @@ function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
         <h2 className="font-semibold">{p.name}</h2>
         <div className="flex gap-2">
           {p.status !== 'valid' && <span className="badge badge-bad">key rejected</span>}
+          {p.status === 'valid' && p.unavailable && <span className="badge badge-bad">{p.unavailable.startsWith('not answering') ? 'not answering' : 'unreachable'}</span>}
           {p.excludedFromAuto && <span className="badge badge-off">excluded from auto</span>}
           {cooling && <span className="badge badge-warn">cooling down</span>}
-          {p.status === 'valid' && !p.excludedFromAuto && !cooling && (
+          {p.status === 'valid' && !p.unavailable && !p.excludedFromAuto && !cooling && (
             <span className="badge badge-ok"><span className="inline-block h-1.5 w-1.5 rounded-full bg-current" /> ready</span>
           )}
         </div>
@@ -164,6 +165,7 @@ function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
           <div className="text-xs text-[var(--faint)]">{p.account.note}</div>
         </div>
       )}
+      {p.unavailable && p.status === 'valid' && <p className="text-xs text-[var(--faint)]">This provider is {p.unavailable}, so its allowance isn&apos;t counted in your capacity.</p>}
       {p.limitNote && <p className="text-xs text-[var(--faint)]">{p.limitNote}</p>}
       <div className="divide-y divide-[var(--border)]">
         {p.models.map((m) => <ModelRow key={m.modelId} m={m} now={now} />)}
@@ -231,6 +233,7 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
           <p className="faint text-xs">
             {data.overall.live} of {data.overall.limits} reported live by the providers, the rest from published limits.
             Shared allowances are counted once; monthly and per-minute limits (and providers with no daily cap) aren&apos;t included.
+            {data.overall.leftOut?.length > 0 && <> Left out because they can&apos;t be used right now: {data.overall.leftOut.join('; ')}.</>}
           </p>
         </div>
       ) : (

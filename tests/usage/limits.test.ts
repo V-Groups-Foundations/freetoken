@@ -190,6 +190,47 @@ describe('getUsageSummary', () => {
     expect(after.limitedAt).toBeNull();
   });
 
+  it('leaves a provider that keeps failing (or the network blocks) out of the capacity totals', async () => {
+    await saveKey(db, userId, 'groq', 'gsk_mine', null, TEST_VAULT_KEY);
+    const { models, usageEvents } = await import('@/db/schema');
+    const { eq } = await import('drizzle-orm');
+    await db.update(models).set({ rpd: 100 }).where(eq(models.modelId, 'llama-8b'));
+    const ev = { userId, source: 'api' as const, provider: 'groq', modelId: 'llama-8b', promptTokens: 0, completionTokens: 0, latencyMs: 1 };
+    const at = (minsAgo: number) => new Date(Date.now() - minsAgo * 60_000);
+    await db.insert(usageEvents).values([
+      { ...ev, status: 'ok', createdAt: at(60 * 30) }, // its last success, before the last day
+      { ...ev, status: 'error', createdAt: at(30) },
+      { ...ev, status: 'error', createdAt: at(20) },
+    ]);
+    const two = await getUsageSummary(userId, deps());
+    expect(two.providers[0].unavailable).toBeNull(); // two failures could be a hiccup
+    expect(two.overall.limit).toBe(100);
+
+    await db.insert(usageEvents).values({ ...ev, status: 'error', createdAt: at(10) });
+    const s = await getUsageSummary(userId, deps());
+    expect(s.providers[0].unavailable).toMatch(/^not answering since \d{4}-\d\d-\d\d, 3 failed calls in a row$/);
+    expect(s.overall).toMatchObject({ limit: 0, limits: 0 });
+    expect(s.overall.leftOut).toEqual([expect.stringMatching(/^Groq \(not answering/)]);
+    expect(s.publishedRemainingRequests).toBe(0);
+
+    // one success and it counts again
+    await db.insert(usageEvents).values({ ...ev, status: 'ok', createdAt: at(1) });
+    expect((await getUsageSummary(userId, deps())).overall.limit).toBe(100);
+  });
+
+  it('leaves out a provider the network blocked, even before it has failed three times', async () => {
+    await saveKey(db, userId, 'groq', 'gsk_mine', null, TEST_VAULT_KEY);
+    const { models } = await import('@/db/schema');
+    const { eq } = await import('drizzle-orm');
+    await db.update(models).set({ rpd: 100 }).where(eq(models.modelId, 'llama-8b'));
+    const kv = createMemoryKV();
+    const { noteUnreachable } = await import('@/providers/network');
+    await noteUnreachable(kv, userId, 'groq', { kind: 'blocked', message: 'a firewall page', at: Date.now() });
+    const s = await getUsageSummary(userId, { ...deps(), kv });
+    expect(s.providers[0].unavailable).toBe('blocked by this network');
+    expect(s.overall.limit).toBe(0);
+  });
+
   it('only reports the signed-in user', async () => {
     const other = (await createUser(db)).id;
     await saveKey(db, other, 'groq', 'gsk_other', null, TEST_VAULT_KEY);

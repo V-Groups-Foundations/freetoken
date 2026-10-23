@@ -3,7 +3,8 @@ import { models, providerKeys, providerLimits } from '@/db/schema';
 import { getProvider } from '@/providers/registry';
 import type { Credentials, FetchFn } from '@/providers/client';
 import { loadCredentials } from '@/keys/service';
-import { dayStart, monthStart, usageSince } from '@/usage/ledger';
+import { dayStart, failingProviders, monthStart, usageSince } from '@/usage/ledger';
+import { netStatus } from '@/providers/network';
 import { usageKey } from '@/router/select';
 import type { Deps } from '@/server/deps';
 
@@ -52,6 +53,9 @@ export interface ProviderUsage {
   excludedFromAuto: boolean;
   status: string;
   coolingUntil: Date | null;
+  /** why this provider can't be used right now (blocked by the network, key rejected, not answering):
+   *  its allowance is left out of the overall meter and the totals */
+  unavailable: string | null;
   account: AccountUsage | null;
   /** why there's no daily number for this provider, when there isn't */
   limitNote: string | null;
@@ -72,7 +76,7 @@ export interface UsageSummary {
    * Every daily allowance added up (shared pools counted once): today's overall use. Monthly and
    * per-minute limits are left out so the total means one thing — what's left today.
    */
-  overall: { used: number; limit: number; remaining: number; limits: number; live: number; resetAt: string };
+  overall: { used: number; limit: number; remaining: number; limits: number; live: number; resetAt: string; leftOut: string[] };
   providers: ProviderUsage[];
 }
 
@@ -113,6 +117,20 @@ async function openRouterAccount(creds: Credentials, fetchImpl: FetchFn): Promis
 const keyRowsUse = (rows: { provider: string }[], period: 'day' | 'month') =>
   rows.some((r) => SHARED_POOLS[r.provider]?.period === period);
 
+/** Calls in a row that failed, with nothing succeeding since, before a provider counts as not answering. */
+const NOT_ANSWERING_AFTER = 3;
+
+/** Why a provider can't be used right now, or null when it can. */
+function unavailableReason(status: string, net: { kind: string } | null, failing: { failures: number; lastOk: Date | null } | undefined): string | null {
+  if (status !== 'valid') return 'key rejected';
+  if (net) return net.kind === 'blocked' ? 'blocked by this network' : "can't be reached from this network";
+  if (failing && failing.failures >= NOT_ANSWERING_AFTER) {
+    const since = failing.lastOk ? ` since ${failing.lastOk.toISOString().slice(0, 10)}` : '';
+    return `not answering${since}, ${failing.failures} failed calls in a row`;
+  }
+  return null;
+}
+
 /** Providers that don't have (or don't report) a daily request count. */
 const NO_DAILY_LIMIT: Record<string, string> = {
   nvidia: 'NVIDIA limits requests per minute (about 40/min), not per day — there is no daily count to show.',
@@ -143,6 +161,8 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
   const usedMonth = keyRowsUse(keyRows, 'month') ? await usageSince(deps.db, userId, monthStart(new Date(nowMs))) : used;
   const limitRows = await deps.db.select().from(providerLimits).where(eq(providerLimits.userId, userId));
   const liveLimits = new Map(limitRows.map((r) => [usageKey(r.provider, r.modelId), r]));
+  // a provider failing for a day with nothing getting through: blocked, gone, or its key no longer works
+  const failing = await failingProviders(deps.db, userId, new Date(nowMs - 86_400_000));
 
   const today = { requests: 0, tokens: 0, estimatedTokens: 0 };
   for (const u of used.values()) {
@@ -152,7 +172,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
   }
 
   let liveRemainingRequests = 0;
-  const overall = { used: 0, limit: 0, remaining: 0, limits: 0, live: 0 };
+  const overall = { used: 0, limit: 0, remaining: 0, limits: 0, live: 0, leftOut: [] as string[] };
   const addDaily = (limit: number, remaining: number, live: boolean) => {
     overall.limit += limit; overall.remaining += Math.min(limit, Math.max(0, remaining)); overall.limits++; if (live) overall.live++;
   };
@@ -164,6 +184,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
     if (!def) continue;
     const cd = await deps.kv.get(`cd:${userId}:${key.provider}`);
     const coolingUntil = cd ? new Date(Number(cd)) : null;
+    const unavailable = unavailableReason(key.status, await netStatus(deps.kv, userId, key.provider), failing.get(key.provider));
 
     const pool = SHARED_POOLS[key.provider];
     const liveAccount =
@@ -179,7 +200,8 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
       account = liveAccount
         ? { label: pool.label, ...liveAccount, period: pool.period, resetAt: pool.period === 'month' ? nextMonth : nextDay, source: 'provider', note: pool.note }
         : { label: pool.label, used: counted, limit: pool.limit, remaining: Math.max(0, pool.limit - counted), period: pool.period, resetAt: pool.period === 'month' ? nextMonth : nextDay, source: 'estimate', note: pool.note };
-      if (account.source === 'provider') liveRemainingRequests += account.remaining;
+      if (unavailable) { /* nothing it allows can be used right now */ }
+      else if (account.source === 'provider') liveRemainingRequests += account.remaining;
       else publishedRemainingRequests += account.remaining;
     }
 
@@ -216,7 +238,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           period = 'day';
           resetAt = nextDay; // counted from FreeToken's own records, which start over at 00:00 UTC
         }
-        if (remainingRequests != null) {
+        if (remainingRequests != null && !unavailable) {
           if (source === 'provider') liveRemainingRequests += remainingRequests;
           else publishedRemainingRequests += remainingRequests;
         }
@@ -239,8 +261,13 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
         };
       });
 
-    if (account?.period === 'day') addDaily(account.limit, account.remaining, account.source === 'provider');
-    for (const m of modelUsages) if (m.period === 'day' && m.limitRequests != null && m.remainingRequests != null) addDaily(m.limitRequests, m.remainingRequests, m.source === 'provider');
+    const daily = modelUsages.some((m) => m.period === 'day' && m.limitRequests != null && m.remainingRequests != null) || account?.period === 'day';
+    if (unavailable) {
+      if (daily) overall.leftOut.push(`${def.name} (${unavailable})`);
+    } else {
+      if (account?.period === 'day') addDaily(account.limit, account.remaining, account.source === 'provider');
+      for (const m of modelUsages) if (m.period === 'day' && m.limitRequests != null && m.remainingRequests != null) addDaily(m.limitRequests, m.remainingRequests, m.source === 'provider');
+    }
 
     providers.push({
       provider: key.provider,
@@ -248,6 +275,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
       excludedFromAuto: key.excludedFromAuto,
       status: key.status,
       coolingUntil,
+      unavailable,
       account,
       limitNote: !account && modelUsages.every((x) => x.limitRequests == null) ? (NO_DAILY_LIMIT[key.provider] ?? NO_DAILY_LIMIT.default) : null,
       models: modelUsages,
