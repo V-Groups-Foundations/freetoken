@@ -31,14 +31,20 @@ export interface SelectInput {
   keyless?: Set<string>;
   /** what auto routing learned from real results for this task (score adjustment per model) */
   learned?: Map<string, number>;
+  /** the most tokens one request may have, per model, as its provider reports (Groq: tokens per minute) */
+  tokenCaps?: Map<string, number>;
+  /** the model this conversation has been working with: kept while it works (switching mid-task loses the thread) */
+  pinned?: string;
 }
 
 const AUTO_TIERS = { 'auto-smart': 'smart', 'auto-fast': 'fast' } as const;
+/** How much better (in score points) another model must be before a conversation leaves its own model. */
+export const PIN_MARGIN = 8;
 
-// Providers whose OpenAI-compatible tool-calling can't round-trip across turns: Gemini requires
-// a `thought_signature` on each prior function call that the compat layer doesn't expose, so a
-// multi-step agent task stalls on it. Excluded whenever a request carries tools.
-export const TOOL_INCOMPATIBLE_PROVIDERS = new Set<string>(['gemini']);
+// Providers whose OpenAI-compatible tool calling can't round-trip across turns: excluded whenever a
+// request carries tools. (Gemini needs a thought signature on each earlier function call; FreeToken
+// keeps and restores those — see ./gemini — so it takes agent work like any other.)
+export const TOOL_INCOMPATIBLE_PROVIDERS = new Set<string>();
 
 import { quality, type Task } from './quality';
 
@@ -63,6 +69,11 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
     return (m.rpd != null && u.requests >= m.rpd) || (m.tpd != null && u.tokens >= m.tpd);
   };
   const spent = (m: CatalogModel) => overLimit(m) || !!input.exhausted?.has(usageKey(m.provider, m.modelId));
+  // a prompt bigger than the model's token allowance is refused every time (Groq: 413): don't try
+  const tooBig = (m: CatalogModel) => {
+    const cap = input.tokenCaps?.get(usageKey(m.provider, m.modelId));
+    return cap != null && input.promptTokens > cap;
+  };
 
   const usable = (m: CatalogModel) =>
     m.enabled &&
@@ -71,7 +82,7 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
     m.contextWindow >= input.promptTokens + 1024 &&
     (!input.needsTools || (m.supportsTools && !TOOL_INCOMPATIBLE_PROVIDERS.has(m.provider))) &&
     (!input.needsVision || (input.canSee?.(m.provider, m.modelId) ?? false)) &&
-    !spent(m);
+    !spent(m) && !tooBig(m);
 
   let tier: string;
   let first: CatalogModel[] = [];
@@ -97,6 +108,12 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
   const main = pool(tier).sort(byQuality);
   // when every strong model is spent or failing, the other tier still answers (smart ⇄ fast)
   const other = pool(tier === 'smart' ? 'fast' : 'smart').sort(byQuality);
+  // the conversation's own model goes first while it's usable and not failing — unless a clearly better
+  // one is available (a top model that was busy earlier and is free again takes over)
+  const pin = input.pinned && main.find((m) => usageKey(m.provider, m.modelId) === input.pinned);
+  if (pin && (input.recentFailures?.get(input.pinned!) ?? 0) < 2 && rank(main[0]) - rank(pin) < PIN_MARGIN) {
+    return [...first, pin, ...main.filter((m) => m !== pin), ...other];
+  }
   return [...first, ...main, ...other];
 }
 

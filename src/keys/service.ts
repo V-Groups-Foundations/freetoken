@@ -79,7 +79,7 @@ export async function validateKey(
     return { ok: true };
   }
   if (r.error.kind === 'rate_limit') return { ok: true, note: 'Key works but is currently rate-limited.' };
-  if (r.error.kind === 'auth') return { ok: false, message: 'The provider rejected this key.' };
+  if (r.error.kind === 'auth') return { ok: false, message: /Account ID/.test(r.error.message) ? `The ${r.error.message.replace(/^the /, '')}.` : 'The provider rejected this key.' };
   if (r.error.kind === 'forbidden') return { ok: true, note: `Key saved, but the provider refused the test model (${r.error.message}) — other models may still work.` };
   if (r.error.kind === 'not_found' || r.error.status === 404) return { ok: true, note: 'Key saved, but the test model is unavailable, so the key could not be fully verified.' };
   // The network can't reach the provider (restricted Wi-Fi, firewall): not the key's fault — save it,

@@ -9,7 +9,9 @@ const schema = z.object({
   model: z.string().trim().min(3).max(200),
   task: z.enum(['agent', 'code', 'reasoning', 'vision', 'creative', 'chat']).default('agent'),
   good: z.boolean(),
-  reason: z.string().max(200).optional(),
+  // a long reason (a failure with its error output) is trimmed, not refused: refusing it dropped every
+  // failed benchmark run, so only the passes were ever counted
+  reason: z.string().optional().transform((s) => s?.slice(0, 200)),
 });
 
 /** A client tells auto routing how a model's answer worked out (V-Run reports broken tool calls, false

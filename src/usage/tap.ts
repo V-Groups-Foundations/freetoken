@@ -1,9 +1,13 @@
+import { signaturesIn } from '@/router/gemini';
+
 export interface TapResult {
   usage: { promptTokens: number; completionTokens: number } | null;
   completionChars: number;
   failed: boolean;
   /** the provider reported an error inside the stream (e.g. "Upstream idle timeout exceeded") */
   error?: string;
+  /** Gemini's thought signatures on the tool calls in this answer (tool call id → signature) */
+  signatures: Map<string, string>;
 }
 
 /** OpenAI's stream_options.include_usage adds a last chunk with no choices, only usage. */
@@ -28,11 +32,12 @@ export function tapSseUsage(
   let completionChars = 0;
   let finished = false;
   let streamError: string | undefined; // an error event mid-stream: the answer broke off, so it failed
+  const signatures = new Map<string, string>();
 
   const finish = (failed: boolean) => {
     if (finished) return;
     finished = true;
-    onDone({ usage, completionChars, failed: failed || !!streamError, ...(streamError ? { error: streamError } : {}) });
+    onDone({ usage, completionChars, failed: failed || !!streamError, ...(streamError ? { error: streamError } : {}), signatures });
   };
 
   /** Reads one line; returns true when it's the usage-only chunk. */
@@ -49,6 +54,7 @@ export function tapSseUsage(
       if (typeof delta?.content === 'string') completionChars += delta.content.length;
       // tool calls and reasoning are output too
       for (const tc of delta?.tool_calls ?? []) completionChars += (tc?.function?.arguments ?? '').length + (tc?.function?.name ?? '').length;
+      signaturesIn(delta, signatures);
       const reasoning = delta?.reasoning_content ?? delta?.reasoning;
       if (typeof reasoning === 'string') completionChars += reasoning.length;
       return isUsageOnly(j);

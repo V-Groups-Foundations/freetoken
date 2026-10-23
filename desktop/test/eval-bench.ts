@@ -15,7 +15,7 @@ import path from "node:path";
   const pick = process.argv.slice(2).length ? process.argv.slice(2) : all.slice(0, 2);
   const t0 = Date.now();
   const results = await bench.runBenchmark(pick, (req, emit) => ft.chatFreeToken(req, emit),
-    (e) => { if (e.type === "result") console.log(`[${Math.round((Date.now() - t0) / 1000)}s] ${e.result.model} ${e.result.task}: ${e.result.ok ? "PASS" : `FAIL — ${e.result.why}`} (${e.result.steps} steps, ${Math.round(e.result.ms / 1000)}s)`); },
+    (e) => { if (e.type === "result") console.log(`[${Math.round((Date.now() - t0) / 1000)}s] ${e.result.model} ${e.result.task}: ${e.result.fellBack ? `NOT COUNTED — answered by ${e.result.fellBack.join(", ")}` : e.result.serviceError ? `NOT COUNTED — service error: ${e.result.why}` : e.result.ok ? "PASS" : `FAIL — ${e.result.why}`} (${e.result.steps} steps, ${Math.round(e.result.ms / 1000)}s)`); },
     (m, ok, reason) => ft.reportModel(m, ok, reason));
   console.log("summary:", JSON.stringify(bench.summarise(results).map((s) => [s.model, `${s.passed}/${s.total}`])));
   await new Promise((r) => setTimeout(r, 2000));

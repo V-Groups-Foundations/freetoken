@@ -57,16 +57,19 @@ export async function learnedScores(db: DB, userId: string, task: string, start:
       .groupBy(usageEvents.provider, usageEvents.modelId),
     db.select({
       provider: modelFeedback.provider, modelId: modelFeedback.modelId,
-      good: sql<number>`count(*) filter (where ${modelFeedback.good})::int`,
-      bad: sql<number>`count(*) filter (where not ${modelFeedback.good})::int`,
+      // benchmark verdicts ("benchmark: <task>…") count apart from verdicts on everyday use
+      good: sql<number>`count(*) filter (where ${modelFeedback.good} and coalesce(${modelFeedback.reason}, '') not like 'benchmark:%')::int`,
+      bad: sql<number>`count(*) filter (where not ${modelFeedback.good} and coalesce(${modelFeedback.reason}, '') not like 'benchmark:%')::int`,
+      benchPassed: sql<number>`count(*) filter (where ${modelFeedback.good} and ${modelFeedback.reason} like 'benchmark:%')::int`,
+      benchTotal: sql<number>`count(*) filter (where ${modelFeedback.reason} like 'benchmark:%')::int`,
     }).from(modelFeedback)
       .where(and(eq(modelFeedback.userId, userId), eq(modelFeedback.task, task), gte(modelFeedback.createdAt, start)))
       .groupBy(modelFeedback.provider, modelFeedback.modelId),
   ]);
-  const stats = new Map<string, { ok: number; errors: number; good: number; bad: number }>();
-  const at = (p: string, m: string) => { const k = usageKey(p, m); let v = stats.get(k); if (!v) stats.set(k, (v = { ok: 0, errors: 0, good: 0, bad: 0 })); return v; };
+  const stats = new Map<string, { ok: number; errors: number; good: number; bad: number; benchPassed: number; benchTotal: number }>();
+  const at = (p: string, m: string) => { const k = usageKey(p, m); let v = stats.get(k); if (!v) stats.set(k, (v = { ok: 0, errors: 0, good: 0, bad: 0, benchPassed: 0, benchTotal: 0 })); return v; };
   for (const r of runs) Object.assign(at(r.provider, r.modelId), { ok: r.ok, errors: r.errors });
-  for (const r of votes) Object.assign(at(r.provider, r.modelId), { good: r.good, bad: r.bad });
+  for (const r of votes) Object.assign(at(r.provider, r.modelId), { good: r.good, bad: r.bad, benchPassed: r.benchPassed, benchTotal: r.benchTotal });
   return new Map([...stats].map(([k, v]) => [k, learnedAdjustment(v)]));
 }
 

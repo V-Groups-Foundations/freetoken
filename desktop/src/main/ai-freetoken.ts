@@ -77,10 +77,40 @@ function transcriptText(ms: ChatCompletionMessageParam[]) {
 
 const SUMMARY_BRIEF = "You keep the working notes of an AI coding agent that is in the middle of a long task. Write the notes it needs to carry on without the steps below: the goal, decisions made, every file created or changed and what is in it (exact paths, key functions, ids, ports, URLs), how to run and test it, errors met and how they were fixed, what is still broken or unverified, and what it was about to do next. Keep names, paths and numbers exact. Plain bullet points, at most 450 words. Update the existing notes if given: keep what still holds, drop what's obsolete.";
 
+/**
+ * Old copies the agent no longer needs, shortened in place (same messages, same order): a file read
+ * again later — the newer read has its current text — and page inspections followed by a newer one.
+ * An agent that read a 1,200-line page five times filled its context with five copies of it, and the
+ * summaries that followed made it forget what it had done.
+ */
+export function supersede(msgs: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+  const what = new Map<string, string>(); // tool call id → "read:<path>" | "inspect"
+  for (const m of msgs) {
+    if (m.role !== "assistant" || !("tool_calls" in m)) continue;
+    for (const tc of (m.tool_calls ?? []) as { id: string; function?: { name: string; arguments: string } }[]) {
+      const name = tc.function?.name;
+      if (name === "inspect_preview") what.set(tc.id, "inspect");
+      else if (name === "read_file") {
+        try { const a = JSON.parse(tc.function!.arguments || "{}"); if (a.path && !a.start_line && !a.end_line) what.set(tc.id, `read:${String(a.path).replace(/\\/g, "/").replace(/^\.\//, "")}`); } catch { /* unreadable arguments: keep it */ }
+      }
+    }
+  }
+  const latest = new Map<string, number>(); // kind → index of its newest result
+  msgs.forEach((m, i) => { const k = m.role === "tool" ? what.get(m.tool_call_id) : undefined; if (k) latest.set(k, i); });
+  return msgs.map((m, i) => {
+    const k = m.role === "tool" ? what.get(m.tool_call_id) : undefined;
+    if (!k || latest.get(k) === i || typeof m.content !== "string" || m.content.length < 400) return m;
+    const note = k === "inspect" ? `(an older look at the page — superseded by a newer inspect_preview below. It began: ${m.content.slice(0, 160).replace(/\s+/g, " ")}…)`
+      : `(${k.slice(5)} was read again later — its newer contents are below; this older copy was removed to save space)`;
+    return { ...m, content: note };
+  });
+}
+
 async function summarise(previous: string | undefined, dropped: ChatCompletionMessageParam[], signal?: AbortSignal) {
   const r = await client().chat.completions.create({
-    model: "auto-fast",
-    max_tokens: 1000,
+    // what the agent remembers of a long task is only as good as these notes: the strong model writes them
+    model: "auto-smart",
+    max_tokens: 4000, // reasoning models think first: a small budget left them no room for the notes
     messages: [
       { role: "system", content: SUMMARY_BRIEF },
       { role: "user", content: `${previous ? `Existing notes:\n${previous}\n\n` : ""}Steps to fold into the notes:\n${transcriptText(dropped)}` },
@@ -106,7 +136,8 @@ function cutWithNote(msgs: ChatCompletionMessageParam[], userIndex: number): Cha
  * earlier turns too, not just this task — the older part becomes a running summary (kept from turn to
  * turn), followed by the request (always as the user wrote it) and the recent steps.
  */
-export async function contextFor(id: string, msgs: ChatCompletionMessageParam[], userIndex: number, signal?: AbortSignal, onSummarise?: () => void): Promise<ChatCompletionMessageParam[]> {
+export async function contextFor(id: string, all: ChatCompletionMessageParam[], userIndex: number, signal?: AbortSignal, onSummarise?: () => void): Promise<ChatCompletionMessageParam[]> {
+  const msgs = supersede(all); // same length and order: indexes (userIndex, a summary's upTo) still hold
   let sum = summaries.get(id);
   // the transcript was cut back (a rewind, a new chat): the summary no longer matches it
   if (sum && sum.upTo > msgs.length) { summaries.delete(id); sum = undefined; }
@@ -246,7 +277,7 @@ export function reportModel(model: string | null, good: boolean, reason: string)
   fetch(`${cfg.url().replace(/\/+$/, "")}/feedback`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ model, task: "agent", good, reason }),
+    body: JSON.stringify({ model, task: "agent", good, reason: reason.slice(0, 200) }), // older FreeTokens refuse longer reasons
   }).catch(() => { /* an older FreeToken without /feedback: nothing to learn from */ });
 }
 
@@ -255,18 +286,22 @@ export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSi
   try {
     const { data: r, response } = await client().chat.completions.create({
       model: "auto-smart",
-      max_tokens: 600,
+      // room to think: reasoning models spend part of the budget before they answer, and at 600 tokens
+      // they often returned nothing at all (tested on a real page: 3,000+ characters of thinking first)
+      max_tokens: 4000,
       messages: [{
         role: "user",
         content: [
-          { type: "text", text: `This is a screenshot of a page an AI agent just built for this request:\n"${request.slice(0, 800)}"\n\nAs a strict QA reviewer, list the concrete problems you can SEE: parts the request asks for that are missing, overlapping or misplaced elements, labels detached from what they label, unreadable text or low contrast, empty or broken areas (a stuck "Loading…", a blank canvas), content cut off. Say where each one is. If it looks right, reply "Looks right:" and one line on what's shown. At most 8 short bullets.` },
+          { type: "text", text: `This is a screenshot of a web page, taken in a small preview pane (not a full screen), after an AI agent worked on this request:\n"${request.slice(0, 800)}"\n\nReport only what you can clearly SEE — no guesses about code. Two short lists:\nAFFECTS THE REQUEST: things the request asks for that are missing or visibly broken (overlapping or misplaced elements, unreadable text, a stuck "Loading…", an area that should show something but is one flat colour).\nOTHER: minor looks issues unrelated to the request.\nIf you can't tell whether something is wrong, write "unclear:" instead of calling it a problem. Content cut off at the pane's edges, or a phone-style layout in a narrow pane, is normal. If the request's part looks right, start with "Looks right:" and one line on what's shown. At most 6 bullets in all.` },
           { type: "image_url", image_url: { url: `data:image/jpeg;base64,${jpeg.toString("base64")}` } },
         ],
       }],
     }, { signal, timeout: 90_000, maxRetries: 0 }).withResponse();
     const said = r.choices[0]?.message?.content?.trim();
     const who = response.headers.get("x-freetoken-provider") ?? undefined;
-    return { text: said ? `\n\nWhat the page looks like (${who ?? "a vision model"} reviewed the screenshot):\n${said}` : "", model: who };
+    // a second opinion from another (often smaller) model, not instructions: earlier agents "fixed" whatever
+    // it listed — a narrow pane read as a cut-off layout — and rewrote pages nobody asked them to change
+    return { text: said ? `\n\nWhat the page looks like — a second opinion from ${who ?? "a vision model"}, which can be wrong. Check a point against the page text, console or a script before acting on it, and fix only what the user's request needs:\n${said}` : "", model: who };
   } catch {
     return { text: "" }; // no vision model connected, or it's busy: the text and console above still count
   }
@@ -335,7 +370,9 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             messages: [{ role: "system", content: ask }, ...context],
             tools,
             stream: true,
-          }, { signal: s.abort.signal, maxRetries: 0, ...(role ? { headers: { "x-freetoken-task": role } } : {}) }).withResponse(); // retries happen below, visibly (rateLimitWait)
+            // the session keeps this task on the model it's working with (FreeToken switches only when that
+            // one fails or a clearly better one frees up): changing models mid-task loses the thread
+          }, { signal: s.abort.signal, maxRetries: 0, headers: { "x-freetoken-session": req.sessionId, ...(role ? { "x-freetoken-task": role } : {}) } }).withResponse(); // retries happen below, visibly (rateLimitWait)
           // which model FreeToken picked: what it gets right or wrong is reported back so routing learns
           stepModel = response.headers.get("x-freetoken-provider");
           // providers the user's network couldn't reach: say so once per task (restricted Wi-Fi?)
@@ -365,7 +402,11 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
               if (part.text) { text += part.text; emit({ type: "text", delta: part.text }); }
             }
             for (const tc of d?.tool_calls ?? []) {
-              const slot = (calls[tc.index] ??= { id: "", name: "", args: "" });
+              // some providers (Gemini) send each call whole and leave out `index`: a call with an id is a
+              // new one, a piece without either continues the last (dropped, the agent just stopped)
+              const raw = tc as { index?: unknown; id?: string };
+              const at: number = typeof raw.index === "number" ? raw.index : raw.id ? calls.length : Math.max(0, calls.length - 1);
+              const slot = (calls[at] ??= { id: "", name: "", args: "" });
               if (tc.id) slot.id = tc.id;
               if (tc.function?.name) slot.name += tc.function.name;
               if (tc.function?.arguments) slot.args += tc.function.arguments;
@@ -450,7 +491,9 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             const r = await execTool(s, u.name as ToolName, parsed.data, emit, u.id);
             content = r.content;
             // the agent model may not see images: a vision model looks at the page and describes problems
-            if (u.name === "inspect_preview" && r.image) {
+            // once per version of the page: the same page reviewed again only repeats (or invents) problems
+            if (u.name === "inspect_preview" && r.image && !s.reviewed) {
+              s.reviewed = true;
               const look = await lookAtPage(r.image, req.text, s.abort.signal);
               if (look.text) { content += look.text; r.summary += ` · screenshot reviewed${look.model ? ` by ${look.model.split("/").pop()}` : ""}`; }
             }

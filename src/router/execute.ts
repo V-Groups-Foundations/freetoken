@@ -9,12 +9,15 @@ import { detectTask, type Task } from './quality';
 import { noteReachable, noteUnreachable, unreachableHint } from '@/providers/network';
 
 /** 400s caused by the model, its size limits or a gateway's upstream rather than the request (Groq: "Failed to call
- * a function"; OpenRouter / Kilo: "Provider returned error"). Another model can take them. */
-const MODEL_SIDE_400 = /failed to call a function|tool_use_failed|failed_generation|invalid tool call|context.{0,12}(length|window)|maximum context|too many tokens|reduce the length|request too large|prompt is too long|provider returned error|upstream (error|request failed)/i;
+ * a function"; OpenRouter / Kilo: "Provider returned error"; Cloudflare: "AiError: Bad input" for a message format it
+ * doesn't take). Another model can take them. */
+const MODEL_SIDE_400 = /failed to call a function|AiError: Bad input|unknown name "[^"]+": cannot find field|tool_use_failed|failed_generation|invalid tool call|context.{0,12}(length|window)|maximum context|too many tokens|reduce the length|request too large|prompt is too long|provider returned error|upstream (error|request failed)/i;
 import { tapSseUsage } from '@/usage/tap';
 import { parseRateHeaders, saveLimits } from '@/usage/limits';
 import { isAuto, parseModelRef, selectCandidates, type CatalogModel } from './select';
 import { hasImageContent, supportsVision } from './vision';
+import { forProvider } from './compat';
+import { saveSignatures, signaturesIn, standardizeGeminiAnswer, standardizeGeminiStream, withSignatures } from './gemini';
 
 export interface ChatInput {
   userId: string;
@@ -22,7 +25,13 @@ export interface ChatInput {
   body: Record<string, unknown>;
   /** the kind of task, when the client says (a coding agent asking its planner for a reasoning model) */
   task?: Task;
+  /** the client's conversation (x-freetoken-session): auto routing keeps it on the model it's working with */
+  session?: string;
 }
+
+/** How long a conversation stays on its model after its last answer. */
+const PIN_MS = 30 * 60_000;
+const pinKey = (userId: string, task: string, session: string) => `pin:${userId}:${task}:${session}`;
 
 export type RouteOutcome =
   | { ok: true; response: Response }
@@ -79,9 +88,13 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   const exhaustedRows = (await deps.db.select().from(providerLimits).where(and(eq(providerLimits.userId, userId), eq(providerLimits.remainingRequests, 0))))
     .filter((l) => (l.requestsResetAt ? l.requestsResetAt.getTime() > nowMs : l.updatedAt.getTime() + 60_000 > nowMs));
   const exhausted = new Set(exhaustedRows.map((l) => `${l.provider}/${l.modelId}`));
+  // each model's token allowance per request window, as its provider last reported it
+  const tokenCaps = new Map((await deps.db.select().from(providerLimits).where(eq(providerLimits.userId, userId)))
+    .filter((l) => l.limitTokens != null && l.limitTokens > 0).map((l) => [`${l.provider}/${l.modelId}`, l.limitTokens!] as const));
   // when they reset: the "try again at" in the all-exhausted answer
   for (const l of exhaustedRows) resetTimes.push(l.requestsResetAt?.getTime() ?? l.updatedAt.getTime() + 60_000);
   const task = input.task ?? detectTask(body);
+  const pinAt = isAuto(requested) && input.session ? pinKey(userId, `${requested}:${task}`, input.session) : null;
   const selectInput = {
     requested,
     models: catalog,
@@ -97,6 +110,8 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     exhausted,
     recentFailures: await recentFailures(deps.db, userId, new Date(nowMs - 10 * 60_000)),
     keyless,
+    tokenCaps,
+    pinned: pinAt ? (await deps.kv.get(pinAt)) ?? undefined : undefined,
   };
   const candidates = selectCandidates(selectInput);
   // Empty even with quota ignored (cooldowns, daily limits, providers' "none left"): no connected model
@@ -129,7 +144,8 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
     const started = now();
     const usageBase = { userId, provider: m.provider, modelId: m.modelId, source, task };
-    const plain = { ...body, model: m.modelId };
+    // Gemini refuses earlier tool calls without their thought signatures: put them back
+    const plain = forProvider(m.provider, { ...body, model: m.modelId, ...(m.provider === 'gemini' && Array.isArray(body.tools) ? { messages: await withSignatures(deps.kv, userId, body.messages) } : {}) });
     const askUsage = stream && !clientWantsUsage;
     let r = await callChat(def, c.creds, askUsage ? { ...plain, stream_options: { ...(body.stream_options as object), include_usage: true } } : plain, { fetchImpl: deps.fetchImpl });
     // a provider that rejects stream_options: try again exactly as the client sent it
@@ -177,6 +193,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
     await touchKey(deps.db, userId, m.provider);
     await noteReachable(deps.kv, userId, m.provider);
+    if (pinAt) await deps.kv.set(pinAt, `${m.provider}/${m.modelId}`, PIN_MS);
     const live = parseRateHeaders(r.response.headers, now());
     if (live) {
       await saveLimits(deps.db, userId, m.provider, m.modelId, live).catch((err) => console.error('limit save failed', err));
@@ -192,8 +209,10 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     };
 
     if (stream && r.response.body) {
-      const tapped = tapSseUsage(r.response.body, ({ usage, completionChars, failed, error }) => {
+      const upstream = m.provider === 'gemini' ? standardizeGeminiStream(r.response.body) : r.response.body;
+      const tapped = tapSseUsage(upstream, ({ usage, completionChars, failed, error, signatures }) => {
         if (failed) console.warn(`[router] ${m.provider}/${m.modelId} broke off mid-stream: ${error ?? 'connection lost'}`);
+        if (signatures.size) saveSignatures(deps.kv, userId, signatures).catch(() => {});
         recordUsage(deps.db, {
           ...usageBase,
           promptTokens: usage?.promptTokens ?? promptEstimate,
@@ -217,6 +236,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       cooling.add(m.provider);
       continue;
     }
+    if (m.provider === 'gemini') standardizeGeminiAnswer(json);
+    const sigs = signaturesIn(json.choices?.[0]?.message, new Map());
+    if (sigs.size) await saveSignatures(deps.kv, userId, sigs);
     await recordUsage(deps.db, {
       ...usageBase,
       promptTokens: json.usage?.prompt_tokens ?? promptEstimate,

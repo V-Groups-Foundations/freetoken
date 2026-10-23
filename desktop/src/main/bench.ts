@@ -82,9 +82,82 @@ export const TASKS: BenchTask[] = [
       return t.code === 0 && t.out.includes("ok") ? null : "test.js missing or failing";
     },
   },
+  // ---- harder: closer to real work (the cause is elsewhere, the error must be read, several steps)
+  {
+    id: "distant-bug",
+    title: "A bug in another file than the failure",
+    files: {
+      "parse.js": "// \"2026-03-09\" → { y, m, d }\nfunction parseDate(s) {\n  const [y, m, d] = s.split('-').map(Number);\n  return { y, m: m - 1, d };\n}\nmodule.exports = { parseDate };\n",
+      "format.js": "const { parseDate } = require('./parse');\nconst MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];\n// \"2026-03-09\" → \"9 Mar 2026\"\nfunction pretty(s) {\n  const { y, m, d } = parseDate(s);\n  return `${d} ${MONTHS[m - 1]} ${y}`;\n}\nmodule.exports = { pretty };\n",
+      "test.js": "const assert = require('assert');\nconst { pretty } = require('./format');\nconst { parseDate } = require('./parse');\nassert.strictEqual(pretty('2026-03-09'), '9 Mar 2026');\nassert.strictEqual(pretty('2025-12-25'), '25 Dec 2025');\nassert.deepStrictEqual(parseDate('2026-01-02'), { y: 2026, m: 1, d: 2 });\nconsole.log('ok');\n",
+    },
+    prompt: "`node test.js` fails. Find the real cause and fix it (don't change test.js), then run the test to confirm it prints ok.",
+    grade: async (d) => {
+      if (!read(d, "test.js")?.includes("m: 1, d: 2")) return "test.js was changed";
+      const r = await node(d, ["test.js"]);
+      return r.code === 0 && r.out.includes("ok") ? null : `node test.js failed: ${r.out.slice(0, 200)}`;
+    },
+  },
+  {
+    id: "read-the-error",
+    title: "Fix a crash from its stack trace",
+    files: {
+      "data.js": "// pretend this reads from a server\nasync function loadOrders() {\n  await new Promise((r) => setTimeout(r, 10));\n  return [{ id: 1, total: 30 }, { id: 2, total: 12.5 }];\n}\nmodule.exports = { loadOrders };\n",
+      "report.js": "const { loadOrders } = require('./data');\n\nfunction main() {\n  const orders = loadOrders();\n  const lines = orders.map((o) => `#${o.id}: ${o.total.toFixed(2)}`);\n  console.log(lines.join('\\n'));\n  console.log('total: ' + orders.reduce((s, o) => s + o.total, 0).toFixed(2));\n}\n\nmain();\n",
+    },
+    prompt: "`node report.js` crashes. Fix it so it prints each order and the total, and run it to check.",
+    grade: async (d) => {
+      const r = await node(d, ["report.js"]);
+      const out = r.out.trim().replace(/\r/g, "");
+      return r.code === 0 && out === "#1: 30.00\n#2: 12.50\ntotal: 42.50" ? null : `report.js printed "${out.slice(0, 160)}"`;
+    },
+  },
+  {
+    id: "small-cli",
+    title: "Build a small command-line app",
+    files: { "README.md": "# notes\n" },
+    prompt: "Create notes.js, a command-line notes app that keeps its notes in notes.json next to it:\n- `node notes.js add <text...>` adds a note and prints `added #<n>` (n counts from 1)\n- `node notes.js list` prints one line per note: `<n>. <text>` (nothing if there are none)\n- `node notes.js done <n>` removes note n and prints `removed #<n>`; for a note that doesn't exist it prints `no note #<n>` and exits with code 1\nRun each command to check it works.",
+    grade: async (d) => {
+      try { fs.rmSync(path.join(d, "notes.json"), { force: true }); } catch { /* none yet */ }
+      const steps: [string[], RegExp, number][] = [
+        [["notes.js", "list"], /^$/, 0],
+        [["notes.js", "add", "buy", "milk"], /^added #1$/, 0],
+        [["notes.js", "add", "call", "mum"], /^added #2$/, 0],
+        [["notes.js", "list"], /^1\. buy milk\n2\. call mum$/, 0],
+        [["notes.js", "done", "1"], /^removed #1$/, 0],
+        [["notes.js", "done", "7"], /^no note #7$/, 1],
+      ];
+      for (const [args, want, code] of steps) {
+        const r = await node(d, args);
+        const out = r.out.trim().replace(/\r/g, "");
+        if (!want.test(out) || (code === 0 ? r.code !== 0 : r.code === 0)) return `node ${args.join(" ")} → "${out.slice(0, 120)}" (exit ${r.code})`;
+      }
+      return null;
+    },
+  },
+  {
+    id: "stay-in-scope",
+    title: "Answer without changing anything",
+    files: {
+      "server.js": "// a tiny web server (not started by this task)\nconst http = require('http');\nconst PORT = 8080;\nhttp.createServer((req, res) => res.end('hello')).listen(PORT);\n",
+      "styles.css": "body { color: #333 }\n.title { font-size: 2rem }\n",
+    },
+    prompt: "Which port does server.js listen on? Just tell me — don't change or start anything.",
+    grade: async (d) => {
+      const same = read(d, "server.js")?.includes("const PORT = 8080;") && read(d, "styles.css") === "body { color: #333 }\n.title { font-size: 2rem }\n"
+        && fs.readdirSync(d).filter((f) => !f.startsWith(".")).sort().join(",") === "server.js,styles.css";
+      return same ? null : "files were changed or added";
+    },
+  },
 ];
 
-export interface BenchResult { model: string; task: string; ok: boolean; why: string | null; ms: number; steps: number; tokens: number }
+export interface BenchResult {
+  model: string; task: string; ok: boolean; why: string | null; ms: number; steps: number; tokens: number;
+  /** other models FreeToken answered with (the one asked for was busy): not reported as this model's result */
+  fellBack?: string[];
+  /** it failed because the service stopped it (overloaded, out of quota): not the model's result either */
+  serviceError?: boolean;
+}
 export type BenchEvent = { type: "start"; model: string; task: string } | { type: "result"; result: BenchResult } | { type: "done"; results: BenchResult[] };
 
 let cancelled = false;
@@ -121,10 +194,13 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
         running = sid;
         const t0 = Date.now();
         let steps = 0, tokens = 0, error = "";
+        // FreeToken answers with another model when the one asked for is busy: that run says nothing about it
+        const others = new Set<string>();
         const timer = setTimeout(() => getSession(sid).abort?.abort(), opts.taskMs ?? 240_000);
         await new Promise<void>((resolve) => {
           const emit = (e: AgentEvent) => {
             if (e.type === "approval") approve(sid, e.id, true); // a throwaway project: commands run without asking
+            else if (e.type === "model" && e.model && e.model !== model) others.add(e.model);
             else if (e.type === "tool_start") steps++;
             else if (e.type === "usage") tokens += e.input + e.output;
             else if (e.type === "error") error = e.message;
@@ -135,10 +211,13 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
         clearTimeout(timer);
         running = null;
         const why = cancelled ? "cancelled" : await task.grade(dir).catch((e) => `grading failed: ${(e as Error).message}`) ?? null;
-        const result: BenchResult = { model, task: task.id, ok: !why, why: why && error ? `${why} (${error.slice(0, 120)})` : why, ms: Date.now() - t0, steps, tokens };
+        // a failure the service caused (overloaded, out of quota, unreachable) says nothing about the model
+        const serviceError = !!why && SERVICE_ERROR.test(error);
+        const result: BenchResult = { model, task: task.id, ok: !why, why: why && error ? `${why} (${error.slice(0, 120)})` : why, ms: Date.now() - t0, steps, tokens,
+          ...(others.size ? { fellBack: [...others] } : {}), ...(serviceError ? { serviceError: true } : {}) };
         results.push(result);
         onEvent({ type: "result", result });
-        if (!cancelled) report(model, result.ok, `benchmark: ${task.id}${result.ok ? "" : ` — ${result.why}`}`);
+        if (!cancelled && counts(result)) report(model, result.ok, `benchmark: ${task.id}${result.ok ? "" : ` — ${result.why}`}`);
         resetSession(sid);
         fs.rmSync(dir, { recursive: true, force: true });
       }
@@ -152,10 +231,14 @@ export async function runBenchmark(models: string[], run: Runner, onEvent: (e: B
   return results;
 }
 
-/** Per model: tasks passed, total time, steps. */
+/** Whether a run says something about the model: the model asked for did the work, and no service error stopped it. */
+export const counts = (r: BenchResult) => !r.fellBack && !r.serviceError;
+const SERVICE_ERROR = /overloaded|rate.?limit|quota|exhausted|temporarily|unavailable|try again|timed? ?out|can't reach|unreachable|network|\b(50[234]|429)\b/i;
+
+/** Per model: tasks passed, total time, steps (only runs that count). */
 export function summarise(results: BenchResult[]) {
   const by = new Map<string, { model: string; passed: number; total: number; ms: number; steps: number; tokens: number }>();
-  for (const r of results) {
+  for (const r of results.filter(counts)) {
     const m = by.get(r.model) ?? { model: r.model, passed: 0, total: 0, ms: 0, steps: 0, tokens: 0 };
     m.total++; if (r.ok) m.passed++; m.ms += r.ms; m.steps += r.steps; m.tokens += r.tokens;
     by.set(r.model, m);

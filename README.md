@@ -122,7 +122,7 @@ Claude model names map to FreeToken automatically (`haiku` → `auto-fast`, ever
 
 | | |
 |---|---|
-| 🔀 **Smart routing** | `auto-smart` / `auto-fast` send each request to the best model **for that kind of task** (agent work, code, reasoning, images, writing) that still has quota; weaker models only take over when the strong ones are used up or failing. Routing **learns from real results**: models that often fail a kind of task, or that clients report as bad (broken tool calls, claiming work they didn't do), drop down; reliable ones rise. |
+| 🔀 **Smart routing** | `auto-smart` / `auto-fast` send each request to the best model **for that kind of task** (agent work, code, reasoning, images, writing) that still has quota; weaker models only take over when the strong ones are used up or failing. Routing **learns from real results**: models that often fail a kind of task, or that clients report as bad (broken tool calls, claiming work they didn't do), drop down; reliable ones rise. Benchmark runs (V-Run's real coding tasks, graded by running the result) count most. A conversation that sends `x-freetoken-session` stays on the model it's working with unless that model fails or a clearly better one frees up, and requests too big for a model's token allowance skip it instead of failing. Gemini takes agent work too: FreeToken keeps its thought signatures between steps. |
 | 🔌 **OpenAI-compatible API** | `/api/v1/chat/completions`, streaming and tool calls — works with any OpenAI SDK or tool. |
 | 🤖 **Anthropic-compatible API** | `/api/v1/messages` — Claude Code and Anthropic SDKs on free models. |
 | 🧠 **Responses API** | `/api/v1/responses` — the latest Codex CLI and OpenAI SDK `responses.create` on free models. |

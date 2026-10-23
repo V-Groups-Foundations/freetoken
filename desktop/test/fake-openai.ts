@@ -186,6 +186,7 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
       requests.push(body);
       // the task kind V-Run asked for (a reasoning model to plan / get unstuck), kept for the tests
       Object.defineProperty(body, "task", { value: req.headers["x-freetoken-task"], enumerable: false });
+      Object.defineProperty(body, "session", { value: req.headers["x-freetoken-session"], enumerable: false });
       // mimic every free provider being rate-limited for a moment (once per "busy test" message)
       if (/busy test/i.test(lastUserText(body)) && !busySeen.has(lastUserText(body))) {
         busySeen.add(lastUserText(body));

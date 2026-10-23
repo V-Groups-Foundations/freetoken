@@ -51,10 +51,22 @@ describe('selectCandidates', () => {
     }));
     expect(ids(r)).toEqual(['openrouter/meta-llama/llama-3.3-70b-instruct:free']);
   });
-  it('filters by context window and tool support, and excludes tool-incompatible providers (Gemini)', () => {
-    // Gemini supports tools but can't round-trip them across turns, so it's dropped when tools are needed.
-    expect(ids(selectCandidates(base({ needsTools: true })))).toEqual(['groq/llama-70b']);
+  it('filters by context window and tool support (Gemini included: its thought signatures are restored)', () => {
+    expect(ids(selectCandidates(base({ needsTools: true })))).toEqual(['groq/llama-70b', 'gemini/flash']);
     expect(selectCandidates(base({ promptTokens: 200_000 }))).toEqual([]);
+  });
+  it("skips a model whose provider caps a request below this prompt's size (Groq refuses with 413)", () => {
+    const caps = new Map([['groq/llama-70b', 8000]]);
+    expect(ids(selectCandidates(base({ promptTokens: 20_000, tokenCaps: caps })))).not.toContain('groq/llama-70b');
+    expect(ids(selectCandidates(base({ promptTokens: 5_000, tokenCaps: caps })))[0]).toBe('groq/llama-70b');
+  });
+  it('a conversation stays on its model unless another is clearly better or it keeps failing', () => {
+    const agent = (o: Partial<SelectInput>) => ids(selectCandidates(base({ task: 'agent', needsTools: true, ...o })))[0];
+    expect(agent({})).toBe('groq/llama-70b');
+    expect(agent({ pinned: 'gemini/flash' })).toBe('gemini/flash');
+    expect(agent({ pinned: 'gemini/flash', learned: new Map([['groq/llama-70b', 10]]) })).toBe('groq/llama-70b'); // clearly better
+    expect(agent({ pinned: 'gemini/flash', recentFailures: new Map([['gemini/flash', 2]]) })).toBe('groq/llama-70b');
+    expect(agent({ pinned: 'nope/gone' })).toBe('groq/llama-70b');
   });
   it('puts an explicit model first, then same-tier fallbacks', () => {
     expect(ids(selectCandidates(base({ requested: 'gemini/flash' })))).toEqual(['gemini/flash', 'groq/llama-70b', 'openrouter/meta-llama/llama-3.3-70b-instruct:free']);

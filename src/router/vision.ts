@@ -5,6 +5,7 @@ export function supportsVision(provider: string, modelId: string): boolean {
   if (provider === 'gemini') return true; // Gemini models are all multimodal
   if (modelId.includes('gpt-4.1')) return true; // GPT-4.1 mini/nano accept images
   if (modelId.includes('gemma')) return true; // Gemma 3/4 are multimodal
+  if (/-vl\b|-vl-|vision/i.test(modelId)) return true; // vision-language models (Nemotron Super VL, Command A Vision)
   return false;
 }
 

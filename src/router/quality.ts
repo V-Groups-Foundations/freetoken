@@ -20,6 +20,10 @@ const QUALITY: [RegExp, Scores][] = [
   [/gpt-oss-120b/, { base: 84, agent: 85, code: 84, reasoning: 89, creative: 78 }],
   [/gemini-3\.8-flash|gemini-3(\.\d)?-flash(?!-lite)/, { base: 86, agent: 80, code: 85, reasoning: 86, vision: 92, creative: 86 }],
   [/nemotron-3-super-120b/, { base: 80, agent: 80, code: 80, reasoning: 85, creative: 78 }],
+  [/nemotron-3\.5-super-vl/, { base: 81, agent: 80, code: 79, reasoning: 83, vision: 86, creative: 76 }],
+  [/command-a-vision/, { base: 76, vision: 90, creative: 74 }],
+  [/command-a-reasoning/, { base: 80, agent: 76, code: 78, reasoning: 87, creative: 76 }],
+  [/command-a-plus/, { base: 80, agent: 78, code: 79, reasoning: 82, creative: 82 }],
   [/kilo-auto/, { base: 78, agent: 78, code: 78, reasoning: 78 }],
   [/gpt-4\.1-mini/, { base: 79, agent: 78, code: 79, reasoning: 77, vision: 80, creative: 82 }],
   [/command-a/, { base: 72, agent: 68, code: 70, reasoning: 72, creative: 80 }],
@@ -67,10 +71,16 @@ export function detectTask(body: { messages?: unknown; tools?: unknown }): Task 
  * report as bad (broken tool calls, claims of work it didn't do), drops below the estimate; one that
  * keeps delivering rises a little. Little history → little change, so one bad day can't bury a model.
  */
-export function learnedAdjustment(s: { ok: number; errors: number; good: number; bad: number }) {
+export function learnedAdjustment(s: { ok: number; errors: number; good: number; bad: number; benchPassed?: number; benchTotal?: number }) {
   const runs = s.ok + s.errors;
   const reliability = runs >= 5 ? (s.ok / runs - 0.9) * 40 * Math.min(1, runs / 30) : 0; // 50% ok → −16
   const votes = s.good + s.bad;
   const verdict = votes ? ((s.good - s.bad) / votes) * 10 * Math.min(1, votes / 6) : 0;
-  return Math.round(Math.max(-20, Math.min(10, reliability + verdict)) * 10) / 10;
+  // benchmark runs are real tasks graded by running the result — the strongest evidence there is, so
+  // they move a model most: all passed → +12, three in four → 0, half → −12 (at full weight, 8+ runs)
+  const total = s.benchTotal ?? 0;
+  const bench = total >= 3 ? ((s.benchPassed ?? 0) / total - 0.75) * 48 * Math.min(1, total / 8) : 0;
+  // everyday evidence alone stays within −20…+10; benchmark results move a model further either way
+  const everyday = Math.max(-20, Math.min(10, reliability + verdict));
+  return Math.round(Math.max(-30, Math.min(16, everyday + bench)) * 10) / 10;
 }

@@ -100,7 +100,7 @@ async function main() {
   await check("Stop stops the rest of the reply: later tool calls don't run, and an approval after Stop doesn't hang", async () => {
     const ai = await import("../src/main/ai");
     const events: AI.AgentEvent[] = [];
-    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "stopper", mode: "agent", text: "stop test" }, (e) => {
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "stopper", mode: "agent", text: "stop test: write a.txt and b.txt" }, (e) => {
       events.push(e);
       if (e.type === "tool_end" && events.filter((x) => x.type === "tool_end").length === 1) ai.stop("stopper"); // Stop right after the first write
       if (e.type === "done") r();
@@ -154,6 +154,13 @@ async function main() {
     await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "role-ask", mode: "ask", text: "what is this?" }, (e) => { if (e.type === "done") r(); }));
     const asked = fake.requests.slice(mid).map((b: any) => b.task);
     return (planned.length > 0 && planned.every((t) => t === "reasoning") && asked.every((t) => t === undefined)) || JSON.stringify({ planned, asked });
+  });
+
+  await check("every step of a task names its conversation, so FreeToken keeps it on one model", async () => {
+    const before = fake.requests.length;
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "pin-me", mode: "ask", text: "what is this?" }, (e) => { if (e.type === "done") r(); }));
+    const sessions = fake.requests.slice(before).map((b: any) => b.session);
+    return (sessions.length > 0 && sessions.every((x) => x === "pin-me")) || JSON.stringify(sessions);
   });
 
   await check("the chat is told which model works on the task, and when FreeToken switches to another", async () => {

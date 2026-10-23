@@ -384,6 +384,47 @@ async function main() {
       && link.summary === "No app running") || JSON.stringify({ seen, restore: restore.summary, cmd: cmd.summary, link: link.summary });
   });
 
+  await check("a request that doesn't ask for changes questions the first edit (and only the first)", async () => {
+    // "run the app, I want to send a link" became a half-hour layout rewrite
+    const no = ["run the app i want to send the link to someone and test it", "is it necessary for the person to be in the same wifi as me?",
+      "which port does server.js listen on? don't change anything", "start the server", "why is the page blank?"];
+    const yes = ["fix all of these and make it as good as ur own way", "Build a landing page", "the button doesn't work",
+      "can you make the header blue?", "Rename calc to computeScore", "go ahead start", "hi"];
+    const wrong = [...no.filter((t) => ai.asksForChange(t)).map((t) => `should be no: ${t}`), ...yes.filter((t) => !ai.asksForChange(t)).map((t) => `should be yes: ${t}`)];
+    if (wrong.length) return wrong.join(" | ");
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-scope-"));
+    ws.setRoot(proj);
+    const s = ai.getSession("scope");
+    ai.startTurnState(s, { sessionId: "scope", mode: "agent", text: "run the app i want to send a link" } as any);
+    const first = await ai.execTool(s, "write_file", { path: "a.txt", contents: "x" }, () => {}, "w1");
+    const blocked = !fs.existsSync(path.join(proj, "a.txt"));
+    const second = await ai.execTool(s, "write_file", { path: "a.txt", contents: "x" }, () => {}, "w2");
+    ai.startTurnState(s, { sessionId: "scope", mode: "agent", text: "add a footer" } as any);
+    const asked = await ai.execTool(s, "write_file", { path: "b.txt", contents: "y" }, () => {}, "w3");
+    return (first.summary === "Not asked to change files" && blocked && second.summary.startsWith("Created") && asked.summary.startsWith("Created"))
+      || JSON.stringify({ first: first.summary, blocked, second: second.summary, asked: asked.summary });
+  });
+
+  await check("a file read again replaces its older copies in the context (and older page looks), nothing else", () => {
+    const big = "x".repeat(5000);
+    const call = (id: string, name: string, args: object) => ({ role: "assistant", content: null, tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }] });
+    const res = (id: string, content: string) => ({ role: "tool", tool_call_id: id, content });
+    const msgs: any[] = [
+      { role: "user", content: "fix it" },
+      call("r1", "read_file", { path: "index.html" }), res("r1", big),
+      call("r2", "read_file", { path: "ui.js" }), res("r2", big),
+      call("i1", "inspect_preview", {}), res("i1", `URL: http://x ${big}`),
+      call("r3", "read_file", { path: "./index.html" }), res("r3", big),
+      call("r4", "read_file", { path: "ui.js", start_line: 1, end_line: 50 }), res("r4", big),
+      call("i2", "inspect_preview", {}), res("i2", `URL: http://x ${big}`),
+    ];
+    const out = ftAi.supersede(msgs);
+    const len = (id: string) => (out.find((m: any) => m.tool_call_id === id) as any).content.length as number;
+    return (out.length === msgs.length && len("r1") < 300 && len("i1") < 300 && len("r3") === 5000 && len("r2") === 5000 && len("r4") === 5000 && len("i2") > 5000
+      && msgs[2].content.length === 5000) // the transcript itself is untouched
+      || JSON.stringify(["r1", "r2", "i1", "r3", "r4", "i2"].map((k) => [k, len(k)]));
+  });
+
   await check("a bash command that failed in PowerShell gets the PowerShell way to do it", () => {
     const esc = String.fromCharCode(27);
     const out = `exit code 1\n${esc}[31;1mpkill: ${esc}[31;1mThe term 'pkill' is not recognized as a name of a cmdlet\n${esc}[31;1mtrue: ${esc}[31;1mThe term 'true' is not recognized as a name`;

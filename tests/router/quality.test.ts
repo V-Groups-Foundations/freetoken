@@ -71,6 +71,17 @@ describe('auto routing learns from real results', () => {
     expect(learnedAdjustment({ ok: 30, errors: 0, good: 0, bad: 6 })).toBeLessThan(-5);
     expect(learnedAdjustment({ ok: 0, errors: 100, good: 0, bad: 100 })).toBe(-20); // capped
   });
+  it('benchmark runs (real tasks, graded by running them) weigh more than everyday votes', () => {
+    const quiet = { ok: 0, errors: 0, good: 0, bad: 0 };
+    expect(learnedAdjustment({ ...quiet, benchPassed: 2, benchTotal: 2 })).toBe(0); // too few to judge
+    expect(learnedAdjustment({ ...quiet, benchPassed: 8, benchTotal: 8 })).toBe(12);
+    expect(learnedAdjustment({ ...quiet, benchPassed: 6, benchTotal: 8 })).toBe(0);
+    expect(learnedAdjustment({ ...quiet, benchPassed: 4, benchTotal: 8 })).toBe(-12);
+    // a model that does well day to day but fails the benchmark ends up below one that passes it
+    expect(learnedAdjustment({ ok: 30, errors: 0, good: 6, bad: 0, benchPassed: 2, benchTotal: 8 }))
+      .toBeLessThan(learnedAdjustment({ ok: 30, errors: 0, good: 0, bad: 0, benchPassed: 8, benchTotal: 8 }));
+    expect(learnedAdjustment({ ok: 30, errors: 0, good: 6, bad: 0, benchPassed: 8, benchTotal: 8 })).toBe(16); // capped
+  });
   it('a model clients keep reporting as bad loses its first place for that task only', () => {
     const learned = new Map([['groq/qwen/qwen3.8-27b', -12]]);
     expect(order({ task: 'agent', learned })[0]).not.toBe('groq/qwen/qwen3.8-27b');

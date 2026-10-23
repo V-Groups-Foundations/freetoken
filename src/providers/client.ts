@@ -25,7 +25,8 @@ function extractMessage(text: string): string | undefined {
     const j = JSON.parse(text);
     const err = Array.isArray(j) ? j[0]?.error : j.error;
     if (typeof err === 'string') return err;
-    return err?.message ?? j.message;
+    // Cloudflare: {"success":false,"errors":[{"code":7003,"message":"…"}]}
+    return err?.message ?? j.message ?? (Array.isArray(j.errors) ? j.errors[0]?.message : undefined);
   } catch {
     return text ? text.slice(0, 200) : undefined;
   }
@@ -61,6 +62,11 @@ export function normalizeError(status: number, headers: Headers, bodyText: strin
   }
   // 404 = model retired/not on this key's plan; 410 = model reached end-of-life. Either way
   // skip just this model (and never let a dead test model block an otherwise-valid key).
+  // Cloudflare: the saved Account ID isn't one ("Could not route to /client/v4/accounts/<it>/…") — every
+  // model fails the same way until it's fixed, so it's the credentials, not one model
+  if (status === 404 && /could not route to \/client\/v4\/accounts\/|object identifier is invalid/i.test(message)) {
+    return { kind: 'auth', status, message: 'the Account ID saved with this key is wrong — paste the 32-character Account ID from the Cloudflare dashboard (Workers & Pages → Overview)' };
+  }
   if (status === 404 || status === 410) return { kind: 'not_found', status, message };
   // some providers say the same with a 400 (LLM7: "Model 'X' is currently unavailable.")
   if (status === 400 && MODEL_GONE.test(message)) return { kind: 'not_found', status, message };
@@ -88,6 +94,13 @@ export async function postJson(
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
+    // a 200 that isn't the API at all: a firewall answering "OK" for a blocked address (seen with GitHub
+    // Models on an office network). Streamed, it would go to the client as if it were the model's reply.
+    const type = res.headers.get('content-type') ?? '';
+    if (res.ok && /^text\/(plain|html)/i.test(type)) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: { kind: 'blocked', status: res.status, message: `the network answered instead of the provider (HTTP ${res.status}, ${type.split(';')[0]}: "${text.trim().slice(0, 40)}") — a firewall or proxy is blocking it` } };
+    }
     if (res.ok) return { ok: true, response: res };
     const text = await res.text().catch(() => '');
     return { ok: false, error: normalizeError(res.status, res.headers, text) };

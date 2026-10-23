@@ -31,7 +31,7 @@ describe('tapSseUsage', () => {
     let result: unknown;
     const out = await drain(tapSseUsage(sse(chunks).body!, (r) => { result = r; }));
     expect(out).toBe(chunks.join(''));
-    expect(result).toEqual({ usage: { promptTokens: 7, completionTokens: 2 }, completionChars: 5, failed: false });
+    expect(result).toEqual({ usage: { promptTokens: 7, completionTokens: 2 }, completionChars: 5, failed: false, signatures: new Map() });
   });
   it('an error event mid-stream counts as a failure (so routing steps around that model)', async () => {
     let result: { failed: boolean; error?: string } | undefined;

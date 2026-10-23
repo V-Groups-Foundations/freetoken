@@ -117,6 +117,110 @@ describe('routeChat', () => {
     expect(out.ok).toBe(true);
   });
 
+  it('falls back when a firewall answers 200 "OK" in plain text instead of the provider (streamed too)', async () => {
+    // GitHub Models on an office network: every request got a bare "OK", streamed to the client as the reply
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    const { p } = run((url) => url.includes(GROQ) ? new Response('OK\r\n', { headers: { 'content-type': 'text/plain' } })
+      : sse(['data: {"choices":[{"delta":{"content":"real answer"}}]}\n\n', 'data: [DONE]\n\n']), { stream: true });
+    const out = await p;
+    expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('gemini/flash');
+    expect(out.ok && await out.response.text()).toContain('real answer');
+    expect(out.ok && out.response.headers.get('x-freetoken-unreachable')).toBe('groq');
+  });
+
+  it("a Cloudflare key saved with a wrong Account ID is marked for fixing instead of failing every request", async () => {
+    await connect('cloudflare', 'cf_token');
+    await connect('groq', 'gsk_mine');
+    await db.insert(models).values({ provider: 'cloudflare', modelId: '@cf/x', displayName: 'X', tier: 'smart', priority: 0, contextWindow: 100000, supportsTools: true });
+    const { p } = run((url) => url.includes('cloudflare.com')
+      ? new Response('{"success":false,"errors":[{"code":7003,"message":"Could not route to /client/v4/accounts/me@example.com/ai/v1/chat/completions, perhaps your object identifier is invalid?"}]}', { status: 404, headers: { 'content-type': 'application/json' } })
+      : okJson());
+    const out = await p;
+    expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('groq/llama-70b');
+    expect((await listKeys(db, userId)).find((k) => k.provider === 'cloudflare')?.status).toBe('invalid');
+  });
+
+  it('sends Cloudflare messages in the form it takes (string content), and lets another model take what it still refuses', async () => {
+    await connect('cloudflare', 'cf_token');
+    await db.insert(models).values({ provider: 'cloudflare', modelId: '@cf/x', displayName: 'X', tier: 'smart', priority: 0, contextWindow: 100000, supportsTools: true });
+    const messages = [
+      { role: 'system', content: [{ type: 'text', text: 'be brief' }] },
+      { role: 'user', content: [{ type: 'text', text: 'run it' }, { type: 'text', text: 'please' }] },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'run', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'done' },
+    ];
+    const ok = run(() => okJson('fine'), { messages });
+    expect((await ok.p).ok).toBe(true);
+    const sent = ok.f.calls[0].body!.messages as { content: unknown }[];
+    expect(sent.map((m) => m.content)).toEqual(['be brief', 'run it\nplease', '', 'done']);
+    // a format it still refuses: another model answers instead of the request failing
+    await connect('groq', 'gsk_mine');
+    const refused = run((url) => url.includes('cloudflare.com')
+      ? new Response('{"errors":[{"message":"AiError: Bad input: Error: oneOf at \'/\' not met"}]}', { status: 400, headers: { 'content-type': 'application/json' } })
+      : okJson(), { messages });
+    const out = await refused.p;
+    expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('groq/llama-70b');
+  });
+
+  it('sends Gemini only the settings it knows (it refuses a whole request over one it doesn\'t)', async () => {
+    await connect('gemini', 'AIza_mine');
+    const { f, p } = run(() => okJson(), { temperature: 0.2, repetition_penalty: 1.1, chat_template_kwargs: { thinking: true } });
+    expect((await p).ok).toBe(true);
+    expect(f.calls[0].body).toMatchObject({ model: 'flash', temperature: 0.2 });
+    expect(f.calls[0].body).not.toHaveProperty('repetition_penalty');
+    expect(f.calls[0].body).not.toHaveProperty('chat_template_kwargs');
+  });
+
+  it("keeps Gemini's thought signatures across requests, so it can do multi-step tool work", async () => {
+    await connect('gemini', 'AIza_mine');
+    const tools = [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: {} } } }];
+    // 1st step: Gemini calls a tool and signs the call
+    // (exactly as Gemini streams it: no `index` on the call, finish_reason "stop")
+    const first = run(() => sse([
+      'data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"id":"call_a","type":"function","function":{"name":"read_file","arguments":"{}"},"extra_content":{"google":{"thought_signature":"SIG-A"}}}]},"index":0}]}\n\n',
+      'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":"stop","index":0}]}\n\n',
+      'data: [DONE]\n\n']), { stream: true, tools });
+    const r1 = await first.p;
+    expect(r1.ok).toBe(true);
+    // the client reads the stream (the signature is saved as it passes)
+    const streamed = r1.ok ? await r1.response.text() : '';
+    // Gemini leaves out each call's `index` and says "stop" after calling tools: clients get the standard form
+    const chunks = streamed.split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6)));
+    expect(chunks[0].choices[0].delta.tool_calls[0].index).toBe(0);
+    expect(chunks.at(-1).choices[0].finish_reason).toBe('tool_calls');
+    // 2nd step: the client sends the call back without the signature (as V-Run does), plus one from another model
+    const second = run(() => okJson('done'), { tools, messages: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_old', type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'call_old', content: 'x' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_a', type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'call_a', content: 'y' },
+    ] });
+    expect((await second.p).ok).toBe(true);
+    const sent = second.f.calls[0].body!.messages as { tool_calls?: { id: string; extra_content?: { google?: { thought_signature?: string } } }[] }[];
+    const sig = (id: string) => sent.flatMap((m) => m.tool_calls ?? []).find((c) => c.id === id)?.extra_content?.google?.thought_signature;
+    expect(sig('call_a')).toBe('SIG-A');
+    expect(sig('call_old')).toBe('skip_thought_signature_validator');
+  });
+
+  it('keeps a conversation on the model it has been working with (x-freetoken-session)', async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    // later = past the 10 minutes in which a failed model ranks lower (the pin lasts 30)
+    const ask = (session: string | undefined, handler: Handler, later = 0) => routeChat(
+      { userId, source: 'api', session, body: { model: 'auto-smart', messages: [{ role: 'user', content: 'hi' }] } },
+      { db, kv, fetchImpl: fakeFetch(handler).fn, vaultKey: TEST_VAULT_KEY, now: () => Date.now() + later });
+    const who = (o: Awaited<ReturnType<typeof routeChat>>) => o.ok ? o.response.headers.get('x-freetoken-provider') : null;
+    // groq's model is briefly unavailable, so the conversation starts on Gemini…
+    expect(who(await ask('s1', (url) => url.includes(GROQ) ? new Response('{"error":{"message":"gone"}}', { status: 404 }) : okJson()))).toBe('gemini/flash');
+    // …and stays there once groq is back; a new conversation gets the top model
+    const later = 11 * 60_000;
+    expect(who(await ask('s1', () => okJson(), later))).toBe('gemini/flash');
+    expect(who(await ask('s2', () => okJson(), later))).toBe('groq/llama-70b');
+    expect(who(await ask(undefined, () => okJson(), later))).toBe('groq/llama-70b');
+  });
+
   it("falls back when a model answers 400 'currently unavailable' (LLM7), instead of failing the request", async () => {
     await connect('groq', 'gsk_mine');
     await connect('gemini', 'AIza_mine');

@@ -285,6 +285,11 @@ export interface Session {
   loopWarnings?: number;
   /** every version each file had this turn (hashes): writing one back is undoing, not progress */
   fileStates?: Map<string, Set<string>>;
+  /** the request asks for changes; when it doesn't ("run the app", a question), the first edit is questioned */
+  changeAsked?: boolean;
+  scopeWarned?: boolean;
+  /** the page was already reviewed by a vision model since files last changed */
+  reviewed?: boolean;
   stuck?: boolean;
   mustStop?: boolean;
   /** saved checks were rerun this task (regression gate), and files changed since the last run */
@@ -607,6 +612,15 @@ export const stepsLeftNote = (turn: number, max = MAX_STEPS) => turn === max - 9
   : null;
 
 /** Per-turn state both agent loops start from. `earlier` is the recent conversation: "build it" after describing an app is a big job too. */
+// Does the request ask for changes? "run the app, I want to send a link" doesn't — an agent that took it
+// as "fix everything you see" rewrote the page's layout for half an hour. Unclear → yes (never block work
+// that was asked for); only a request that's clearly about running, checking or explaining says no.
+const CHANGE_WORDS = /\b(make|makes|build|create|add|fix|change|update|edit|write|implement|remove|delete|rename|refactor|improve|redesign|restyle|style|move|replace|convert|set ?up|install|generate|translate|optimi[sz]e|debug|solve|resolve|correct|clean ?up|format|upgrade|migrate|rewrite|redo|tweak|adjust|integrate|connect|support|enable|disable|turn (on|off)|go ahead|do (it|that|this|all|them)|apply)\b/i;
+const NO_CHANGE_WORDS = /\b(run|start|launch|open|serve|host|share|send|show|explain|why|what|how|where|which|check|test|look|tell|review|status|is (it|this|that|there)|can you see|does it)\b|\?\s*$/i;
+// "don't change anything", "without editing", "no need to fix it": a change word there says the opposite
+const NEGATED = /\b(don'?t|do not|never|without|no need to|not to)\b[^.,;!?]*/gi;
+export const asksForChange = (text: string) => { const t = text.replace(NEGATED, " "); return CHANGE_WORDS.test(t) || !NO_CHANGE_WORDS.test(t); };
+
 export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.mode = req.worker ? "agent" : req.mode;
   s.worker = !!req.worker;
@@ -623,6 +637,9 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.actions = [];
   s.loopWarnings = 0;
   s.fileStates = new Map();
+  s.changeAsked = !!req.worker || asksForChange(req.text);
+  s.scopeWarned = false;
+  s.reviewed = false;
   s.stuck = false;
   s.mustStop = false;
   s.checkGates = 0;
@@ -672,6 +689,11 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   if (s.mode === "team" && WRITES.has(name) && !team.hasAgents(s.id)) {
     return { content: "Not yet: this is Team mode, so the changes are made by agents. Split the job into 2-4 parts with separate files and start an agent for each with spawn_agent (a self-contained task each: goal, files it owns, the shared contract, how to verify). You can read files, run commands and run the app to plan first. Once agents have started, you can edit too (for shared contracts and integration). If the request needs no file changes (run the app, answer a question), just do it: no agents needed.", summary: "Team mode: start agents first" };
   }
+  // the request didn't ask for changes: the first edit has to be justified (asked once, then allowed)
+  if (WRITES.has(name) && s.changeAsked === false && !s.scopeWarned) {
+    s.scopeWarned = true;
+    return { content: "Not changed: the user's request doesn't ask for changes to files (they asked to run, check, share or explain something). Do what they asked first. If a change is truly needed for that — the app won't start without it — say in one sentence what you'll change and why, then call the tool again and change only that. Don't fix or improve other things you noticed: mention them at the end instead.", summary: "Not asked to change files" };
+  }
   let rel: string | null = null;
   if ((WRITES.has(name) || name === "read_file") && typeof input?.path === "string") { try { rel = resolveInRoot(input.path).rel; } catch { /* the tool reports it */ } }
   if (rel && WRITES.has(name)) {
@@ -705,7 +727,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   }
   const loop = noteAction(s, name, input, r.summary, !!rel && WRITES.has(name) && !undone, emit);
   if (loop) r = { ...r, content: r.content + loop };
-  if (rel && WRITES.has(name)) { s.pageStale = true; s.filesSinceGate = true; }
+  if (rel && WRITES.has(name)) { s.pageStale = true; s.filesSinceGate = true; s.reviewed = false; }
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
   if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) s.unchecked = false;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
