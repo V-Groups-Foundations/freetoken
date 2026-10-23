@@ -11,7 +11,10 @@ export interface ModelUsage {
   modelId: string;
   displayName: string;
   tier: string;
+  /** requests that succeeded today */
   requests: number;
+  /** calls that reached the provider (successes and errors): what a quota counts */
+  attempts: number;
   tokens: number;
   /** part of `tokens` that was guessed because the provider didn't report counts */
   estimatedTokens: number;
@@ -27,6 +30,8 @@ export interface ModelUsage {
   period: 'minute' | 'day' | 'month' | 'window' | null;
   /** the catalog's per-minute limit, shown alongside */
   rpm: number | null;
+  /** the latest try was refused for a rate limit, with no success since */
+  limitedAt: string | null;
 }
 
 export interface AccountUsage {
@@ -168,9 +173,9 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
     let account: AccountUsage | null = null;
     if (pool) {
       const ledger = pool.period === 'month' ? usedMonth : used;
-      const counted = catalog
-        .filter((m) => m.provider === key.provider)
-        .reduce((n, m) => n + (ledger.get(usageKey(m.provider, m.modelId))?.requests ?? 0), 0);
+      // every call to this provider, including models no longer in the catalog: the pool counted them
+      let counted = 0;
+      for (const [k, u] of ledger) if (k.startsWith(`${key.provider}/`)) counted += u.attempts;
       account = liveAccount
         ? { label: pool.label, ...liveAccount, period: pool.period, resetAt: pool.period === 'month' ? nextMonth : nextDay, source: 'provider', note: pool.note }
         : { label: pool.label, used: counted, limit: pool.limit, remaining: Math.max(0, pool.limit - counted), period: pool.period, resetAt: pool.period === 'month' ? nextMonth : nextDay, source: 'estimate', note: pool.note };
@@ -182,7 +187,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
       .filter((m) => m.provider === key.provider)
       .sort((a, b) => a.priority - b.priority || a.id - b.id)
       .map((m) => {
-        const u = used.get(usageKey(m.provider, m.modelId)) ?? { requests: 0, tokens: 0, estimatedTokens: 0 };
+        const u = used.get(usageKey(m.provider, m.modelId)) ?? { requests: 0, attempts: 0, tokens: 0, estimatedTokens: 0, limitedAt: null };
         const live = liveLimits.get(usageKey(m.provider, m.modelId));
         let limitRequests: number | null = null;
         let remainingRequests: number | null = null;
@@ -206,7 +211,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           period = live.limitRequests != null && live.limitRequests === m.rpd ? 'day' : live.limitRequests != null && live.limitRequests === m.rpm ? 'minute' : 'window';
         } else if (m.rpd != null) {
           limitRequests = m.rpd;
-          remainingRequests = Math.max(0, m.rpd - u.requests);
+          remainingRequests = Math.max(0, m.rpd - u.attempts);
           source = 'estimate';
           period = 'day';
           resetAt = nextDay; // counted from FreeToken's own records, which start over at 00:00 UTC
@@ -220,6 +225,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           displayName: m.displayName,
           tier: m.tier,
           requests: u.requests,
+          attempts: u.attempts,
           tokens: u.tokens,
           estimatedTokens: u.estimatedTokens,
           limitRequests,
@@ -229,6 +235,7 @@ export async function getUsageSummary(userId: string, deps: Deps): Promise<Usage
           asOf,
           period,
           rpm: m.rpm ?? null,
+          limitedAt: u.limitedAt?.toISOString() ?? null,
         };
       });
 

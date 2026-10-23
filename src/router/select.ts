@@ -16,7 +16,8 @@ export interface SelectInput {
   models: CatalogModel[];
   connected: { provider: string; excludedFromAuto: boolean }[];
   cooling: Set<string>;
-  usageToday: Map<string, { requests: number; tokens: number }>;
+  /** `attempts` (successes and errors, which providers count against a daily quota) when known */
+  usageToday: Map<string, { requests: number; attempts?: number; tokens: number }>;
   promptTokens: number;
   needsTools: boolean;
   needsVision?: boolean;
@@ -66,7 +67,7 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
   const overLimit = (m: CatalogModel) => {
     const u = input.usageToday.get(usageKey(m.provider, m.modelId));
     if (!u) return false;
-    return (m.rpd != null && u.requests >= m.rpd) || (m.tpd != null && u.tokens >= m.tpd);
+    return (m.rpd != null && (u.attempts ?? u.requests) >= m.rpd) || (m.tpd != null && u.tokens >= m.tpd);
   };
   const spent = (m: CatalogModel) => overLimit(m) || !!input.exhausted?.has(usageKey(m.provider, m.modelId));
   // a prompt bigger than the model's token allowance is refused every time (Groq: 413): don't try

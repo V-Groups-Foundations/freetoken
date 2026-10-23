@@ -167,6 +167,29 @@ describe('getUsageSummary', () => {
     expect(d.getUTCHours() + d.getUTCMinutes() + d.getUTCSeconds()).toBe(0);
   });
 
+  it('counts failed calls against a quota (a provider counts them too), but not rate-limit refusals', async () => {
+    await saveKey(db, userId, 'groq', 'gsk_mine', null, TEST_VAULT_KEY);
+    await saveKey(db, userId, 'cohere', 'co-mine', null, TEST_VAULT_KEY);
+    const { models, usageEvents } = await import('@/db/schema');
+    const { eq } = await import('drizzle-orm');
+    await db.update(models).set({ rpd: 100 }).where(eq(models.modelId, 'llama-8b'));
+    const ev = { userId, source: 'api' as const, promptTokens: 1, completionTokens: 1, latencyMs: 1 };
+    for (const status of ['ok', 'ok', 'error', 'rate_limited'] as const) await recordUsage(db, { ...ev, provider: 'groq', modelId: 'llama-8b', status });
+    // a Cohere model that has since left the catalog still used the monthly trial pool
+    await recordUsage(db, { ...ev, provider: 'cohere', modelId: 'retired-model', status: 'ok' });
+    await recordUsage(db, { ...ev, provider: 'cohere', modelId: 'retired-model', status: 'error' });
+    const s = await getUsageSummary(userId, deps());
+    const fast = s.providers.find((p) => p.provider === 'groq')!.models.find((m) => m.modelId === 'llama-8b')!;
+    expect(fast).toMatchObject({ requests: 2, attempts: 3, remainingRequests: 97, limitRequests: 100 });
+    expect(fast.limitedAt).not.toBeNull(); // the latest try was refused, nothing succeeded since
+    expect(s.today.requests).toBe(3); // "requests today" stays the successful ones
+    expect(s.providers.find((p) => p.provider === 'cohere')!.account).toMatchObject({ used: 2, remaining: 998 });
+    // a success after the refusal means the limit has passed
+    await db.insert(usageEvents).values({ ...ev, provider: 'groq', modelId: 'llama-8b', status: 'ok', createdAt: new Date(Date.now() + 1000) });
+    const after = (await getUsageSummary(userId, deps())).providers.find((p) => p.provider === 'groq')!.models.find((m) => m.modelId === 'llama-8b')!;
+    expect(after.limitedAt).toBeNull();
+  });
+
   it('only reports the signed-in user', async () => {
     const other = (await createUser(db)).id;
     await saveKey(db, other, 'groq', 'gsk_other', null, TEST_VAULT_KEY);

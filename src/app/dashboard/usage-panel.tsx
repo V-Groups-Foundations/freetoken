@@ -100,11 +100,13 @@ function ModelRow({ m, now }: { m: ModelUsage; now: number }) {
       ) : (
         <div className="flex items-baseline justify-between gap-3 text-sm">
           <span className="min-w-0 truncate">{name}</span>
-          <span className="shrink-0 text-[var(--muted)]">{m.requests > 0 ? 'used today' : 'not used today'}</span>
+          {m.limitedAt
+            ? <span className="shrink-0 text-amber-500">limit hit</span>
+            : <span className="shrink-0 text-[var(--muted)]">{m.requests > 0 ? 'used today' : 'not used today'}</span>}
         </div>
       )}
       <div className="text-xs text-[var(--faint)]">
-        {[sourceNote(m, now), !known && m.source !== 'shared' && (m.rpm ? `limit about ${m.rpm}/min, no daily cap known` : 'no limit published')]
+        {[m.limitedAt && `last try refused by its rate limit${clock(m.limitedAt, now) ? ` at ${clock(m.limitedAt, now)}` : ''}`, sourceNote(m, now), !known && m.source !== 'shared' && (m.rpm ? `limit about ${m.rpm}/min, no daily cap known` : 'no limit published')]
           .filter(Boolean).join(' · ')}
       </div>
     </div>
@@ -129,7 +131,7 @@ function ProviderNumbers({ p }: { p: ProviderUsage }) {
           {p.models.map((m) => (
             <tr key={m.modelId}>
               <td className="py-1">{m.displayName}</td>
-              <td className={cell}>{m.requests.toLocaleString()}</td>
+              <td className={cell}>{m.requests.toLocaleString()}{m.attempts > m.requests && <> (+{(m.attempts - m.requests).toLocaleString()} failed)</>}</td>
               <td className={cell}>{tokensText(m.tokens, m.estimatedTokens).replace(' tokens', '')}</td>
               <td className={cell}>{m.limitRequests != null && m.remainingRequests != null ? `${m.remainingRequests.toLocaleString()} of ${m.limitRequests.toLocaleString()}` : '—'}</td>
             </tr>

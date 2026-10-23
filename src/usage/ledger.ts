@@ -78,19 +78,36 @@ export async function recordFeedback(db: DB, f: { userId: string; provider: stri
 }
 
 /** Successful requests and tokens per provider/model since `start`. */
+/**
+ * Per model since `start`: `requests` that succeeded (and their tokens), `attempts` that reached the
+ * provider (successes plus errors: providers count a failed call against a daily or monthly quota too;
+ * a refusal for a rate limit doesn't use one), and `limitedAt` when the latest try was refused for a
+ * rate limit with no success since.
+ */
 export async function usageSince(db: DB, userId: string, start: Date) {
+  const ok = sql`${usageEvents.status} = 'ok'`;
   const rows = await db
     .select({
       provider: usageEvents.provider,
       modelId: usageEvents.modelId,
-      requests: sql<number>`count(*)::int`,
-      tokens: sql<number>`coalesce(sum(${usageEvents.promptTokens} + ${usageEvents.completionTokens}), 0)::int`,
-      estimatedTokens: sql<number>`coalesce(sum(case when ${usageEvents.estimated} then ${usageEvents.promptTokens} + ${usageEvents.completionTokens} else 0 end), 0)::int`,
+      requests: sql<number>`(count(*) filter (where ${ok}))::int`,
+      attempts: sql<number>`(count(*) filter (where ${usageEvents.status} <> 'rate_limited'))::int`,
+      tokens: sql<number>`coalesce(sum(${usageEvents.promptTokens} + ${usageEvents.completionTokens}) filter (where ${ok}), 0)::int`,
+      estimatedTokens: sql<number>`coalesce(sum(${usageEvents.promptTokens} + ${usageEvents.completionTokens}) filter (where ${ok} and ${usageEvents.estimated}), 0)::int`,
+      // epoch of a timestamp without time zone reads it as UTC, which is how it's stored
+      lastLimited: sql<number | null>`(extract(epoch from max(${usageEvents.createdAt}) filter (where ${usageEvents.status} = 'rate_limited')) * 1000)::float8`,
+      lastOk: sql<number | null>`(extract(epoch from max(${usageEvents.createdAt}) filter (where ${ok})) * 1000)::float8`,
     })
     .from(usageEvents)
-    .where(and(eq(usageEvents.userId, userId), eq(usageEvents.status, 'ok'), gte(usageEvents.createdAt, start)))
+    .where(and(eq(usageEvents.userId, userId), gte(usageEvents.createdAt, start)))
     .groupBy(usageEvents.provider, usageEvents.modelId);
-  return new Map(rows.map((r) => [usageKey(r.provider, r.modelId), { requests: r.requests, tokens: r.tokens, estimatedTokens: r.estimatedTokens }]));
+  return new Map(rows.map((r) => {
+    const limited = r.lastLimited != null && (r.lastOk == null || Number(r.lastLimited) > Number(r.lastOk));
+    return [usageKey(r.provider, r.modelId), {
+      requests: r.requests, attempts: r.attempts, tokens: r.tokens, estimatedTokens: r.estimatedTokens,
+      limitedAt: limited ? new Date(Number(r.lastLimited)) : null,
+    }];
+  }));
 }
 
 // ~chars/4, but an image is counted as a flat cost rather than its (huge) base64 length,

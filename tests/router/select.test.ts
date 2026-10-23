@@ -51,6 +51,13 @@ describe('selectCandidates', () => {
     }));
     expect(ids(r)).toEqual(['openrouter/meta-llama/llama-3.3-70b-instruct:free']);
   });
+  it('counts failed calls toward a daily limit: 7 successes and 3 errors spend a 10-a-day allowance', () => {
+    const r = selectCandidates(base({
+      models: catalog.map((x) => (x.provider === 'gemini' ? { ...x, rpd: 10 } : x)),
+      usageToday: new Map([['gemini/flash', { requests: 7, attempts: 10, tokens: 0 }]]),
+    }));
+    expect(ids(r)).not.toContain('gemini/flash');
+  });
   it('filters by context window and tool support (Gemini included: its thought signatures are restored)', () => {
     expect(ids(selectCandidates(base({ needsTools: true })))).toEqual(['groq/llama-70b', 'gemini/flash']);
     expect(selectCandidates(base({ promptTokens: 200_000 }))).toEqual([]);

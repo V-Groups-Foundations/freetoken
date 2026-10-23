@@ -14,7 +14,9 @@ describe('ledger', () => {
     await recordUsage(db, { ...ev, status: 'ok' });
     await recordUsage(db, { ...ev, status: 'ok' });
     await recordUsage(db, { ...ev, status: 'rate_limited' });
-    expect((await usageToday(db, id)).get('groq/m')).toEqual({ requests: 2, tokens: 30, estimatedTokens: 0 });
+    await recordUsage(db, { ...ev, status: 'error', promptTokens: 0, completionTokens: 0 });
+    // the error reached the provider (it counts against a quota); the rate-limit refusal didn't
+    expect((await usageToday(db, id)).get('groq/m')).toMatchObject({ requests: 2, attempts: 3, tokens: 30, estimatedTokens: 0 });
   });
   it('estimates tokens', () => {
     expect(estimateTokens([{ role: 'user', content: 'x'.repeat(400) }])).toBeGreaterThan(100);
