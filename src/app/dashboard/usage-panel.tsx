@@ -35,7 +35,16 @@ function resetLine(period: string | null, resetAt: string | null, now: number, l
   return `Refills in ${left}`;
 }
 
-/** Claude-style meter: "% used" on the right, the bar, then used / left and when it resets. */
+/** How much is left, in words: what the meter's colour says, without a count to read. */
+function standing(ratio: number): string {
+  if (ratio >= 1) return 'Limit reached';
+  if (ratio >= 0.9) return 'Almost used up';
+  if (ratio >= 0.7) return 'Running low';
+  return 'Plenty left';
+}
+
+/** Claude-style meter: "% used" on the right, the bar, then how much is left in words and when it resets.
+ * The counts behind it are in each card's "Numbers". */
 function Meter({ label, used, limit, period, resetAt, note, now, live }: {
   label: React.ReactNode; used: number; limit: number; period: string | null; resetAt: string | null; note?: string; now: number; live?: boolean;
 }) {
@@ -54,7 +63,7 @@ function Meter({ label, used, limit, period, resetAt, note, now, live }: {
         <div className="h-full rounded-full transition-all duration-700" style={{ width: `${used > 0 ? Math.max(2, ratio * 100) : 0}%`, background: fill }} />
       </div>
       <div className="flex flex-wrap justify-between gap-x-3 text-xs text-[var(--faint)]">
-        <span className="tabular-nums">{used.toLocaleString()} used · {Math.max(0, limit - used).toLocaleString()} of {limit.toLocaleString()} left{note ? ` · ${note}` : ''}</span>
+        <span>{standing(ratio)}{note ? ` · ${note}` : ''}</span>
         {reset && <span className="tabular-nums">{reset}</span>}
       </div>
     </div>
@@ -62,12 +71,12 @@ function Meter({ label, used, limit, period, resetAt, note, now, live }: {
 }
 
 function sourceNote(m: ModelUsage, now: number): string {
-  if (m.source === 'estimate') return ' · published limit, not reported live';
-  if (m.source === 'shared') return ' · counts toward the shared limit';
+  if (m.source === 'estimate') return 'published limit, not reported live';
+  if (m.source === 'shared') return 'counts toward the shared limit';
   if (m.source !== 'provider') return '';
   // a live number goes stale between requests; say when it was read
   const age = m.asOf && now ? now - new Date(m.asOf).getTime() : 0;
-  return age > 5 * 60_000 ? ` · live, as of ${clock(m.asOf, now)}` : ' · live';
+  return age > 5 * 60_000 ? `live, as of ${clock(m.asOf, now)}` : 'live';
 }
 
 /** "37%", or "under 1%" — never "0%" next to a number marked as partly estimated. */
@@ -91,14 +100,43 @@ function ModelRow({ m, now }: { m: ModelUsage; now: number }) {
       ) : (
         <div className="flex items-baseline justify-between gap-3 text-sm">
           <span className="min-w-0 truncate">{name}</span>
-          <span className="shrink-0 tabular-nums text-[var(--muted)]">{m.requests.toLocaleString()} today</span>
+          <span className="shrink-0 text-[var(--muted)]">{m.requests > 0 ? 'used today' : 'not used today'}</span>
         </div>
       )}
       <div className="text-xs text-[var(--faint)]">
-        {tokensText(m.tokens, m.estimatedTokens)} today{sourceNote(m, now)}
-        {!known && m.source !== 'shared' && (m.rpm ? ` · limit about ${m.rpm}/min, no daily cap known` : ' · no limit published')}
+        {[sourceNote(m, now), !known && m.source !== 'shared' && (m.rpm ? `limit about ${m.rpm}/min, no daily cap known` : 'no limit published')]
+          .filter(Boolean).join(' · ')}
       </div>
     </div>
+  );
+}
+
+/** The counts behind a provider's meters, folded away: what you used and what's left, per model. */
+function ProviderNumbers({ p }: { p: ProviderUsage }) {
+  const cell = 'py-1 pl-3 text-right tabular-nums';
+  return (
+    <details className="text-xs text-[var(--faint)]">
+      <summary className="cursor-pointer select-none">Numbers</summary>
+      <table className="mt-2 w-full">
+        <thead>
+          <tr className="text-left"><th className="py-1 font-medium">Today</th><th className={`${cell} font-medium`}>Requests</th><th className={`${cell} font-medium`}>Tokens</th><th className={`${cell} font-medium`}>Left</th></tr>
+        </thead>
+        <tbody>
+          {p.account && (
+            <tr><td className="py-1">{p.account.label}</td><td className={cell}>{p.account.used.toLocaleString()}</td><td className={cell}>—</td>
+              <td className={cell}>{p.account.remaining.toLocaleString()} of {p.account.limit.toLocaleString()}</td></tr>
+          )}
+          {p.models.map((m) => (
+            <tr key={m.modelId}>
+              <td className="py-1">{m.displayName}</td>
+              <td className={cell}>{m.requests.toLocaleString()}</td>
+              <td className={cell}>{tokensText(m.tokens, m.estimatedTokens).replace(' tokens', '')}</td>
+              <td className={cell}>{m.limitRequests != null && m.remainingRequests != null ? `${m.remainingRequests.toLocaleString()} of ${m.limitRequests.toLocaleString()}` : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 
@@ -128,6 +166,7 @@ function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
       <div className="divide-y divide-[var(--border)]">
         {p.models.map((m) => <ModelRow key={m.modelId} m={m} now={now} />)}
       </div>
+      <ProviderNumbers p={p} />
     </div>
   );
 }
@@ -166,56 +205,19 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
     <section className="space-y-6">
       <PageHeader
         title="Usage"
-        subtitle="Live free-tier quota across your connected providers."
+        subtitle="How much of your free allowance is used, and when it comes back."
         actions={
           <button onClick={() => void refresh()} disabled={refreshing} className="btn btn-secondary btn-sm">
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         }
       />
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="card card-pad">
-          <div className="faint text-xs font-medium">Requests today</div>
-          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.requests.toLocaleString()}</div>
-          <div className="faint text-xs">
-            successful, since {clock(data.dayStartedAt, now) || 'midnight UTC'}
-            {now > 0 && <> · new day in {countdown(new Date(new Date(data.dayStartedAt).getTime() + 86_400_000).toISOString(), now)}</>}
-          </div>
-        </div>
-        <div className="card card-pad">
-          <div className="faint text-xs font-medium">Tokens today</div>
-          <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.estimatedTokens > 0 ? '≈ ' : ''}{data.today.tokens.toLocaleString()}</div>
-          <div className="faint text-xs">
-            {data.today.estimatedTokens > 0
-              ? `prompt + completion · ${estimatedShare(data.today.estimatedTokens, data.today.tokens)} estimated (the provider didn't report counts)`
-              : 'prompt + completion, as reported by the providers'}
-          </div>
-        </div>
-        <div className="card card-pad">
-          <div className="faint text-xs font-medium">Free requests left</div>
-          {data.liveRemainingRequests > 0 ? (
-            <>
-              <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.liveRemainingRequests.toLocaleString()}</div>
-              <div className="faint text-xs">
-                reported by the providers
-                {data.publishedRemainingRequests > 0 && <> · plus ≈{data.publishedRemainingRequests.toLocaleString()} by published limits</>}
-                {' '}· per-minute-only providers not counted
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">≈ {data.publishedRemainingRequests.toLocaleString()}</div>
-              <div className="faint text-xs">by published limits — no provider has reported live numbers yet · per-minute-only providers not counted</div>
-            </>
-          )}
-        </div>
-      </div>
-      {data.overall.limit > 0 && (
+      {data.overall.limit > 0 ? (
         <div className="card card-pad neon-frame space-y-3">
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div>
               <div className="eyebrow">overall</div>
-              <h2 className="h2 mt-1.5">All your free daily limits</h2>
+              <h2 className="h2 mt-1.5">Your free capacity today</h2>
             </div>
             <div className="text-right">
               <div className="text-3xl font-semibold tracking-tight tabular-nums">{Math.round((data.overall.used / data.overall.limit) * 100)}%</div>
@@ -229,10 +231,55 @@ export function UsagePanel({ initial }: { initial: UsageSummary }) {
             Shared allowances are counted once; monthly and per-minute limits (and providers with no daily cap) aren&apos;t included.
           </p>
         </div>
+      ) : (
+        <div className="card card-pad">
+          <h2 className="font-semibold">Your free capacity today</h2>
+          <p className="faint mt-1 text-sm">None of your connected providers has a daily limit FreeToken knows, so there&apos;s no overall meter — each provider below shows what it can.</p>
+        </div>
       )}
       <div className="grid gap-4 md:grid-cols-2">
         {data.providers.map((p) => <ProviderCard key={p.provider} p={p} now={now} />)}
       </div>
+      <details className="card card-pad">
+        <summary className="cursor-pointer select-none text-sm font-medium">Numbers</summary>
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          <div className="card card-pad">
+            <div className="faint text-xs font-medium">Requests today</div>
+            <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.requests.toLocaleString()}</div>
+            <div className="faint text-xs">
+              successful, since {clock(data.dayStartedAt, now) || 'midnight UTC'}
+              {now > 0 && <> · new day in {countdown(new Date(new Date(data.dayStartedAt).getTime() + 86_400_000).toISOString(), now)}</>}
+            </div>
+          </div>
+          <div className="card card-pad">
+            <div className="faint text-xs font-medium">Tokens today</div>
+            <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.today.estimatedTokens > 0 ? '≈ ' : ''}{data.today.tokens.toLocaleString()}</div>
+            <div className="faint text-xs">
+              {data.today.estimatedTokens > 0
+                ? `prompt + completion · ${estimatedShare(data.today.estimatedTokens, data.today.tokens)} estimated (the provider didn't report counts)`
+                : 'prompt + completion, as reported by the providers'}
+            </div>
+          </div>
+          <div className="card card-pad">
+            <div className="faint text-xs font-medium">Free requests left</div>
+            {data.liveRemainingRequests > 0 ? (
+              <>
+                <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{data.liveRemainingRequests.toLocaleString()}</div>
+                <div className="faint text-xs">
+                  reported by the providers
+                  {data.publishedRemainingRequests > 0 && <> · plus ≈{data.publishedRemainingRequests.toLocaleString()} by published limits</>}
+                  {' '}· per-minute-only providers not counted
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">≈ {data.publishedRemainingRequests.toLocaleString()}</div>
+                <div className="faint text-xs">by published limits — no provider has reported live numbers yet · per-minute-only providers not counted</div>
+              </>
+            )}
+          </div>
+        </div>
+      </details>
     </section>
   );
 }
