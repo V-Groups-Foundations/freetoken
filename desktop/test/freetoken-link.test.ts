@@ -555,6 +555,14 @@ async function main() {
       || JSON.stringify({ whole, cut, typo });
   });
 
+  await check("console lines say which file failed to load; Tailwind's CDN warning is a note, not a warning to fix", () => {
+    const missing = runner.consoleLine("error", "Failed to load resource: the server responded with a status of 404 (Not Found)", "http://localhost:5173/img/hero.jpg");
+    const tw = runner.consoleLine("warning", "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it…");
+    const other = runner.consoleLine("error", "Uncaught TypeError: x is undefined", "http://localhost:5173/app.js");
+    return (missing.endsWith("— http://localhost:5173/img/hero.jpg") && missing.startsWith("[error]") && tw.startsWith("[note]") && other === "[error] Uncaught TypeError: x is undefined")
+      || JSON.stringify({ missing, tw, other });
+  });
+
   await check("a page that shows nothing, or whose title is the whole page, is called broken (not the preview)", async () => {
     let title = "x".repeat(400), text = "";
     runner.setPreviewHost({ open: async () => {}, inspect: async () => ({ url: "http://localhost:5173/", title, text, console: [] }) });

@@ -24,7 +24,7 @@ import path from "node:path";
   const browser = await chromium.launch({ channel: "chrome" });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   let consoleLines: string[] = [];
-  page.on("console", (m) => consoleLines.push(`[${m.type() === "warning" ? "warning" : m.type()}] ${m.text().slice(0, 300)}`));
+  page.on("console", (m) => consoleLines.push(runner.consoleLine(m.type(), m.text(), m.location().url)));
   page.on("pageerror", (e) => consoleLines.push(`[error] ${e.message}`));
   const runner = await import("../src/main/runner");
   // as in the app: FreeToken's own port isn't the project's

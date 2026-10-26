@@ -51,6 +51,18 @@ export interface PreviewHost {
   setWidth?(width: number | null): Promise<void>;
 }
 
+/**
+ * One line of the preview's console as the agent reads it. "Failed to load resource: 404" alone doesn't
+ * say what's missing, so the address goes with it; Tailwind's CDN build warns on every page built the way
+ * the design brief says to, so that one is a note (not a warning to fix).
+ */
+export function consoleLine(level: string, message: string, source?: string) {
+  const text = message.slice(0, 500);
+  if (/cdn\.tailwindcss\.com should not be used in production/i.test(text)) return "[note] Tailwind's CDN build warns about production use: expected for a site built with it, nothing to fix.";
+  const where = /^Failed to load resource/i.test(text) && source && !text.includes(source) ? ` — ${source.slice(0, 200)}` : "";
+  return `[${level}] ${text}${where}`;
+}
+
 /** Page-side: how wide the page really is at this width, and what sticks out past the right edge. */
 export const OVERFLOW_PROBE = `(() => { const w = innerWidth, page = document.documentElement.scrollWidth;
   const name = (e) => e.tagName.toLowerCase() + (e.id ? "#" + e.id : "") + (e.classList.length ? "." + [...e.classList].slice(0, 2).join(".") : "");

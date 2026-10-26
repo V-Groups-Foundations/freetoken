@@ -295,9 +295,9 @@ function ensurePreview() {
   const wc = v.webContents;
   desktopUA = wc.getUserAgent();
   wc.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) wc.loadURL(url).catch(() => {}); return { action: "deny" }; });
-  wc.on("console-message", (e: any, legacyLevel?: number, legacyMessage?: string) => {
+  wc.on("console-message", (e: any, legacyLevel?: number, legacyMessage?: string, _line?: number, legacySource?: string) => {
     const level = typeof e?.level === "string" ? e.level : ["verbose", "info", "warning", "error"][legacyLevel ?? 1];
-    previewConsole.push(`[${level}] ${String(e?.message ?? legacyMessage).slice(0, 500)}`);
+    previewConsole.push(runner.consoleLine(level, String(e?.message ?? legacyMessage), e?.sourceId ?? legacySource));
     if (previewConsole.length > 200) previewConsole.shift();
   });
   const state = () => send("preview-state", { url: wc.getURL(), title: wc.getTitle(), loading: wc.isLoading() });
