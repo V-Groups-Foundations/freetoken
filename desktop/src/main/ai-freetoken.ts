@@ -173,7 +173,7 @@ export function describeFreeTokenError(e: unknown): string {
 }
 
 /** How FreeToken's auto routing ranks the user's models for a kind of task (null on an older FreeToken). */
-export async function routerScores(task = "agent"): Promise<{ task: string; models: { model: string; tier: string; quality: number; learned: number; score: number }[] } | null> {
+export async function routerScores(task = "agent"): Promise<{ task: string; models: { model: string; tier: string; quality: number; learned: number; speed?: number; score: number }[] } | null> {
   const token = cfg.token();
   if (!token) return null;
   const r = await fetch(`${cfg.url().replace(/\/+$/, "")}/router/scores?task=${encodeURIComponent(task)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => null);

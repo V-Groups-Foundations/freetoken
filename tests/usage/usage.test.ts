@@ -18,6 +18,19 @@ describe('ledger', () => {
     // the error reached the provider (it counts against a quota); the rate-limit refusal didn't
     expect((await usageToday(db, id)).get('groq/m')).toMatchObject({ requests: 2, attempts: 3, tokens: 30, estimatedTokens: 0 });
   });
+  it('measures how fast each model writes (median of sizeable answers; too few, not measured)', async () => {
+    const db = await createTestDb();
+    const { id } = await createUser(db);
+    const { outputSpeed } = await import('@/usage/ledger');
+    const ev = { userId: id, source: 'api' as const, promptTokens: 10, status: 'ok' as const };
+    // 1000 tokens in 10, 20, 25, 40 and 50 s: 100, 50, 40, 25, 20 tokens/s — median 40
+    for (const s of [10, 20, 25, 40, 50]) await recordUsage(db, { ...ev, provider: 'nvidia', modelId: 'glm', completionTokens: 1000, latencyMs: s * 1000 });
+    await recordUsage(db, { ...ev, provider: 'nvidia', modelId: 'glm', completionTokens: 20, latencyMs: 100 }); // a short answer says little
+    for (let i = 0; i < 3; i++) await recordUsage(db, { ...ev, provider: 'kilo', modelId: 'n', completionTokens: 900, latencyMs: 9000 });
+    const speed = await outputSpeed(db, id, new Date(Date.now() - 60_000));
+    expect(speed.get('nvidia/glm')).toBe(40);
+    expect(speed.has('kilo/n')).toBe(false);
+  });
   it('estimates tokens', () => {
     expect(estimateTokens([{ role: 'user', content: 'x'.repeat(400) }])).toBeGreaterThan(100);
   });

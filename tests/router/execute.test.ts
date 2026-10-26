@@ -264,11 +264,13 @@ describe('routeChat', () => {
       { userId, source: 'api', session, body: { model: 'auto-smart', messages: [{ role: 'user', content: 'hi' }] } },
       { db, kv, fetchImpl: fakeFetch(handler).fn, vaultKey: TEST_VAULT_KEY, now: () => Date.now() + later });
     const who = (o: Awaited<ReturnType<typeof routeChat>>) => o.ok ? o.response.headers.get('x-freetoken-provider') : null;
-    // groq's model is briefly unavailable, so the conversation starts on Gemini…
+    // groq's model is briefly unavailable, so the conversation starts on Gemini, and stays there…
     expect(who(await ask('s1', (url) => url.includes(GROQ) ? new Response('{"error":{"message":"gone"}}', { status: 404 }) : okJson()))).toBe('gemini/flash');
-    // …and stays there once groq is back; a new conversation gets the top model
+    expect(who(await ask('s1', (url) => url.includes(GROQ) ? new Response('{"error":{"message":"gone"}}', { status: 404 }) : okJson()))).toBe('gemini/flash');
+    expect(await kv.get(`pin:${userId}:auto-smart:${(await import('@/router/quality')).detectTask({ messages: [{ role: 'user', content: 'hi' }] })}:s1`)).toBe('gemini/flash#fallback');
+    // …until groq is back: Gemini only stood in for it (a slower stand-in kept whole tasks slow)
     const later = 11 * 60_000;
-    expect(who(await ask('s1', () => okJson(), later))).toBe('gemini/flash');
+    expect(who(await ask('s1', () => okJson(), later))).toBe('groq/llama-70b');
     expect(who(await ask('s2', () => okJson(), later))).toBe('groq/llama-70b');
     expect(who(await ask(undefined, () => okJson(), later))).toBe('groq/llama-70b');
   });

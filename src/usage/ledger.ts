@@ -61,6 +61,24 @@ export async function failingProviders(db: DB, userId: string, start: Date) {
 }
 
 /**
+ * How fast each model writes, in output tokens per second (the median of its sizeable answers since
+ * `start`; models with too few aren't measured). A slow model makes every step of a long task slow.
+ */
+export async function outputSpeed(db: DB, userId: string, start: Date) {
+  const rows = await db
+    .select({
+      provider: usageEvents.provider,
+      modelId: usageEvents.modelId,
+      tps: sql<number>`(percentile_cont(0.5) within group (order by ${usageEvents.completionTokens} * 1000.0 / greatest(${usageEvents.latencyMs}, 1)))::float8`,
+    })
+    .from(usageEvents)
+    .where(and(eq(usageEvents.userId, userId), eq(usageEvents.status, 'ok'), eq(usageEvents.estimated, false), sql`${usageEvents.completionTokens} >= 300`, gte(usageEvents.createdAt, start)))
+    .groupBy(usageEvents.provider, usageEvents.modelId)
+    .having(sql`count(*) >= 5`);
+  return new Map(rows.map((r) => [usageKey(r.provider, r.modelId), Number(r.tps)]));
+}
+
+/**
  * What auto routing has learned about each model for one kind of task since `start`: how often its
  * requests succeed (rate limits don't count — that's quota, not quality) and what clients reported
  * about its answers. A score adjustment per provider/model; models with little history get ~0.

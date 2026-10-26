@@ -5,7 +5,7 @@ import { callChat } from '@/providers/client';
 import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
 import { peekFirstEvent } from '@/router/peek';
-import { estimateTokens, learnedScores, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
+import { estimateTokens, learnedScores, outputSpeed, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
 import { detectTask, type Task } from './quality';
 import { noteReachable, noteUnreachable, unreachableHint } from '@/providers/network';
 
@@ -96,6 +96,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   for (const l of exhaustedRows) resetTimes.push(l.requestsResetAt?.getTime() ?? l.updatedAt.getTime() + 60_000);
   const task = input.task ?? detectTask(body);
   const pinAt = isAuto(requested) && input.session ? pinKey(userId, `${requested}:${task}`, input.session) : null;
+  const pinned = pinAt ? (await deps.kv.get(pinAt)) ?? undefined : undefined;
   const selectInput = {
     requested,
     models: catalog,
@@ -112,7 +113,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     recentFailures: await recentFailures(deps.db, userId, new Date(nowMs - 10 * 60_000)),
     keyless,
     tokenCaps,
-    pinned: pinAt ? (await deps.kv.get(pinAt)) ?? undefined : undefined,
+    pinned: pinned?.replace(/#fallback$/, ''),
+    pinnedFallback: pinned?.endsWith('#fallback'),
+    speed: isAuto(requested) ? await outputSpeed(deps.db, userId, new Date(nowMs - 7 * 86_400_000)) : undefined,
   };
   const candidates = selectCandidates(selectInput);
   // Empty even with quota ignored (cooldowns, daily limits, providers' "none left"): no connected model
@@ -229,7 +232,11 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
 
     await touchKey(deps.db, userId, m.provider);
     await noteReachable(deps.kv, userId, m.provider);
-    if (pinAt) await deps.kv.set(pinAt, `${m.provider}/${m.modelId}`, PIN_MS);
+    // a model that answered only because better ones failed or were busy is marked so: they get it back.
+    // It stays marked while it keeps answering (the best one ranks lower for a while after failing) —
+    // until a model answers that wasn't standing in
+    const standIn = skipped.length > 0 || (pinned === `${m.provider}/${m.modelId}#fallback`);
+    if (pinAt) await deps.kv.set(pinAt, `${m.provider}/${m.modelId}${standIn ? '#fallback' : ''}`, PIN_MS);
     const live = parseRateHeaders(r.response.headers, now());
     if (live) {
       await saveLimits(deps.db, userId, m.provider, m.modelId, live).catch((err) => console.error('limit save failed', err));

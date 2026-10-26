@@ -86,7 +86,7 @@ export function BenchmarkPanel({ onClose, busy }: { onClose: () => void; busy: b
           <summary className="small">How auto routing ranks your models for agent work now</summary>
           <ol>
             {scores.models.slice(0, 8).map((m) => (
-              <li key={m.model} className="small"><b>{shortModel(m.model)}</b> <span className="muted">· {m.model.split("/")[0]} · {m.score}{m.learned ? ` (${m.learned > 0 ? "+" : ""}${m.learned} learned)` : ""}</span></li>
+              <li key={m.model} className="small"><b>{shortModel(m.model)}</b> <span className="muted">· {m.model.split("/")[0]} · {m.score}{m.learned ? ` (${m.learned > 0 ? "+" : ""}${m.learned} learned)` : ""}{m.speed ? ` (${m.speed > 0 ? "+" : ""}${m.speed} ${m.speed > 0 ? "fast" : "slow"})` : ""}</span></li>
             ))}
           </ol>
         </details>

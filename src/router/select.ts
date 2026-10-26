@@ -36,6 +36,10 @@ export interface SelectInput {
   tokenCaps?: Map<string, number>;
   /** the model this conversation has been working with: kept while it works (switching mid-task loses the thread) */
   pinned?: string;
+  /** the pinned model took over only because a better one was busy: that one gets it back when free */
+  pinnedFallback?: boolean;
+  /** measured output speed per model (tokens per second) */
+  speed?: Map<string, number>;
 }
 
 const AUTO_TIERS = { 'auto-smart': 'smart', 'auto-fast': 'fast' } as const;
@@ -112,11 +116,20 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
   // the conversation's own model goes first while it's usable and not failing — unless a clearly better
   // one is available (a top model that was busy earlier and is free again takes over)
   const pin = input.pinned && main.find((m) => usageKey(m.provider, m.modelId) === input.pinned);
-  if (pin && (input.recentFailures?.get(input.pinned!) ?? 0) < 2 && rank(main[0]) - rank(pin) < PIN_MARGIN) {
+  // A fallback pin (a slower model that answered while the best one was rate-limited) kept a whole
+  // session on it after the best one was free again: it holds only while nothing better is available
+  const better = input.pinnedFallback && pin && main[0] !== pin;
+  if (pin && !better && (input.recentFailures?.get(input.pinned!) ?? 0) < 2 && rank(main[0]) - rank(pin) < PIN_MARGIN) {
     return [...first, pin, ...main.filter((m) => m !== pin), ...other];
   }
   return [...first, ...main, ...other];
 }
+
+/**
+ * A little for writing fast, a little against writing slowly (±3 at most): between models of about the
+ * same quality the quicker one wins — at 34 tokens a second every step of a long task took 40 seconds.
+ */
+export const speedBonus = (tps?: number) => (tps == null || !Number.isFinite(tps) ? 0 : Math.max(-3, Math.min(3, (tps - 50) / 8)));
 
 /**
  * How auto routing scores one model for a task (higher first): its estimated quality, plus what it
@@ -124,11 +137,12 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
  * last resort — and for failing in the last few minutes. The scores page shows these same numbers.
  */
 export function rankParts(m: { provider: string; modelId: string }, task: Task,
-  input: { learned?: Map<string, number>; recentFailures?: Map<string, number>; keyless?: Set<string> }) {
+  input: { learned?: Map<string, number>; recentFailures?: Map<string, number>; keyless?: Set<string>; speed?: Map<string, number> }) {
   const k = usageKey(m.provider, m.modelId);
   const quality_ = quality(m.provider, m.modelId, task);
   const learned = input.learned?.get(k) ?? 0;
   const shared = m.provider === 'starter' ? 40 : input.keyless?.has(m.provider) ? 4 : 0;
   const failing = 6 * Math.min(4, input.recentFailures?.get(k) ?? 0);
-  return { quality: quality_, learned, shared, failing, score: quality_ + learned - shared - failing };
+  const fast = speedBonus(input.speed?.get(k));
+  return { quality: quality_, learned, shared, failing, speed: fast, score: quality_ + learned - shared - failing + fast };
 }
