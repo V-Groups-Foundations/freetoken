@@ -129,6 +129,23 @@ describe('routeChat', () => {
     expect(out.ok && out.response.headers.get('x-freetoken-unreachable')).toBe('groq');
   });
 
+  it('falls back when a stream opens with only an error (Kilo: "Upstream error from Nvidia: Service temporarily overloaded")', async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    const { p } = run((url) => url.includes(GROQ)
+      ? sse([': keep-alive\n\n', 'data: {"error":{"message":"Upstream error from Nvidia: Service temporarily overloaded"}}\n\n', 'data: [DONE]\n\n'])
+      : sse(['data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n', 'data: {"choices":[{"delta":{"content":"real answer"}}]}\n\n', 'data: [DONE]\n\n']), { stream: true });
+    const out = await p;
+    expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('gemini/flash');
+    expect(out.ok && out.response.headers.get('x-freetoken-fallbacks')).toMatch(/^groq\/.+ \(server\)$/);
+    // the answer arrives whole: the event read to check it is passed on, not lost
+    const text = out.ok ? await out.response.text() : '';
+    expect(text).toContain('"role":"assistant"');
+    expect(text).toContain('real answer');
+    const events = await db.select().from(usageEvents);
+    expect(events.map((e) => `${e.provider}:${e.status}`).sort()).toEqual(['gemini:ok', 'groq:error']);
+  });
+
   it("a Cloudflare key saved with a wrong Account ID is marked for fixing instead of failing every request", async () => {
     await connect('cloudflare', 'cf_token');
     await connect('groq', 'gsk_mine');

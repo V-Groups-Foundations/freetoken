@@ -4,6 +4,7 @@ import { loadCredentials, markInvalid, touchKey } from '@/keys/service';
 import { callChat } from '@/providers/client';
 import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
+import { peekFirstEvent } from '@/router/peek';
 import { estimateTokens, learnedScores, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
 import { detectTask, type Task } from './quality';
 import { noteReachable, noteUnreachable, unreachableHint } from '@/providers/network';
@@ -191,6 +192,27 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       continue;
     }
 
+    // a stream that opens with only an error (an overloaded upstream): nothing has reached the client
+    // yet, so the next model can still take the request
+    let streamBody: ReadableStream<Uint8Array> | null = r.response.body;
+    if (stream && streamBody && /event-stream/i.test(r.response.headers.get('content-type') ?? '')) {
+      const peek = await peekFirstEvent(streamBody);
+      streamBody = peek.stream;
+      if (peek.error) {
+        void peek.stream.cancel().catch(() => {});
+        const limited = /rate.?limit|quota|too many requests|\b429\b/i.test(peek.error);
+        skipped.push(`${m.provider}/${m.modelId} (${limited ? 'rate limit' : 'server'})`);
+        otherFailures++;
+        console.warn(`[router] ${m.provider}/${m.modelId} opened a stream with an error: ${peek.error}`);
+        await recordUsage(deps.db, { ...usageBase, promptTokens: 0, completionTokens: 0, latencyMs: now() - started, status: limited ? 'rate_limited' : 'error' });
+        const ttl = limited ? 60_000 : 30_000;
+        await deps.kv.set(cooldownKey(userId, m.provider), String(now() + ttl), ttl);
+        resetTimes.push(now() + ttl);
+        cooling.add(m.provider);
+        continue;
+      }
+    }
+
     await touchKey(deps.db, userId, m.provider);
     await noteReachable(deps.kv, userId, m.provider);
     if (pinAt) await deps.kv.set(pinAt, `${m.provider}/${m.modelId}`, PIN_MS);
@@ -208,8 +230,8 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       ...(unreachable.size ? { 'x-freetoken-unreachable': [...unreachable].join(',') } : {}),
     };
 
-    if (stream && r.response.body) {
-      const upstream = m.provider === 'gemini' ? standardizeGeminiStream(r.response.body) : r.response.body;
+    if (stream && streamBody) {
+      const upstream = m.provider === 'gemini' ? standardizeGeminiStream(streamBody) : streamBody;
       const tapped = tapSseUsage(upstream, ({ usage, completionChars, failed, error, signatures }) => {
         if (failed) console.warn(`[router] ${m.provider}/${m.modelId} broke off mid-stream: ${error ?? 'connection lost'}`);
         if (signatures.size) saveSignatures(deps.kv, userId, signatures).catch(() => {});
