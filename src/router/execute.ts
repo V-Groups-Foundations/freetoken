@@ -14,7 +14,7 @@ import { noteReachable, noteUnreachable, unreachableHint } from '@/providers/net
  * doesn't take). Another model can take them. */
 const MODEL_SIDE_400 = /failed to call a function|AiError: Bad input|unknown name "[^"]+": cannot find field|tool_use_failed|failed_generation|invalid tool call|context.{0,12}(length|window)|maximum context|too many tokens|reduce the length|request too large|prompt is too long|provider returned error|upstream (error|request failed)/i;
 import { tapSseUsage } from '@/usage/tap';
-import { parseRateHeaders, saveLimits } from '@/usage/limits';
+import { markExhausted, nextMidnight, parseRateHeaders, saveLimits, saveTokenCap } from '@/usage/limits';
 import { isAuto, parseModelRef, selectCandidates, type CatalogModel } from './select';
 import { hasImageContent, supportsVision } from './vision';
 import { forProvider } from './compat';
@@ -178,6 +178,20 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
       if (e.kind === 'not_found' || e.kind === 'forbidden') {
         // Retired/unavailable model, or one this key may not use (a 403 that isn't about the key):
         // skip just this model, leave the provider's others — and the key — usable.
+        continue;
+      }
+      // Too big for this one model ("Limit 7000, Requested 10727"): remember its cap, so requests that
+      // size skip it from now on, and leave the provider's other models free for this one
+      if (e.kind === 'rate_limit' && e.tokenLimit) {
+        await saveTokenCap(deps.db, userId, m.provider, m.modelId, e.tokenLimit).catch((err) => console.error('limit save failed', err));
+        continue;
+      }
+      // this model's quota for the day is gone (Gemini: "…PerDay…"): leave it out until it resets instead
+      // of asking (and being refused) every minute — the provider's other models have their own quotas
+      if (e.kind === 'rate_limit' && e.daily) {
+        const resetAt = nextMidnight(m.provider === 'gemini' ? 'America/Los_Angeles' : 'UTC', new Date(now()));
+        await markExhausted(deps.db, userId, m.provider, m.modelId, resetAt).catch((err) => console.error('limit save failed', err));
+        resetTimes.push(resetAt.getTime());
         continue;
       }
       // the network's doing (blocked page, no connection) never marks the key invalid

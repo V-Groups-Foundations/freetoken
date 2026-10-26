@@ -9,6 +9,10 @@ export interface ProviderError {
   status: number;
   message: string;
   retryAfterMs?: number;
+  /** a rate limit that's this model's whole allowance for the day (Gemini's free tier), not a passing one */
+  daily?: boolean;
+  /** a request bigger than this model takes in one go (Groq: "Limit 7000, Requested 10727"): the cap */
+  tokenLimit?: number;
 }
 
 export interface Credentials {
@@ -50,7 +54,15 @@ export function normalizeError(status: number, headers: Headers, bodyText: strin
   const message = extractMessage(bodyText) ?? `HTTP ${status}`;
   // Groq answers 413 when a request exceeds its per-minute token budget.
   if (status === 429 || status === 413) {
-    return { kind: 'rate_limit', status, message, retryAfterMs: parseRetryAfter(headers.get('retry-after')) };
+    // Gemini says which quota ran out (…PerDay… / …PerMinute…) and when to retry ("retryDelay": "39s")
+    const geminiDelay = Number(bodyText.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/)?.[1]);
+    const tooLarge = /request too large|reduce your message size/i.test(message) ? Number(message.match(/Limit (\d+), Requested \d+/)?.[1]) : NaN;
+    return {
+      kind: 'rate_limit', status, message,
+      retryAfterMs: parseRetryAfter(headers.get('retry-after')) ?? (Number.isFinite(geminiDelay) ? geminiDelay * 1000 : undefined),
+      ...(/PerDay|per day|daily (limit|quota)|requests per day/i.test(bodyText) ? { daily: true } : {}),
+      ...(tooLarge > 0 ? { tokenLimit: tooLarge } : {}),
+    };
   }
   if (status === 401) return { kind: 'auth', status, message };
   // 403 isn't always the key: OpenRouter answers 403 for a prompt its moderation flagged, others for

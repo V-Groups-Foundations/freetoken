@@ -20,6 +20,15 @@ describe('parseDuration', () => {
   });
 });
 
+describe('nextMidnight', () => {
+  it("finds the next midnight in a time zone (Gemini's free quotas reset at midnight Pacific)", async () => {
+    const { nextMidnight } = await import('@/usage/limits');
+    // 2026-10-23 20:30 UTC is 13:30 in Los Angeles (PDT, UTC-7): midnight there is 07:00 UTC next day
+    expect(nextMidnight('America/Los_Angeles', new Date('2026-10-23T20:30:00Z')).toISOString()).toBe('2026-10-24T07:00:00.000Z');
+    expect(nextMidnight('UTC', new Date('2026-10-23T20:30:15Z')).toISOString()).toBe('2026-10-24T00:00:00.000Z');
+  });
+});
+
 describe('parseRateHeaders', () => {
   it('reads x-ratelimit-* headers', () => {
     const h = new Headers({

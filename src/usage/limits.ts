@@ -60,3 +60,27 @@ export async function saveLimits(db: DB, userId: string, provider: string, model
     set: { ...l, updatedAt: sql`now()` },
   });
 }
+
+/** Remember a model's per-request token cap (from a "request too large" refusal) without touching the rest. */
+export async function saveTokenCap(db: DB, userId: string, provider: string, modelId: string, limitTokens: number) {
+  await db.insert(providerLimits).values({ userId, provider, modelId, limitTokens, updatedAt: new Date() }).onConflictDoUpdate({
+    target: [providerLimits.userId, providerLimits.provider, providerLimits.modelId],
+    set: { limitTokens, updatedAt: sql`now()` },
+  });
+}
+
+/** A model out of requests until `resetAt` (its daily quota ran out): routing leaves it out until then. */
+export async function markExhausted(db: DB, userId: string, provider: string, modelId: string, resetAt: Date) {
+  await db.insert(providerLimits).values({ userId, provider, modelId, remainingRequests: 0, requestsResetAt: resetAt, updatedAt: new Date() }).onConflictDoUpdate({
+    target: [providerLimits.userId, providerLimits.provider, providerLimits.modelId],
+    set: { remainingRequests: 0, requestsResetAt: resetAt, updatedAt: sql`now()` },
+  });
+}
+
+/** The next midnight in a time zone (Google resets Gemini's free daily quotas at midnight Pacific time). */
+export function nextMidnight(timeZone: string, now = new Date()): Date {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(now);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const left = 86_400 - (get('hour') * 3600 + get('minute') * 60 + get('second'));
+  return new Date(now.getTime() - (now.getTime() % 1000) + left * 1000);
+}

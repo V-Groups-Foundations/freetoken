@@ -129,6 +129,41 @@ describe('routeChat', () => {
     expect(out.ok && out.response.headers.get('x-freetoken-unreachable')).toBe('groq');
   });
 
+  it("learns a model's token cap from 'request too large', without cooling the provider's other models", async () => {
+    await connect('groq', 'gsk_mine');
+    const big = { messages: [{ role: 'user', content: 'x'.repeat(40_000) }] }; // ~10k tokens
+    const tooLarge = (body: string) => new Response(JSON.stringify({ error: { message: body } }), { status: 413 });
+    const first = run((url, init) => url.includes(GROQ) && JSON.parse(String(init?.body)).model === 'llama-70b'
+      ? tooLarge('Request too large for model `llama-70b` on tokens per minute (TPM): Limit 7000, Requested 10727, please reduce your message size and try again.')
+      : okJson('answered'), big);
+    const out = await first.p;
+    // the same provider's other model still got its turn in this very request
+    expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('groq/llama-8b');
+    const [cap] = await db.select().from(providerLimits).where(eq(providerLimits.modelId, 'llama-70b'));
+    expect(cap.limitTokens).toBe(7000);
+    // next time a request that size doesn't ask it at all
+    const second = run(() => okJson('answered'), big);
+    await second.p;
+    expect(second.f.calls.map((c) => c.body?.model)).not.toContain('llama-70b');
+  });
+
+  it("leaves a model whose daily quota ran out (Gemini …PerDay…) out until it resets, instead of asking every minute", async () => {
+    await connect('gemini', 'AIza_mine');
+    await connect('groq', 'gsk_mine');
+    await db.update(models).set({ priority: 0 }).where(eq(models.provider, 'gemini'));
+    const quota = JSON.stringify({ error: { code: 429, message: 'You exceeded your current quota, please check your plan and billing details.', details: [
+      { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] },
+      { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '39s' }] } });
+    const first = run((url) => (url.includes(GROQ) ? okJson('from groq') : new Response(quota, { status: 429 })));
+    expect((await first.p).ok).toBe(true);
+    const [row] = await db.select().from(providerLimits).where(eq(providerLimits.provider, 'gemini'));
+    expect(row.remainingRequests).toBe(0);
+    expect(row.requestsResetAt!.getTime()).toBeGreaterThan(Date.now() + 60_000); // not the minute a cooldown would be
+    const second = run(() => okJson('again'));
+    await second.p;
+    expect(second.f.calls.some((c) => !c.url.includes(GROQ))).toBe(false);
+  });
+
   it('falls back when a stream opens with only an error (Kilo: "Upstream error from Nvidia: Service temporarily overloaded")', async () => {
     await connect('groq', 'gsk_mine');
     await connect('gemini', 'AIza_mine');
