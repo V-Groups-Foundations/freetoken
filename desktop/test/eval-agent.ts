@@ -37,6 +37,7 @@ import path from "node:path";
       return { url: page.url(), title: await page.title(), text, console: consoleLines.slice(-40), jpeg } as any;
     },
     evaluate: (script) => page.evaluate(runner.probeScript(script)).then(String, (e) => `Error: ${(e as Error).message}`),
+    setWidth: (width) => page.setViewportSize({ width: width ?? 1280, height: 800 }),
   });
   const t0 = Date.now();
   let text = "";

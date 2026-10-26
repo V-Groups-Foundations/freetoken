@@ -393,6 +393,14 @@ runner.setPreviewHost({
     if (!wc?.getURL()) return "Nothing is open in the preview.";
     return wc.executeJavaScript(runner.probeScript(script)).then(String, (e: Error) => `Error: ${e.message}`);
   },
+  async setWidth(width) {
+    // the page laid out as on a phone of that width (media queries respond), then back to the pane's own size
+    const wc = preview?.webContents;
+    if (!wc) return;
+    if (width) wc.enableDeviceEmulation({ screenPosition: "mobile", screenSize: { width, height: 800 }, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: { width, height: 800 }, scale: 1 });
+    else wc.disableDeviceEmulation();
+    await new Promise((r) => setTimeout(r, 400)); // let it lay out again
+  },
 });
 runner.onRunEvent((e) => send("app-event", e));
 

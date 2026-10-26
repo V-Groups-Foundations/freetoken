@@ -237,16 +237,20 @@ async function main() {
   await check("websites get a design direction per project; video tasks get the html-video skill instead", async () => {
     const seen = new Set<string>();
     let last = "";
+    // a request that doesn't say what the site is about: projects still differ
     for (let i = 0; i < 12; i++) {
       ws.setRoot(fs.mkdtempSync(path.join(os.tmpdir(), `vrun-site${i}-`)));
-      const p = await ai.systemPrompt("agent", "build me a landing page for my bakery");
-      last = p.match(/Design direction for this project: ([^\n]+)/)?.[1] ?? "";
-      seen.add(last);
+      const p = await ai.systemPrompt("agent", "build me a landing page");
+      seen.add(p.match(/Design direction for this project: ([^\n]+)/)?.[1] ?? "");
     }
+    // a bakery gets a style for a bakery, and keeps it once its page exists
+    ws.setRoot(fs.mkdtempSync(path.join(os.tmpdir(), "vrun-bakery-")));
+    last = (await ai.systemPrompt("agent", "build me a landing page for my bakery")).match(/Design direction for this project: ([^\n]+)/)?.[1] ?? "";
+    fs.writeFileSync(path.join(ws.getRoot()!, "index.html"), "<title>Sunrise Bakery</title><h1>Fresh bread every morning</h1>");
     const again = await ai.systemPrompt("agent", "make the hero bigger on the page");
     const vid = await ai.systemPrompt("agent", "make a 15 second animated intro video for my bakery website");
     console.log(`      ${seen.size} different directions across 12 projects`);
-    return seen.size >= 4 && !seen.has("") && again.includes(`Design direction for this project: ${last}`)
+    return seen.size >= 4 && !seen.has("") && last === "Retro 70s / warm" && again.includes(`Design direction for this project: ${last}`)
       && again.includes("Avoid the generic AI look")
       && vid.includes('use_skill with name "html-video"') && !vid.includes("Building websites and UIs");
   });
@@ -356,11 +360,16 @@ async function main() {
     const waits = [1, 2, 3, 4, 5, 6].map(() => ai.noteAction(s2, "wait_for_agents", {}, "Agents still working", false));
     const probes = ["a", "b", "c", "d"].map((x) => ai.noteAction(s2, "inspect_preview", { script: "app.state" }, `state ${x}`, false));
     if (waits.some(Boolean) || probes.some(Boolean) || s2.stuck) return JSON.stringify({ waits, probes });
-    // but six page inspections with nothing changed in between is circling, even with a different script each time
+    // six page inspections with nothing changed: first a quiet word (often it's thorough checking of a
+    // feature that works), and only six more make it a loop, even with a different script each time
     const s3 = ai.getSession("loops-3");
     ai.startTurnState(s3, { sessionId: "loops-3", mode: "agent", text: "fix the page" });
-    const many = [1, 2, 3, 4, 5, 6].map((x) => ai.noteAction(s3, "inspect_preview", { script: `probe${"x".repeat(x)}` }, "Inspected — 2 console errors", false));
-    if (many.slice(0, 5).some(Boolean) || !many[5].includes("going in circles")) return JSON.stringify({ many });
+    const shown: string[] = [];
+    const probe = (x: number) => ai.noteAction(s3, "inspect_preview", { script: `probe${"x".repeat(x)}` }, "Inspected — 2 console errors", false, (e: any) => shown.push(e.type));
+    const many = [1, 2, 3, 4, 5, 6].map(probe);
+    if (many.slice(0, 5).some(Boolean) || !/stop checking and give the user your summary/.test(many[5]) || many[5].includes("going in circles") || s3.stuck || shown.length) return JSON.stringify({ many, stuck: s3.stuck, shown });
+    const more = [7, 8, 9, 10, 11, 12].map(probe);
+    if (more.slice(0, 5).some(Boolean) || !more[5].includes("going in circles") || !s3.stuck) return JSON.stringify({ more });
     // and changing a file back to how it was earlier in the task undoes, it doesn't progress
     const s4 = ai.getSession("loops-4");
     ai.startTurnState(s4, { sessionId: "loops-4", mode: "agent", text: "fix the page" });
@@ -389,7 +398,10 @@ async function main() {
     const no = ["run the app i want to send the link to someone and test it", "is it necessary for the person to be in the same wifi as me?",
       "which port does server.js listen on? don't change anything", "start the server", "why is the page blank?"];
     const yes = ["fix all of these and make it as good as ur own way", "Build a landing page", "the button doesn't work",
-      "can you make the header blue?", "Rename calc to computeScore", "go ahead start", "hi"];
+      "can you make the header blue?", "Rename calc to computeScore", "go ahead start", "hi",
+      // a pasted error is a request to fix it, though "open" reads like a question
+      "I'm getting this when I open the page:\n\nUncaught (in promise) TypeError: Cannot read properties of undefined (reading 'map')\n    at render (app.js:11:26)",
+      "when I run it I get ModuleNotFoundError: No module named 'flask'", "the login is not working"];
     const wrong = [...no.filter((t) => ai.asksForChange(t)).map((t) => `should be no: ${t}`), ...yes.filter((t) => !ai.asksForChange(t)).map((t) => `should be yes: ${t}`)];
     if (wrong.length) return wrong.join(" | ");
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-scope-"));
@@ -425,6 +437,19 @@ async function main() {
       || JSON.stringify(["r1", "r2", "i1", "r3", "r4", "i2"].map((k) => [k, len(k)]));
   });
 
+  await check("bash that goes wrong in PowerShell without failing is caught before it runs; PowerShell itself isn't", async () => {
+    const caught = ['pkill -f "node server.js" 2>/dev/null; sleep 0.5; node server.js &', "node server.js &", "npm run build 2>/dev/null",
+      "nohup python app.py", "killall node", "lsof -i :3000"];
+    const fine = ["npm test && echo ok", '& "C:\\Program Files\\nodejs\\node.exe" -v', "Get-Process node | Stop-Process", 'echo "pkill is a bash tool"',
+      "python wc.py sample.txt --json", "git status 2>$null"];
+    const wrong = [...caught.filter((c) => !ai.bashOnly(c).length).map((c) => `missed: ${c}`), ...fine.filter((c) => ai.bashOnly(c).length).map((c) => `flagged: ${c}`)];
+    if (wrong.length) return wrong.join(" | ");
+    if (process.platform !== "win32") return true;
+    const s = ai.getSession("bash-only");
+    const r = await ai.execTool(s, "run_terminal_command", { command: caught[0] }, () => {}, "b1");
+    return (r.summary === "Not run: bash syntax in PowerShell" && /stop_app and then run_app/.test(r.content)) || r.content;
+  });
+
   await check("a bash command that failed in PowerShell gets the PowerShell way to do it", () => {
     const esc = String.fromCharCode(27);
     const out = `exit code 1\n${esc}[31;1mpkill: ${esc}[31;1mThe term 'pkill' is not recognized as a name of a cmdlet\n${esc}[31;1mtrue: ${esc}[31;1mThe term 'true' is not recognized as a name`;
@@ -434,6 +459,88 @@ async function main() {
     const job = ai.shellHint("Id Name PSJobTypeName State\n1 Job1 BackgroundJob Running", "cloudflared tunnel --url http://localhost:3001 2>&1 &");
     return (/PowerShell, not bash/.test(hint) && hint.includes("pkill → Stop-Process") && hint.includes("true →") && ai.shellHint("exit code 0\nok") === ""
       && devnull.includes("2>$null") && devnull.includes("don't trust") && job.includes("run_app") && job.includes("share_link")) || [hint, devnull, job].join(" | ");
+  });
+
+  await check("inspect_preview at a phone width lays the page out that wide (media queries) and says what sticks out", async () => {
+    const { chromium } = await import("playwright-core");
+    const browser = await chromium.launch({ channel: "chrome" }).catch(() => null);
+    if (!browser) return true; // no Chrome here: nothing to drive
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    // a menu that only shows on a phone, and a banner 600px wide that doesn't fit one
+    await page.setContent(`<style>#menu{display:none} @media (max-width:600px){#menu{display:block}}</style><nav id="menu">Phone menu</nav><div class="banner wide" style="width:600px">Banner</div>`);
+    runner.setPreviewHost({
+      open: async () => {},
+      inspect: async () => ({ url: "http://localhost:1/", title: "t", text: await page.evaluate(() => document.body.innerText), console: [] }),
+      evaluate: (script) => page.evaluate(runner.probeScript(script)).then(String, (e) => `Error: ${(e as Error).message}`),
+      setWidth: (width) => page.setViewportSize({ width: width ?? 1280, height: 800 }),
+    });
+    try {
+      const s = ai.getSession("phone-width");
+      const phone = await ai.execTool(s, "inspect_preview", { width: 375 }, () => {}, "pw1");
+      const desktop = await ai.execTool(s, "inspect_preview", {}, () => {}, "pw2");
+      const back = page.viewportSize()?.width;
+      return (phone.content.includes("Phone menu") && /At 375px wide the page is \d+px wide: it scrolls sideways\. Sticking out: div\.banner\.wide/.test(phone.content)
+        && phone.summary.includes("at 375px") && phone.summary.includes("overflows") && !desktop.content.includes("Phone menu") && back === 1280)
+        || JSON.stringify({ phone: phone.content.slice(-300), summary: phone.summary, desktop: desktop.content.slice(0, 200), back });
+    } finally {
+      runner.setPreviewHost(null);
+      await browser.close();
+    }
+  });
+
+  await check("inspect_preview with a url starts from a fresh page (even the one shown); without one the page keeps its state", async () => {
+    let loads = 0;
+    runner.setPreviewHost({
+      open: async () => { loads++; },
+      reload: async () => { loads++; },
+      inspect: async () => ({ url: "http://localhost:5173/", title: "Shop", text: "cart", console: [] }),
+    });
+    try {
+      const s = ai.getSession("fresh-page");
+      s.pageStale = false;
+      await ai.execTool(s, "inspect_preview", {}, () => {}, "fp1");
+      const kept = loads;
+      await ai.execTool(s, "inspect_preview", { url: "http://localhost:5173/" }, () => {}, "fp2");
+      return (kept === 0 && loads === 1) || JSON.stringify({ kept, loads });
+    } finally {
+      runner.setPreviewHost(null);
+    }
+  });
+
+  await check("a saved check follows the app to whatever port it runs on now (a restart moved it, and every check failed)", async () => {
+    const checks = await import("../src/main/checks");
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-checkport-"));
+    ws.setRoot(own);
+    await checks.saveCheck({ name: "cart", url: "http://localhost:53878/cart?x=1", steps: [{ expect: "1 + 1 === 2" }] });
+    const saved = JSON.parse(fs.readFileSync(path.join(own, ".v-run", "checks", "cart.json"), "utf8")).url;
+    const now = "http://localhost:52713/";
+    return (saved === "/cart?x=1" && checks.pageFor(saved, now) === "http://localhost:52713/cart?x=1"
+      && checks.pageFor("http://127.0.0.1:53878/", now) === "http://localhost:52713/" // saved before this change
+      && checks.pageFor("https://example.com/a", now) === "https://example.com/a" && checks.pageFor(undefined, now) === now
+      && checks.pageFor("/cart", undefined) === undefined) || JSON.stringify({ saved, moved: checks.pageFor(saved, now) });
+  });
+
+  await check("changing server code doesn't send the agent to check a page; changing a page script does", async () => {
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-servercode-"));
+    ws.setRoot(own);
+    const s = ai.getSession("server-code");
+    ai.startTurnState(s, { sessionId: "server-code", mode: "agent", text: "change the port to 4100" });
+    await ai.execTool(s, "write_file", { path: "server.js", contents: "const http = require('http');\nhttp.createServer((q, r) => r.end('[]')).listen(4100);\n" }, () => {}, "w1");
+    const afterServer = s.unchecked;
+    await ai.execTool(s, "write_file", { path: "public/app.js", contents: "document.getElementById('total').textContent = '0';\n" }, () => {}, "w2");
+    return (afterServer === false && s.unchecked === true) || JSON.stringify({ afterServer, after: s.unchecked });
+  });
+
+  await check("a check that could never fail isn't saved (it would pass forever and prove nothing)", async () => {
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-vacuous-"));
+    ws.setRoot(own);
+    const s = ai.getSession("vacuous-check");
+    const r = (steps: unknown) => ai.execTool(s, "save_check", { name: "notes-api", steps }, () => {}, "sc");
+    const always = await r([{ action: "", expect: "true", wait_ms: 100 }]);
+    const none = await r([]);
+    const real = await r([{ expect: "document.querySelector('#total').textContent === '25.00'" }]);
+    return (always.summary.startsWith("Check not saved") && /could never fail/.test(always.content) && none.summary.startsWith("Check not saved")
+      && real.summary === "Saved check: notes-api" && fs.readdirSync(path.join(own, ".v-run", "checks")).length === 1) || JSON.stringify({ always, none, real });
   });
 
   await check("saved checks: stored in the project, rerun against the page; a broken feature sends the agent back", async () => {
@@ -593,6 +700,28 @@ async function main() {
       && runner.portInUse("Port 5173 is already in use") === 5173 && runner.portInUse("all good") === null || body;
   });
 
+  await check("when the port is taken, the agent is told what is answering there (often this app, already running)", async () => {
+    const http = await import("node:http");
+    const server = http.createServer((_q, r) => r.end("<html><head><title>Floor Tracker</title></head><body>hi</body></html>"));
+    const port = await new Promise<number>((r) => server.listen(0, () => r((server.address() as any).port)));
+    const page = await runner.whatServes(port);
+    server.close();
+    const nothing = await runner.whatServes(port);
+    return (page === 'a page titled "Floor Tracker"' && nothing === null) || JSON.stringify({ page, nothing });
+  });
+
+  await check("a site's design direction suits what it's about (a calm design studio isn't Y2K chrome), and stays put", async () => {
+    const design = await import("../src/main/design");
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-subject-"));
+    fs.writeFileSync(path.join(own, "index.html"), "<title>Lumen Studio</title><h1>Lumen Studio</h1><h2>We design calm, useful software.</h2><p>Small team, big care.</p>");
+    const studio = design.pickDirection(own, `make this page look modern and nicer\n${design.siteSubject(own)}`).name;
+    const cafe = design.pickDirection(own, "a website for my coffee shop and bakery").name;
+    const plain = [1, 2].map(() => design.pickDirection("same-seed", "make it nicer").name);
+    const brief = design.webDesignBrief(own, design.siteSubject(own));
+    return (studio === "Architectural mono" && cafe === "Retro 70s / warm" && plain[0] === plain[1] && brief.includes("Design direction for this project: Architectural mono"))
+      || JSON.stringify({ studio, cafe, plain });
+  });
+
   await check("in a web project, 'redesign the app / fix the images' gets the design brief (and not elsewhere)", async () => {
     const site = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-site-"));
     fs.mkdirSync(path.join(site, "public"));
@@ -625,7 +754,12 @@ async function main() {
       && w({ status: 429 }, 6) === null && w({ status: 502 }, 0) === 2000 && w({ status: 502 }, 2) === null && w({ status: 400 }, 0) === null && w(new Error("x"), 0) === null
       // a stream dropped mid-answer is asked again (twice), not the end of the task
       && w(new Error("FreeToken error : Upstream idle timeout exceeded"), 0) === 1500 && w(new Error("socket hang up"), 1) === 3000
-      && w(new Error("Upstream idle timeout exceeded"), 2) === 4500 && w(new Error("Upstream idle timeout exceeded"), 3) === null && ftAi.brokeOff(new Error("socket hang up")) && !ftAi.brokeOff({ status: 400, message: "timed out" });
+      && w(new Error("Upstream idle timeout exceeded"), 2) === 4500 && w(new Error("Upstream idle timeout exceeded"), 3) === null && ftAi.brokeOff(new Error("socket hang up")) && !ftAi.brokeOff({ status: 400, message: "timed out" })
+      // a provider that reports itself overloaded inside the stream is asked again (not told its reply was too long)
+      && w(new Error("FreeToken error : Upstream error from Nvidia: Service temporarily overloaded"), 0) === 3000
+      && w(new Error("Service temporarily overloaded"), 3) === null
+      && !ftAi.brokeOff(new Error("Upstream error from Nvidia: Service temporarily overloaded"))
+      && !ftAi.providerBusy({ status: 400, message: "overloaded" });
   });
 
   await check("a server listening on all interfaces ([::] / 0.0.0.0) opens as localhost", async () => {

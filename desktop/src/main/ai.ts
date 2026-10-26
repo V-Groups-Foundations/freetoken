@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import * as index from "./indexer";
-import { isVideoTask, isWebProject, isWebTask, webDesignBrief } from "./design";
+import { isVideoTask, isWebProject, isWebTask, siteSubject, webDesignBrief } from "./design";
 import * as memory from "./memory";
 import { prepareAttachments, type Attachment, type Prepared } from "./attachments";
 import * as skills from "./skills";
@@ -142,7 +142,7 @@ export const TOOLS: Tool[] = [
   { name: "app_input", description: "Type a line into the running app's standard input (for CLI/chat programs), then return its response.",
     input_schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
   { name: "stop_app", description: "Stop the running app.", input_schema: { type: "object", properties: {} } },
-  { name: "save_check", description: "Save a click-through check for a feature that works now, so V-Run re-verifies it after every later change (saved in .v-run/checks, part of the project). Each step can run an action script (click, type) and must give an expect expression that is truthy when the feature works. Example: {name: \"share dialog\", steps: [{action: \"document.querySelector('#share').click()\", expect: \"document.querySelector('#shareLink').value.startsWith('http')\"}]}. Save one for each important feature once you've verified it.",
+  { name: "save_check", description: "Save a click-through check for a feature that works now, so V-Run re-verifies it after every later change (saved in .v-run/checks, part of the project). Each step can run an action script (click, type) and must give an expect expression that is truthy when the feature works. Example: {name: \"share dialog\", steps: [{action: \"document.querySelector('#share').click()\", expect: \"document.querySelector('#shareLink').value.startsWith('http')\"}]}. Save one for each important feature of a page once you've verified it. Checks run in the browser page: don't save one for a server or API with no page (test it with a command instead).",
     input_schema: { type: "object", properties: {
       name: { type: "string", description: "Short name of the feature" },
       url: { type: "string", description: "Page to load (default: the page open in the preview)" },
@@ -175,7 +175,7 @@ export const TOOLS: Tool[] = [
   { name: "open_preview", description: "Load a URL (usually the app's localhost address) in the editor's preview pane.",
     input_schema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
   { name: "inspect_preview", description: "Look at the page in the preview pane: URL, title, visible text, console errors and warnings (and a screenshot when supported). Use it after starting or changing a web app. When something renders wrong with no error, debug it with `script` instead of guessing: it runs JavaScript in the page and returns the result.",
-    input_schema: { type: "object", properties: { url: { type: "string", description: "Optional address to load (default: the page open now). The page is always reloaded first, so you see your latest changes." }, script: { type: "string", description: "Optional JavaScript to run in the page; the value of its last expression is returned (async is fine). E.g. `[innerWidth, innerHeight, document.querySelector('canvas')?.getBoundingClientRect()]`. Variables inside a <script type=module> aren't global: expose what you need first (window.app = { scene, camera }) and read it here." } } } },
+    input_schema: { type: "object", properties: { url: { type: "string", description: "Optional address to load fresh (also the page open now: give its url to start from a clean page). Without it, the page open now is reloaded only if files changed since — otherwise it keeps the state your last script left (handy for a multi-step check)." }, script: { type: "string", description: "Optional JavaScript to run in the page; the value of its last expression is returned (async is fine). E.g. `[innerWidth, innerHeight, document.querySelector('canvas')?.getBoundingClientRect()]`. Variables inside a <script type=module> aren't global: expose what you need first (window.app = { scene, camera }) and read it here." }, width: { type: "number", description: "Optional: view the page this many CSS pixels wide, e.g. 375 for a phone. Its media queries respond (changing body width in a script doesn't), the screenshot shows it, and you're told what sticks out sideways. The preview goes back to normal afterwards." } } } },
   { name: "remember", description: "Save one lasting fact to V-Run's memory (V.md), which is read at the start of every future chat. Use it when the user states a preference or rule ('always…', 'never…', 'we use…'), or when you learn a non-obvious project fact worth keeping (how to run/test/build it, a gotcha). One short self-contained line. scope 'project' (default) = this project's V.md; 'user' = the user's personal memory for all projects. Never store secrets or keys.",
     input_schema: { type: "object", properties: { fact: { type: "string" }, scope: { type: "string", enum: ["project", "user"] } }, required: ["fact"] } },
   { name: "web_search", description: "Search the web. Returns titles, links and snippets. Use it to research anything you don't know or that may have changed: library docs and versions, APIs, error messages, facts about a place, company or building, free services. Then read the best pages with fetch_url.",
@@ -283,6 +283,8 @@ export interface Session {
   /** recent actions, for spotting loops; warnings this turn; stuck → the next step goes to a reasoning model */
   actions?: { sig: string; out: string; changed: boolean }[];
   loopWarnings?: number;
+  /** told once this task that it keeps inspecting the page without changing anything */
+  inspectNudged?: boolean;
   /** every version each file had this turn (hashes): writing one back is undoing, not progress */
   fileStates?: Map<string, Set<string>>;
   /** the request asks for changes; when it doesn't ("run the app", a question), the first edit is questioned */
@@ -591,7 +593,7 @@ export function buildNudge(s: Session, text: string, request: string): Nudge | n
 }
 
 /** What "check your work" means — the verification gate, and the chat's Check button. */
-export const CHECK_PROMPT = "Before you finish, check your work like a careful engineer: make sure the app is running (run_app, e.g. npx serve . for a static site), then call inspect_preview and read the console errors, the page text and what the screenshot shows. Fix every error you find (and anything that looks broken or misplaced), check again, and only then summarise what works — never say it works without having looked. For each important feature you verified, save_check it, so it is re-checked after every later change.";
+export const CHECK_PROMPT = "Before you finish, check your work like a careful engineer: make sure the app is running (run_app, e.g. npx serve . for a static site), then call inspect_preview and read the console errors, the page text and what the screenshot shows. Fix every error you find (and anything that looks broken or misplaced), check again, and only then summarise what works — never say it works without having looked. For each important feature of the page you verified, save_check it, so it is re-checked after every later change (checks run in the page: a server or API with no page is tested with a command such as curl instead, without a saved check).";
 
 /** A bigger job (a new app, site or feature across several files) gets a plan with checkpoints first. */
 const PRODUCT = String.raw`\b(app|application|website|site|game|dashboard|tracker|platform|system|tool|clone|backend|frontend|api|bot|extension|viewer|editor)\b`;
@@ -619,7 +621,11 @@ const CHANGE_WORDS = /\b(make|makes|build|create|add|fix|change|update|edit|writ
 const NO_CHANGE_WORDS = /\b(run|start|launch|open|serve|host|share|send|show|explain|why|what|how|where|which|check|test|look|tell|review|status|is (it|this|that|there)|can you see|does it)\b|\?\s*$/i;
 // "don't change anything", "without editing", "no need to fix it": a change word there says the opposite
 const NEGATED = /\b(don'?t|do not|never|without|no need to|not to)\b[^.,;!?]*/gi;
-export const asksForChange = (text: string) => { const t = text.replace(NEGATED, " "); return CHANGE_WORDS.test(t) || !NO_CHANGE_WORDS.test(t); };
+// something is broken: a pasted error or stack trace, "it doesn't work". In a chat with the agent that's a
+// request to fix it, even when it reads like a question ("I get this when I open the page: TypeError…")
+const PROBLEM = /\b(uncaught|traceback|exception|not working|doesn'?t work|isn'?t working|stopped working|is broken)\b|\berror:|\n\s+at \S+/i;
+const ERROR_NAME = /\b[A-Z]\w*(Error|Exception)\b/;
+export const asksForChange = (text: string) => { const t = text.replace(NEGATED, " "); return CHANGE_WORDS.test(t) || PROBLEM.test(t) || ERROR_NAME.test(t) || !NO_CHANGE_WORDS.test(t); };
 
 export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.mode = req.worker ? "agent" : req.mode;
@@ -636,6 +642,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.summaryNudged = false;
   s.actions = [];
   s.loopWarnings = 0;
+  s.inspectNudged = false;
   s.fileStates = new Map();
   s.changeAsked = !!req.worker || asksForChange(req.text);
   s.scopeWarned = false;
@@ -728,7 +735,10 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   const loop = noteAction(s, name, input, r.summary, !!rel && WRITES.has(name) && !undone, emit);
   if (loop) r = { ...r, content: r.content + loop };
   if (rel && WRITES.has(name)) { s.pageStale = true; s.filesSinceGate = true; s.reviewed = false; }
-  if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker) s.unchecked = true; // a team's work is checked by its reviewer
+  // what a page shows changed: look at it before finishing (a team's work is checked by its reviewer).
+  // Server code isn't a page: an API is tested with a command, and pushing it through the page check
+  // had the agent writing browser checks for JSON endpoints that could never pass
+  if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker && !(await isServerCode(rel))) s.unchecked = true;
   if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) s.unchecked = false;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
   if (rel && WRITES.has(name)) team.noteWrite(s.id, rel, r.summary);
@@ -744,6 +754,21 @@ const PS_FOR: Record<string, string> = {
   which: "Get-Command", export: "$env:NAME = \"value\"", true: "(nothing: just leave it out)", sed: "(-replace on Get-Content)",
   wc: "Measure-Object -Line", lsof: "Get-NetTCPConnection -LocalPort <port>", printf: "Write-Output",
 };
+/**
+ * Bash that goes wrong in PowerShell without failing, so the agent believes it worked: "node server.js &"
+ * starts a job that dies with the shell, "2>/dev/null" swallows the real error, "pkill …; node …" kills
+ * nothing and reports exit code 0. Caught before it runs; what to use instead.
+ */
+export function bashOnly(command: string): string[] {
+  const tips: string[] = [];
+  const at = (tool: string) => new RegExp(String.raw`(^|[;&|(]\s*)${tool}\b`).test(command);
+  if (at("pkill") || at("killall")) tips.push(`pkill/killall → stop_app for the app V-Run runs, otherwise ${PS_FOR.pkill}`);
+  if (at("nohup") || /(^|[^&])&\s*$/.test(command)) tips.push("a trailing & / nohup → run_app for anything that keeps running (servers, watchers; share_link for a public link)");
+  if (/\d?>\s*\/dev\/null/.test(command)) tips.push("2>/dev/null → 2>$null (or -ErrorAction SilentlyContinue)");
+  if (at("lsof")) tips.push(`lsof → ${PS_FOR.lsof}`);
+  return tips;
+}
+
 /** When a command failed because it's bash, not PowerShell: what to use instead. */
 export function shellHint(out: string, command = "") {
   const missing = [...new Set([...out.matchAll(/The term '([\w.-]+)' is not recognized/g)].map((m) => m[1]))];
@@ -754,6 +779,16 @@ export function shellHint(out: string, command = "") {
   // a trailing & starts a PowerShell job that ends with this command
   if (/BackgroundJob/.test(out) || /&\s*$/.test(command)) tips.push("a trailing & → run_app for anything that keeps running (servers, tunnels; share_link for a public link)");
   return tips.length ? `\n\nThis terminal is PowerShell, not bash. Use: ${tips.join("; ")}.` : "";
+}
+
+/** A script that runs a server (Node's http, Express, Fastify, Koa…) rather than code for a page. */
+export async function isServerCode(rel: string) {
+  if (!/\.[cm]?[jt]sx?$/i.test(rel) || /\.(jsx|tsx)$/i.test(rel)) return false;
+  try {
+    return /\brequire\(\s*['"](node:)?(http|https|express|fastify|koa|@hapi\/hapi)['"]\s*\)|\bfrom\s+['"](node:)?(http|https|express|fastify|koa)['"]|\bcreateServer\s*\(|\bexpress\s*\(\s*\)/.test(await readText(rel));
+  } catch {
+    return false;
+  }
 }
 
 /** A file's current content as a short hash ("none" when it doesn't exist). */
@@ -797,7 +832,16 @@ export function noteAction(s: Session, name: string, input: any, outcome: string
   const distinct = new Set(recent.map(key)).size;
   // inspecting the page over and over with a different script each time, changing nothing: still circling
   const inspections = actions.slice(-8).filter((a) => a.sig.startsWith("inspect:")).length;
-  const looping = sameMove >= 3 || (recent.length >= LOOP_WINDOW && distinct <= 3) || (name === "inspect_preview" && inspections >= 6);
+  const repeating = sameMove >= 3 || (recent.length >= LOOP_WINDOW && distinct <= 3);
+  // many different looks at the page with nothing changed is often just thorough checking (each case
+  // of a feature that works): the first time, a quiet word to wrap up or fix; only the second is a loop
+  const probing = name === "inspect_preview" && inspections >= 6;
+  if (!repeating && probing && !s.inspectNudged) {
+    s.inspectNudged = true;
+    actions.length = 0;
+    return `\n\nYou've looked at the page ${inspections} times since your last change. If it works, stop checking and give the user your summary now. If something is wrong, change the code to fix it rather than probing the page again.`;
+  }
+  const looping = repeating || probing;
   if (!looping) return "";
   actions.length = 0; // a fresh window: the next warning needs fresh repetition
   s.loopWarnings = (s.loopWarnings ?? 0) + 1;
@@ -907,8 +951,13 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
 Port ${busyPort} is ${mine.name}, the AI service you are running on — never stop it. Start the app on another port instead (e.g. npx serve . -p 5173).`, summary: `Port ${busyPort} is ${mine.name}: use another port` };
       }
       if (busyPort) {
-        const owner = await runner.portOwner(busyPort);
-        content += `\n\nPort ${busyPort} is already taken${owner ? ` by ${owner.name} (PID ${owner.pid})` : ""}, so this app couldn't start — and the preview would show whatever is running there, probably an old version. Stop that process first (${process.platform === "win32" ? `Stop-Process -Id ${owner?.pid ?? "<PID>"} -Force` : `kill ${owner?.pid ?? "<PID>"}`}, with the user's approval) or start the app on another port, then run_app again.`;
+        const [owner, serving] = await Promise.all([runner.portOwner(busyPort), runner.whatServes(busyPort)]);
+        const stop = process.platform === "win32" ? `Stop-Process -Id ${owner?.pid ?? "<PID>"} -Force` : `kill ${owner?.pid ?? "<PID>"}`;
+        content += `\n\nPort ${busyPort} is already taken${owner ? ` by ${owner.name} (PID ${owner.pid})` : ""}, so this command couldn't start.`
+          + (serving ? ` http://localhost:${busyPort} is answering with ${serving}.` : "")
+          // usually this same app, started earlier (by you, the user or another tool): starting a different
+          // server for it instead (a static file server) runs the app without its backend
+          + ` If that is this project already running, don't start another copy or a different server for it: open http://localhost:${busyPort} with open_preview and check it there. Restart it (${stop}, with the user's approval, then run_app again) only if it is running code you have changed since. If it's another program, start this app on a different port.`;
         return { content, summary: `Port ${busyPort} is in use${owner ? ` (${owner.name}, PID ${owner.pid})` : ""}` };
       }
       if (st.url) {
@@ -938,6 +987,13 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       return { content: `${runner.describe()}\n\nOutput after input:\n${runner.takeNewOutput() || "(no response yet — try app_output with wait_seconds)"}`, summary: `Typed: ${input.text.slice(0, 40)}` };
     }
     case "save_check": {
+      // a check that can't fail ("expect": "true") passes forever and proves nothing
+      const steps: { expect?: unknown }[] = Array.isArray(input?.steps) ? input.steps : [];
+      const vacuous = steps.findIndex((st) => /^\s*(|true|!0|!!1|1|"[^"]*"|'[^']*'|`[^`]*`)\s*;?\s*$/.test(String(st?.expect ?? "")));
+      if (!steps.length || vacuous >= 0) return {
+        content: `Not saved: ${steps.length ? `step ${vacuous + 1}'s expect (${JSON.stringify(steps[vacuous]?.expect ?? "")}) is always true, so the check could never fail` : "it has no steps"}. An expect must read something from the page that is only right when the feature works, e.g. "document.querySelector('#total').textContent === '25.00'". If there's nothing on a page to check (an API with no UI), don't save a check — testing it with a command is enough.`,
+        summary: "Check not saved: it could never fail",
+      };
       const file = await checks.saveCheck(input);
       return { content: `Saved ${file}. It runs after every task that changes files (and with run_checks).`, summary: `Saved check: ${input.name}` };
     }
@@ -1036,9 +1092,10 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       const host = runner.previewHost();
       const current = (await host?.inspect())?.url;
       const asked = typeof input?.url === "string" && /^https?:\/\//.test(input.url) ? input.url : undefined;
-      // reload only when the page is out of date (files changed, or another address): a page you just
-      // clicked through with a script keeps its state between inspects
-      const target = asked && asked.replace(/\/$/, "") !== current?.replace(/\/$/, "") ? asked : s.pageStale ? current : undefined;
+      // reload when asked for an address (a fresh page, even the one shown: an agent re-checking from an
+      // empty cart got the cart its last script left behind) or when files changed; without a url, a page
+      // just clicked through with a script keeps its state between inspects
+      const target = asked ?? (s.pageStale ? current : undefined);
       if (host && target && /^https?:/.test(target)) {
         s.pageStale = false;
         // one try, time-limited: a page that doesn't load is the finding (the server may have stopped)
@@ -1047,17 +1104,36 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
         const err = await Promise.race([load, new Promise<string>((r) => setTimeout(() => r("it took longer than 15 seconds"), 15_000))]);
         if (err) return { content: `Couldn't load ${target}: ${err}\n\n${runner.describe()}\n\nStart the app with run_app if it isn't running, then inspect again.`, summary: `Page didn't load: ${target}` };
       }
-      const page = await host?.inspect();
-      if (!page) return { content: "Nothing is open in the preview pane. Start the app with run_app or use open_preview.", summary: "Preview empty" };
-      const errors = page.console.filter((l) => /^\[(error|warning)\]/.test(l)).length;
-      // a probe: run JavaScript in the page and see the result (camera position, scene contents, DOM sizes…)
-      const probe = typeof input?.script === "string" && input.script.trim()
-        ? `\n\nResult of your script:\n${await runner.previewHost()?.evaluate?.(input.script) ?? "(this preview can't run scripts)"}` : "";
-      return {
-        content: `URL: ${page.url}\nTitle: ${page.title || "(none)"}\n\nVisible text:\n${clip(page.text.trim(), 6000) || "(the page shows no text)"}\n\nConsole:\n${page.console.join("\n") || "(empty)"}${probe}`,
-        summary: `Inspected ${page.url}${errors ? ` — ${errors} console error/warning(s)` : ""}`,
-        image: page.jpeg,
-      };
+      // a phone (or any) width: the page itself is shown that wide, so its media queries respond (setting
+      // body.style.width in a script doesn't, and sent the agent chasing overflow that wasn't there)
+      const asWide = Number(input?.width);
+      const width = Number.isFinite(asWide) && asWide >= 240 && asWide < 1200 && host?.setWidth ? Math.round(asWide) : null;
+      if (width) await host!.setWidth!(width);
+      try {
+        const page = await host?.inspect();
+        if (!page) return { content: "Nothing is open in the preview pane. Start the app with run_app or use open_preview.", summary: "Preview empty" };
+        const errors = page.console.filter((l) => /^\[(error|warning)\]/.test(l)).length;
+        // a probe: run JavaScript in the page and see the result (camera position, scene contents, DOM sizes…)
+        const probe = typeof input?.script === "string" && input.script.trim()
+          ? `\n\nResult of your script:\n${await host?.evaluate?.(input.script) ?? "(this preview can't run scripts)"}` : "";
+        let fit = "";
+        if (width) {
+          // the probe wrapper returns a string value quoted: unwrap until it's the measurement
+          let m: unknown = (await host?.evaluate?.(runner.OVERFLOW_PROBE).catch(() => "")) || "null";
+          for (let i = 0; i < 2 && typeof m === "string"; i++) try { m = JSON.parse(m as string); } catch { m = null; }
+          const fits = typeof (m as { pageWidth?: unknown } | null)?.pageWidth === "number" ? m as { width: number; pageWidth: number; sticksOut: string[] } : null;
+          fit = !fits ? "" : fits.pageWidth > fits.width + 1
+            ? `\n\nAt ${width}px wide the page is ${fits.pageWidth}px wide: it scrolls sideways. Sticking out: ${fits.sticksOut.join(", ") || "(couldn't tell which element)"}.`
+            : `\n\nAt ${width}px wide nothing sticks out sideways.`;
+        }
+        return {
+          content: `${width ? `Viewed ${width}px wide (the preview is back to normal now).\n` : ""}URL: ${page.url}\nTitle: ${page.title || "(none)"}\n\nVisible text:\n${clip(page.text.trim(), 6000) || "(the page shows no text)"}\n\nConsole:\n${page.console.join("\n") || "(empty)"}${probe}${fit}`,
+          summary: `Inspected ${page.url}${width ? ` at ${width}px` : ""}${errors ? ` — ${errors} console error/warning(s)` : ""}${fit.includes("scrolls sideways") ? " — overflows" : ""}`,
+          image: page.jpeg,
+        };
+      } finally {
+        if (width) await host!.setWidth!(null).catch(() => {});
+      }
     }
     case "run_terminal_command": {
       const refusedCmd = await runner.guardCommand(String(input.command));
@@ -1069,6 +1145,11 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
         const r = await runTool(s, "run_app", { command: input.command, explanation: input.explanation ?? "This keeps running, so it starts as your app:" }, emit, id);
         return { ...r, content: `That command keeps running (it's a server), so it was started with run_app instead of the terminal.\n\n${r.content}` };
       }
+      const bash = process.platform === "win32" ? bashOnly(String(input.command)) : [];
+      if (bash.length) return {
+        content: `Not run: this terminal is PowerShell, not bash, and that command would go wrong there without reporting an error. Use: ${bash.join("; ")}. To restart this project's server, call stop_app and then run_app.`,
+        summary: "Not run: bash syntax in PowerShell",
+      };
       const ok = await askApproval(s, emit, id, input.command, input.explanation);
       if (!ok) return { content: "The user declined to run this command. Ask them or try another approach.", summary: `Declined: ${input.command}` };
       const out = await runCommand(input.command, s.abort?.signal);
@@ -1255,7 +1336,7 @@ export async function systemPrompt(mode: ChatRequest["mode"], task = "", worker?
     "Memory: V-Run keeps a V.md memory (project V.md + the user's personal ~/.v-run/V.md), shown below when it exists. Follow it. Save one short line with the remember tool when the user tells you a preference or rule ('always…', 'never…', 'I prefer…' — use scope 'user' when it applies to every project), or when you learned a non-obvious fact that will matter next time. Good: \"Run the dev server with npm run dev (port 5173)\", \"Tests: npx vitest run; the e2e suite needs Chrome\", \"User prefers Tailwind over plain CSS\". Bad: anything describing what you just did (\"Fixed the navbar in 3 files\"), what is obvious from the code, temporary details, secrets. In Agent mode, when you finish a task in which you learned how to run, test or build the project, or hit a pitfall worth avoiding, and it isn't in V.md yet, save it before your final summary.",
     // a video is made as an HTML page too, but follows the html-video skill rather than the website brief
     mode !== "ask" && isVideoTask(task) ? "\nThis looks like a video / animation task: call use_skill with name \"html-video\" first and follow it." : "",
-    mode !== "ask" && isWebTask(task, isWebProject(getRoot())) && !isVideoTask(task) ? `\n${webDesignBrief(getRoot() ?? "")}` : "",
+    mode !== "ask" && isWebTask(task, isWebProject(getRoot())) && !isVideoTask(task) ? `\n${webDesignBrief(getRoot() ?? "", `${task}\n${getRoot() ? siteSubject(getRoot()!) : ""}`)}` : "",
     skillList ? `\n${skillList}` : "",
     mem ? `\n# V-Run memory\n${mem}` : "",
     rules ? `\nProject rules provided by the user:\n${rules}` : "",

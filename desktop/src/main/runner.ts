@@ -47,7 +47,16 @@ export interface PreviewHost {
   reload?(): Promise<string | void>;
   /** Run JavaScript in the page; the result (or the error) as text. */
   evaluate?(script: string): Promise<string>;
+  /** Show the page this many CSS pixels wide (a phone: 375), media queries and all; null for normal again. */
+  setWidth?(width: number | null): Promise<void>;
 }
+
+/** Page-side: how wide the page really is at this width, and what sticks out past the right edge. */
+export const OVERFLOW_PROBE = `(() => { const w = innerWidth, page = document.documentElement.scrollWidth;
+  const name = (e) => e.tagName.toLowerCase() + (e.id ? "#" + e.id : "") + (e.classList.length ? "." + [...e.classList].slice(0, 2).join(".") : "");
+  const over = page > w ? [...document.querySelectorAll("body *")].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > w + 1; })
+    .filter((e, _i, all) => !all.some((p) => p !== e && p.contains(e))).slice(0, 6).map((e) => name(e) + " (to " + Math.round(e.getBoundingClientRect().right) + "px)") : [];
+  return JSON.stringify({ width: w, pageWidth: page, sticksOut: over }); })()`;
 
 /**
  * Page-side wrapper for the agent's probe script: evaluates it (await allowed), and turns the value into
@@ -194,6 +203,20 @@ export async function guardCommand(cmd: string): Promise<string | null> {
 export function portInUse(output: string) {
   const m = output.match(/EADDRINUSE[^\n]*?:(\d{2,5})|address already in use[^\n]*?:(\d{2,5})|port (\d{2,5}) is (?:already )?in use|(\d{2,5}) is already in use/i);
   return m ? Number(m[1] ?? m[2] ?? m[3] ?? m[4]) : null;
+}
+
+/** What a port is serving, in a few words ("page \"Shop\"", "HTTP 404"), or null when nothing answers HTTP. */
+export async function whatServes(port: number): Promise<string | null> {
+  try {
+    const res = await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(2500), redirect: "follow" });
+    const body = (await res.text()).slice(0, 20_000);
+    const title = body.match(/<title[^>]*>([^<]{1,120})<\/title>/i)?.[1]?.trim();
+    if (title) return `a page titled "${title}"`;
+    const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+    return `HTTP ${res.status}${text ? ` ("${text}")` : ""}`;
+  } catch {
+    return null;
+  }
 }
 
 /** Which program holds a TCP port (Windows: netstat + tasklist; elsewhere: lsof). */

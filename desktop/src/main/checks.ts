@@ -28,10 +28,25 @@ export type CheckResult = { name: string; ok: boolean; detail: string };
 const dirOf = (root: string) => path.join(root, ".v-run", "checks");
 const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "check";
 
+const LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i;
+
+/**
+ * The page a check loads. The app's port changes between runs (a busy port, a restart), so a check keeps
+ * only the path of a local address and is pointed at wherever the app runs now (`current`).
+ */
+export function pageFor(saved: string | undefined, current?: string) {
+  const base = current && LOCAL.test(current) ? new URL(current).origin : null;
+  if (!saved) return current;
+  if (saved.startsWith("/")) return base ? base + saved : undefined;
+  if (LOCAL.test(saved) && base) { const u = new URL(saved); return base + u.pathname + u.search + u.hash; }
+  return saved;
+}
+
 export async function saveCheck(c: Check) {
   const root = getRoot();
   if (!root) throw new Error("Open a folder first");
   const check = checkSchema.parse(c);
+  if (check.url && LOCAL.test(check.url)) { const u = new URL(check.url); check.url = u.pathname + u.search + u.hash; }
   await fs.mkdir(dirOf(root), { recursive: true });
   const file = path.join(dirOf(root), `${slug(check.name)}.json`);
   await fs.writeFile(file, `${JSON.stringify(check, null, 2)}\n`);
@@ -62,7 +77,7 @@ export async function runChecks(host: PreviewHost | null, checks: Check[], fallb
   const out: CheckResult[] = [];
   for (const c of checks) {
     if (signal?.aborted) break;
-    const url = c.url || fallbackUrl;
+    const url = pageFor(c.url, fallbackUrl);
     if (!url) { out.push({ name: c.name, ok: false, detail: "no page to load: start the app first" }); continue; }
     const err = await host.open(url);
     if (err) { out.push({ name: c.name, ok: false, detail: `${url} didn't load: ${err}` }); continue; }

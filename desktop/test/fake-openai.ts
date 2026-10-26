@@ -103,6 +103,17 @@ export function freeTokenScript(body: any): Block[] {
       ? [{ type: "tool", name: "write_file", args: { path: "stop-a.txt", contents: "a" } }, { type: "tool", name: "write_file", args: { path: "stop-b.txt", contents: "b" } }]
       : [{ type: "text", text: "done" }];
   }
+  // two files written, a summary, then the self-review V-Run asks for: it reads a file back and says "all good"
+  if (/quiet review test/i.test(text) || /review your own work/i.test(text)) {
+    const turns = body.messages.filter((m: any) => m.role === "assistant").length;
+    const steps: Block[][] = [
+      [{ type: "tool", name: "write_file", args: { path: "review-a.txt", contents: "a" } }, { type: "tool", name: "write_file", args: { path: "review-b.txt", contents: "b" } }],
+      [{ type: "text", text: "Wrote review-a.txt and review-b.txt for you." }],
+      [{ type: "tool", name: "read_file", args: { path: "review-a.txt" } }],
+      [{ type: "text", text: "REVIEW VERDICT: all good." }],
+    ];
+    return steps[Math.min(turns, steps.length - 1)];
+  }
   if (/rename/i.test(text)) {
     const turns = body.messages.filter((m: any) => m.role === "assistant").length;
     const steps: Block[][] = [

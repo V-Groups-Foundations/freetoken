@@ -105,11 +105,49 @@ export const DIRECTIONS: Direction[] = [
     details: "chrome/metallic text effects, star sparkles, pixel or wireframe grids, holographic gradients used once" },
 ];
 
-const pick = (seed: string) => DIRECTIONS[parseInt(createHash("sha1").update(seed).digest("hex").slice(0, 8), 16) % DIRECTIONS.length];
+/** What each direction suits: matched against what the site is about. */
+const SUITS: Record<string, RegExp> = {
+  "Editorial": /\b(magazine|blog|news|journal|articles?|writing|writer|publication|essays?|stor(y|ies)|newsletter|podcast)\b/i,
+  "Swiss grid": /\b(data|reports?|documentation|docs|conference|information|research|university|institute|transit|timetable)\b/i,
+  "Neo-brutalist": /\b(memes?|zine|indie|game jam|underground|hackathon|punk|skate)\b/i,
+  "Luxury minimal": /\b(luxury|jewel(le)?ry|hotel|ryokan|spa|perfume|wine|watch(es)?|boutique|premium|interior|real estate)\b/i,
+  "Retro 70s / warm": /\b(caf[eé]|coffee|bakery|diner|restaurant|food|record shop|vinyl|vintage|surf|ice cream|pizza|bar)\b/i,
+  "Dark tech / terminal": /\b(developers?|api|cli|sdk|devtools?|terminal|database|open source|code|cloud|security|hosting|infrastructure)\b/i,
+  "Soft pastel / glass": /\b(wellness|meditation|health|habits?|mindful|baby|care|therapy|journaling|budget(ing)? app|notes app)\b/i,
+  "Organic / earthy": /\b(farm|garden(ing)?|organic|plants?|eco|sustainab\w*|natural|tea|herbal|outdoor|hiking|craft|ceramics?|pottery)\b/i,
+  "Bold startup / colour-block": /\b(startup|launch|saas|platform|growth|marketing|waitlist|productivity)\b/i,
+  "Playful illustrated": /\b(kids|children|school|community|learn(ing)?|education|creators?|toys?|pets?|club|games?)\b/i,
+  "Architectural mono": /\b(studio|architect(s|ure)?|portfolio|gallery|photograph(y|er)|agency|museum|artists?|exhibitions?|design(er)?s?)\b/i,
+  "Y2K / chrome": /\b(music|band|festival|dj|nightlife|events?|concerts?|streetwear|fashion|club night|album)\b/i,
+};
+
+/**
+ * This project's direction: the one that suits what the site is about best (a design studio isn't a
+ * Y2K music page), the project's own hash breaking ties so it stays the same between messages.
+ */
+export function pickDirection(seed: string, subject = "") {
+  const h = parseInt(createHash("sha1").update(seed || "default").digest("hex").slice(0, 8), 16);
+  const order = DIRECTIONS.map((_, i) => DIRECTIONS[(h + i) % DIRECTIONS.length]);
+  const score = (d: Direction) => (subject.match(new RegExp(SUITS[d.name]?.source ?? "$^", "gi")) ?? []).length;
+  return order.reduce((best, d) => (score(d) > score(best) ? d : best), order[0]);
+}
+
+/** What a site is about, from its own files: page title and headings, README, package description. */
+export function siteSubject(root: string) {
+  const parts: string[] = [];
+  const read = (f: string) => { try { return readFileSync(path.join(root, f), "utf8").slice(0, 8000); } catch { return ""; } };
+  for (const f of ["index.html", "public/index.html", "src/index.html"]) {
+    const html = read(f);
+    if (html) { parts.push(...[...html.matchAll(/<(title|h1|h2|h3|p)[^>]*>([^<]{1,200})</gi)].map((m) => m[2])); break; }
+  }
+  parts.push(read("README.md").slice(0, 1500));
+  try { parts.push(String(JSON.parse(read("package.json") || "{}").description ?? "")); } catch { /* not JSON */ }
+  return parts.join(" ");
+}
 
 /** The website brief, with this project's design direction. */
-export function webDesignBrief(seed: string) {
-  const d = pick(seed || "default");
+export function webDesignBrief(seed: string, subject = "") {
+  const d = pickDirection(seed, subject);
   const others = DIRECTIONS.filter((x) => x !== d).map((x) => x.name).join(", ");
   return `
 # Building websites and UIs — the quality bar
@@ -128,7 +166,7 @@ Never default to: Inter + slate + an indigo/purple gradient hero; a centred hero
 
 ## Craft
 - Stack: if the project already has one (React, Next, Vue, Tailwind…), use it. For a new site: a single index.html with Tailwind via its CDN (<script src="https://cdn.tailwindcss.com"></script>) configured with this direction's colours and fonts (tailwind.config in a <script>), and small vanilla JS.
-- A real type scale and spacing system; contrast that passes WCAG AA; hover/focus states on everything clickable; a working mobile menu; fully responsive (check phone width: nothing overflows); semantic HTML, alt text, a <title> and favicon.
+- A real type scale and spacing system; contrast that passes WCAG AA; hover/focus states on everything clickable; a working mobile menu; fully responsive (check it with inspect_preview width: 375 — nothing overflows); semantic HTML, alt text, a <title> and favicon.
 - Motion with taste: one or two meaningful animations (reveal on load, hover), respect prefers-reduced-motion.
 - Images: real-looking imagery (https://images.unsplash.com/... with descriptive queries, or https://picsum.photos/seed/<word>/1200/800) or SVG illustration in the direction's style — never broken links or grey boxes.
 - Copy: specific, confident copy for this exact product/person/business; invent plausible details rather than placeholders. No lorem ipsum, no "Feature 1".

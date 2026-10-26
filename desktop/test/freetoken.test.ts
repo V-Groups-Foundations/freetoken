@@ -97,6 +97,16 @@ async function main() {
     return !!waited && Date.now() - t0 >= 900 && text.includes("FreeToken says") && !events.some((e) => e.type === "error");
   });
 
+  await check("the self-review shows as thinking, so the user's last message stays the summary written for them", async () => {
+    const events: AI.AgentEvent[] = [];
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "quiet-review", mode: "agent", text: "quiet review test: write two files" }, (e) => { events.push(e); if (e.type === "done") r(); }));
+    const said = events.filter((e) => e.type === "text").map((e: any) => e.delta).join("");
+    const thought = events.filter((e) => e.type === "thinking").map((e: any) => e.delta).join("");
+    for (const f of ["review-a.txt", "review-b.txt"]) fs.rmSync(path.join(ws.getRoot()!, f), { force: true });
+    return (said.includes("Wrote review-a.txt and review-b.txt for you.") && !said.includes("REVIEW VERDICT") && !said.includes("Reviewing")
+      && thought.includes("REVIEW VERDICT") && thought.includes("Reviewing the changes")) || JSON.stringify({ said, thought });
+  });
+
   await check("Stop stops the rest of the reply: later tool calls don't run, and an approval after Stop doesn't hang", async () => {
     const ai = await import("../src/main/ai");
     const events: AI.AgentEvent[] = [];

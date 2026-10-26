@@ -214,6 +214,12 @@ export function brokeOff(e: unknown) {
   const status = (e as { status?: number } | null)?.status;
   return (!status || status === 408) && /idle timeout|timed? ?out|ECONNRESET|socket hang up|terminated|premature close|fetch failed|network error|stream (closed|ended|interrupted)|aborted by the server/i.test(String((e as Error)?.message ?? ""));
 }
+/** A provider that gave up for its own reasons, with no HTTP status: "Upstream error from Nvidia: Service
+ * temporarily overloaded" arrives inside the stream. It's busy, not wrong: ask again. */
+export function providerBusy(e: unknown) {
+  const status = (e as { status?: number } | null)?.status;
+  return !status && /overloaded|temporarily unavailable|service unavailable|try again later|at capacity|upstream error|provider returned error/i.test(String((e as Error)?.message ?? ""));
+}
 // what usually breaks a stream is one enormous reply (a whole app in a single write_file): ask for parts
 const CUT_OFF = "\n\nIMPORTANT: your last reply was cut off by the provider while you were writing it — it was too long for one step. Write big files in parts: first write_file a skeleton (structure plus the first section, under ~250 lines), then add each further section with edit_file in its own step.";
 
@@ -225,6 +231,7 @@ export function rateLimitWait(e: unknown, waits: number): number | null {
   // a stream that broke off mid-answer ("Upstream idle timeout exceeded", a reset connection): free
   // providers drop long generations now and then — ask again rather than ending the whole task
   if (brokeOff(e)) return waits < 3 ? 1500 * (waits + 1) : null;
+  if (providerBusy(e)) return waits < 3 ? 3000 * (waits + 1) : null;
   if (err?.status !== 429 || waits >= 6) return null;
   const h = err.headers;
   const raw = h instanceof Headers ? h.get("retry-after") : h?.["retry-after"];
@@ -351,12 +358,16 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
     let stepModel: string | null = null, shownModel: string | null = null;
     const warnedUnreachable = new Set<string>();
     const turnModels = new Set<string>();
+    // the self-review (reading its work back, then "all good") is for the agent, not the user, whose
+    // last message stays the summary written for them: it shows as thinking until it ends or edits a
+    // file (a review that finds something fixes it, and from there the agent speaks normally)
+    let quietStep = false;
     for (let turn = 0; turn < (req.maxSteps ?? MAX_STEPS); turn++) {
       let text = "";
       let calls: { id: string; name: string; args: string }[] = [];
       let finish: string | null = null;
       let waits = 0, cutOff = false;
-      const context = await contextFor(req.sessionId, msgs, userIndex, s.abort.signal, () => emit({ type: "text", delta: "\n\n*Summarising the earlier steps to keep the context small…*\n\n" }));
+      const context = await contextFor(req.sessionId, msgs, userIndex, s.abort.signal, () => emit({ type: "thinking", delta: "\n\n*Summarising the earlier steps to keep the context small…*\n\n" }));
       for (let attempt = 0; ; attempt++) {
         text = ""; calls = []; finish = null;
         const nudge = attempt ? `\n\nIMPORTANT: call only these tools, by their exact names: ${tools.map((t) => t.type === "function" ? t.function.name : "").join(", ")}. No other tools exist (there is no repo_browser).` : "";
@@ -399,7 +410,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             if (d?.content) {
               const part = split(d.content);
               if (part.think) emit({ type: "thinking", delta: part.think });
-              if (part.text) { text += part.text; emit({ type: "text", delta: part.text }); }
+              if (part.text) { text += part.text; emit({ type: quietStep ? "thinking" : "text", delta: part.text }); }
             }
             for (const tc of d?.tool_calls ?? []) {
               // some providers (Gemini) send each call whole and leave out `index`: a call with an id is a
@@ -452,12 +463,16 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         ...(uses.length ? { tool_calls: uses.map((u) => ({ id: u.id, type: "function" as const, function: { name: u.name, arguments: u.args || "{}" } })) } : {}),
       });
       if (!uses.length) {
+        quietStep = false;
         const gate = await regressionGate(s, emit);
         if (gate) { msgs.push({ role: "user", content: gate }); continue; }
         const nudge = buildNudge(s, text, req.text);
         if (nudge) {
           if (nudge.kind === "false-claim" || nudge.kind === "code-dump") reportModel(stepModel, false, nudge.kind);
-          msgs.push({ role: "user", content: nudge.prompt }); if (nudge.label) emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue;
+          msgs.push({ role: "user", content: nudge.prompt });
+          quietStep = nudge.kind === "review";
+          if (nudge.label) emit({ type: quietStep ? "thinking" : "text", delta: `\n\n${nudge.label}\n\n` });
+          continue;
         }
         // a task that changed the project and ended cleanly counts for every model that worked on it
         if (s.turns[s.turns.length - 1]?.files.size && !s.unchecked) for (const m of turnModels) reportModel(m, true, "finished a task");
@@ -490,6 +505,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
           try {
             const r = await execTool(s, u.name as ToolName, parsed.data, emit, u.id);
             content = r.content;
+            if (quietStep && /^(edit_file|write_file|delete_file)$/.test(u.name)) quietStep = false;
             // the agent model may not see images: a vision model looks at the page and describes problems
             // once per version of the page: the same page reviewed again only repeats (or invents) problems
             if (u.name === "inspect_preview" && r.image && !s.reviewed) {
