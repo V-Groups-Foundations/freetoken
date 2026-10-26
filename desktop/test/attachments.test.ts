@@ -80,6 +80,8 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwA
       ["Write tests for utils.ts", "testing"], ["Make a 3D spinning product viewer", "threejs-3d"], ["Why is my page loading so slowly?", "web-performance"],
       ["Design a logo as SVG", "svg-graphics"], ["Set up a new React app", "react-app"], ["Fix the bug where the cart total is wrong", "debugging"],
       ["Make a 10 second animated intro video", "html-video"], ["Thanks, that's all!", null], ["What does this function do?", null],
+      // undoing the last reply is the undo tool's job, not git's; git history is
+      ["actually undo that last change, I preferred it before", null], ["revert my last commit", "git-workflow"],
     ];
     const wrong: string[] = [];
     for (const [q, want] of cases) {

@@ -55,6 +55,7 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   run_checks: { label: "Run checks", verb: "Re-running the saved checks" },
   list_checkpoints: { label: "Checkpoints", verb: "Looking at the history" },
   restore_checkpoint: { label: "Restore", arg: "id", verb: "Restoring a snapshot" },
+  undo_last_reply: { label: "Undo last reply", verb: "Undoing the last reply" },
   open_preview: { label: "Preview", arg: "url", verb: "Opening the preview" },
   inspect_preview: { label: "Inspect page", verb: "Looking at the page" },
   remember: { label: "Remember", arg: "fact", verb: "Saving to memory" },

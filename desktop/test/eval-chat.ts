@@ -27,6 +27,8 @@ import path from "node:path";
   page.on("console", (m) => consoleLines.push(`[${m.type() === "warning" ? "warning" : m.type()}] ${m.text().slice(0, 300)}`));
   page.on("pageerror", (e) => consoleLines.push(`[error] ${e.message}`));
   const runner = await import("../src/main/runner");
+  // as in the app: FreeToken's own port isn't the project's
+  runner.setProtectedPorts(() => [{ port: Number(new URL(cfg.baseUrl).port || 80), name: "FreeToken" }]);
   runner.setPreviewHost({
     async open(url) { consoleLines = []; try { await page.goto(url, { waitUntil: "load", timeout: 30000 }); await page.waitForTimeout(1500); } catch (e) { return (e as Error).message; } },
     async inspect() {

@@ -111,6 +111,7 @@ export const schemas = {
   save_check: checks.checkSchema,
   run_checks: z.object({ name: z.string().optional() }).passthrough(),
   restore_checkpoint: z.object({ id: z.string(), reason: z.string().optional() }),
+  undo_last_reply: z.object({ reason: z.string().optional() }).passthrough(),
   open_preview: z.object({ url: z.string().regex(/^https?:\/\//i, "url must start with http:// or https://") }),
   inspect_preview: z.object({ url: z.string().optional(), script: z.string().optional() }).passthrough(),
 };
@@ -172,6 +173,8 @@ export const TOOLS: Tool[] = [
     input_schema: { type: "object", properties: {} } },
   { name: "restore_checkpoint", description: "Put the project back to a snapshot from list_checkpoints: changed and deleted files come back, files created since are removed. The current state is snapshotted first, so it can be undone. Needs the user's approval.",
     input_schema: { type: "object", properties: { id: { type: "string", description: "Snapshot id from list_checkpoints" }, reason: { type: "string", description: "One line on why, shown to the user" } }, required: ["id"] } },
+  { name: "undo_last_reply", description: "Undo your previous reply: every file it changed, created or deleted goes back exactly to how it was before the user's last message (all of that reply's edits, including later fixes to them). Use it when the user says 'undo that', 'revert it', 'put it back', 'I preferred it before' about what you just did — not a manual re-edit, which can land on an in-between version. Needs the user's approval.",
+    input_schema: { type: "object", properties: { reason: { type: "string", description: "One line on why, shown to the user" } } } },
   { name: "open_preview", description: "Load a URL (usually the app's localhost address) in the editor's preview pane.",
     input_schema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
   { name: "inspect_preview", description: "Look at the page in the preview pane: URL, title, visible text, console errors and warnings (and a screenshot when supported). Use it after starting or changing a web app. When something renders wrong with no error, debug it with `script` instead of guessing: it runs JavaScript in the page and returns the result.",
@@ -790,6 +793,16 @@ export function shellHint(out: string, command = "") {
 }
 
 /**
+ * An address that is the AI service itself (FreeToken on localhost:3000), not the project: guessing
+ * "localhost:3000" before starting the app had the agent reviewing FreeToken's page as its own work.
+ */
+export function notThisProject(url: string): string | null {
+  const m = url.match(/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):(\d+)/i);
+  const p = m ? runner.protectedPort(Number(m[2])) : undefined;
+  return p ? `${url} is ${p.name}, the AI service you are running on, not this project. Start the project with run_app (it opens the project's own address in the preview), or use the address run_app gave you.` : null;
+}
+
+/**
  * Whether a whole HTML page came through complete. Told only "Overwrote index.html (N lines)", an agent
  * guessed its 500-line page was "corrupted mid-write" and spent minutes writing it again; with the facts
  * it can trust a good page, or fix a cut-off one where it stops.
@@ -1098,11 +1111,28 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       s.pageStale = true;
       return { content: `Restored ${r.restored} file(s)${r.removed.length ? `, removed ${r.removed.join(", ")}` : ""}. The state before the restore is snapshot ${r.undo?.slice(0, 10) ?? "(none)"} — restore that to undo.`, summary: `Restored ${input.id.slice(0, 7)}` };
     }
+    case "undo_last_reply": {
+      // this message is the last turn: the reply to undo is the one before it
+      const prev = s.turns[s.turns.length - 2];
+      if (!prev?.files.size) return { content: "Your previous reply didn't change any files, so there is nothing of it to undo. If the user means something earlier, find it with list_checkpoints.", summary: "Nothing to undo" };
+      const names = [...prev.files.keys()];
+      if (!(await askApproval(s, emit, id, `Undo your previous reply: ${names.join(", ")}`, input.reason ?? "Put back every file the previous reply changed, as it was before:", true)))
+        return { content: "The user declined the undo.", summary: "Undo declined" };
+      for (const [rel, before] of prev.files) {
+        await checkpoint(s, rel); // so this undo can itself be undone
+        if (before === null) { if (await exists(rel)) await deletePath(rel); } else await writeText(rel, before);
+        emit({ type: "file_changed", path: rel });
+      }
+      s.pageStale = true;
+      return { content: `Put back ${names.join(", ")} exactly as they were before your previous reply. Check the result (inspect_preview for a page), then tell the user what it's back to.`, summary: `Undid the previous reply (${names.length} file${names.length > 1 ? "s" : ""})` };
+    }
     case "stop_app": {
       const stopped = runner.stopApp();
       return { content: stopped ? "Stopped the app." : "No app was running.", summary: stopped ? "Stopped the app" : "No app running" };
     }
     case "open_preview": {
+      const theirs = notThisProject(input.url);
+      if (theirs) return { content: theirs, summary: "That address is FreeToken, not this project" };
       const err = await openPreview(input.url, s.abort?.signal);
       if (err) throw new Error(`Couldn't load ${input.url}: ${err}`);
       return { content: `Opened ${input.url} in the preview pane — use inspect_preview to see it.`, summary: `Preview: ${input.url}` };
@@ -1113,6 +1143,8 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       const host = runner.previewHost();
       const current = (await host?.inspect())?.url;
       const asked = typeof input?.url === "string" && /^https?:\/\//.test(input.url) ? input.url : undefined;
+      const theirs = asked ? notThisProject(asked) : null;
+      if (theirs) return { content: theirs, summary: "That address is FreeToken, not this project" };
       // reload when asked for an address (a fresh page, even the one shown: an agent re-checking from an
       // empty cart got the cart its last script left behind) or when files changed; without a url, a page
       // just clicked through with a script keeps its state between inspects

@@ -507,6 +507,44 @@ async function main() {
     }
   });
 
+  await check("FreeToken's own address isn't looked at as the project's page", async () => {
+    let opened = 0;
+    runner.setProtectedPorts(() => [{ port: 3000, name: "FreeToken" }]);
+    runner.setPreviewHost({ open: async () => { opened++; }, inspect: async () => ({ url: "http://localhost:3000/", title: "FreeToken", text: "", console: [] }) });
+    try {
+      const s = ai.getSession("not-ours");
+      const look = await ai.execTool(s, "inspect_preview", { url: "http://localhost:3000" }, () => {}, "no1");
+      const open = await ai.execTool(s, "open_preview", { url: "http://127.0.0.1:3000/" }, () => {}, "no2");
+      return (opened === 0 && /not this project/.test(look.content) && open.summary === "That address is FreeToken, not this project") || JSON.stringify({ opened, look: look.content, open: open.summary });
+    } finally {
+      runner.setPreviewHost(null);
+      runner.setProtectedPorts(() => []);
+    }
+  });
+
+  await check("'undo that' puts back everything the previous reply changed, not just its last edit", async () => {
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-undo-"));
+    ws.setRoot(own);
+    fs.writeFileSync(path.join(own, "style.css"), ".cta { background: #161614; }\n");
+    const sid = "undo-reply";
+    const s = ai.getSession(sid);
+    const approve = (e: any) => { if (e.type === "approval") ai.approve(sid, e.id, true); };
+    ai.beginTurn(s, "ft", 0); // "make the button darker": first lighter by mistake, then the review's black
+    await ai.execTool(s, "write_file", { path: "style.css", contents: ".cta { background: #2b2b2b; }\n" }, () => {}, "u1");
+    await ai.execTool(s, "write_file", { path: "style.css", contents: ".cta { background: #000; }\n" }, () => {}, "u2");
+    await ai.execTool(s, "write_file", { path: "new.css", contents: "/* added */\n" }, () => {}, "u3");
+    ai.beginTurn(s, "ft", 0); // "undo that, I preferred it before"
+    const r = await ai.execTool(s, "undo_last_reply", {}, approve, "u4");
+    const css = fs.readFileSync(path.join(own, "style.css"), "utf8");
+    const added = fs.existsSync(path.join(own, "new.css"));
+    // and the undo can be undone in turn
+    ai.beginTurn(s, "ft", 0);
+    await ai.execTool(s, "undo_last_reply", {}, approve, "u5");
+    const redone = fs.readFileSync(path.join(own, "style.css"), "utf8");
+    return (css === ".cta { background: #161614; }\n" && !added && fs.existsSync(path.join(own, "new.css")) && r.summary === "Undid the previous reply (2 files)"
+      && redone === ".cta { background: #000; }\n") || JSON.stringify({ css, summary: r.summary, redone });
+  });
+
   await check("a written page is reported complete or cut off, so the agent doesn't rewrite a good one", () => {
     const whole = ai.htmlShape("<!doctype html><html><head><style>a{}</style></head><body><p>hi</p><script>x()</script></body></html>\n");
     const cut = ai.htmlShape("<!doctype html><html><head><style>a{}</style></head><body><p>hi</p><script>x(");

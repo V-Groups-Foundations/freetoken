@@ -1,6 +1,6 @@
 ---
 name: git-workflow
-description: "Use git well: review status and diff before committing, small focused commits with good messages, branches, .gitignore, undoing safely (restore, revert vs reset), never force-pushing shared branches, resolving merge conflicts, and GitHub CLI for pull requests. Use when the user asks to commit, push, branch, merge, undo changes, fix a conflict, or open a PR."
+description: "Use git well: review status and diff before committing, small focused commits with good messages, branches, .gitignore, undoing safely (restore, revert vs reset), never force-pushing shared branches, resolving merge conflicts, and GitHub CLI for pull requests. Use when the user asks to commit, push, branch, merge, undo a commit or revert git history, fix a conflict, or open a PR — not to undo your own last reply in this chat (that is undo_last_reply)."
 ---
 
 # Git workflow
