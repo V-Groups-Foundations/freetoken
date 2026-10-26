@@ -507,6 +507,29 @@ async function main() {
     }
   });
 
+  await check("a written page is reported complete or cut off, so the agent doesn't rewrite a good one", () => {
+    const whole = ai.htmlShape("<!doctype html><html><head><style>a{}</style></head><body><p>hi</p><script>x()</script></body></html>\n");
+    const cut = ai.htmlShape("<!doctype html><html><head><style>a{}</style></head><body><p>hi</p><script>x(");
+    return (/came through complete/.test(whole) && /looks cut off: it doesn't end with <\/html>, <body> isn't closed, <script> isn't closed/.test(cut) && ai.htmlShape("<p>a fragment</p>") === "")
+      || JSON.stringify({ whole, cut });
+  });
+
+  await check("having looked at the page already, a later change gets one more look, not the whole check again", () => {
+    const s = ai.getSession("recheck");
+    ai.startTurnState(s, { sessionId: "recheck", mode: "agent", text: "make it nicer" });
+    runner.setPreviewHost({ open: async () => {}, inspect: async () => null });
+    try {
+      s.unchecked = true;
+      const first = ai.buildNudge(s, "Done.", "make it nicer");
+      ai.startTurnState(s, { sessionId: "recheck", mode: "agent", text: "tighten the hero text" });
+      s.unchecked = true; s.lookedAt = true;
+      const again = ai.buildNudge(s, "Done.", "tighten the hero text");
+      return (first?.prompt === ai.CHECK_PROMPT && again?.prompt === ai.RECHECK_PROMPT && /one more look/.test(again.label)) || JSON.stringify({ first: first?.label, again: again?.label });
+    } finally {
+      runner.setPreviewHost(null);
+    }
+  });
+
   await check("a check that fails once and then passes was a timing fluke, not a broken feature; one that fails twice is reported", async () => {
     const checks = await import("../src/main/checks");
     let loads = 0;

@@ -285,6 +285,8 @@ export interface Session {
   loopWarnings?: number;
   /** told once this task that it keeps inspecting the page without changing anything */
   inspectNudged?: boolean;
+  /** it has looked at the page in the preview this task */
+  lookedAt?: boolean;
   /** every version each file had this turn (hashes): writing one back is undoing, not progress */
   fileStates?: Map<string, Set<string>>;
   /** the request asks for changes; when it doesn't ("run the app", a question), the first edit is questioned */
@@ -574,6 +576,9 @@ export function buildNudge(s: Session, text: string, request: string): Nudge | n
   // web files changed but nobody looked at the result: check it before calling it done
   if (s.unchecked && runner.previewHost() && !s.checkNudged) {
     s.checkNudged = true;
+    // it already checked the page this task and changed something since: one more look at that, not the
+    // whole verification again (redoing it all after a one-line polish took four and a half minutes)
+    if (s.lookedAt) return { kind: "check", label: "*Taking one more look after the last changes…*", prompt: RECHECK_PROMPT };
     return { kind: "check", label: "*Checking the result before finishing…*", prompt: CHECK_PROMPT };
   }
   if (changed.length) return null;
@@ -594,6 +599,8 @@ export function buildNudge(s: Session, text: string, request: string): Nudge | n
 
 /** What "check your work" means — the verification gate, and the chat's Check button. */
 export const CHECK_PROMPT = "Before you finish, check your work like a careful engineer: make sure the app is running (run_app, e.g. npx serve . for a static site), then call inspect_preview and read the console errors, the page text and what the screenshot shows. Fix every error you find (and anything that looks broken or misplaced), check again, and only then summarise what works — never say it works without having looked. For each important feature of the page you verified, save_check it, so it is re-checked after every later change (checks run in the page: a server or API with no page is tested with a command such as curl instead, without a saved check).";
+
+export const RECHECK_PROMPT = "You changed the page after your last look at it. Look once more: inspect_preview (also with width: 375 if you changed layout or CSS), and fix anything your last changes broke. Don't repeat checks that already passed or re-test features you didn't touch. Then finish with your summary.";
 
 /** A bigger job (a new app, site or feature across several files) gets a plan with checkpoints first. */
 const PRODUCT = String.raw`\b(app|application|website|site|game|dashboard|tracker|platform|system|tool|clone|backend|frontend|api|bot|extension|viewer|editor)\b`;
@@ -633,6 +640,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.codeNudges = 0;
   s.unchecked = false;
   s.checkNudged = false;
+  s.lookedAt = false;
   s.selfReviewed = false;
   const followUp = /\b(build|make|create|do|start|implement|go ahead)\b/i.test(req.text) && isBigJob(earlier);
   s.bigJob = canAct(s.mode) && !req.worker && s.mode !== "team" && (isBigJob(req.text) || followUp);
@@ -739,7 +747,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   // Server code isn't a page: an API is tested with a command, and pushing it through the page check
   // had the agent writing browser checks for JSON endpoints that could never pass
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker && !(await isServerCode(rel))) s.unchecked = true;
-  if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) s.unchecked = false;
+  if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) { s.unchecked = false; s.lookedAt = true; }
   if (rel && name === "read_file") team.noteRead(s.id, rel);
   if (rel && WRITES.has(name)) team.noteWrite(s.id, rel, r.summary);
   const plan = planNotes(s, name, input);
@@ -779,6 +787,19 @@ export function shellHint(out: string, command = "") {
   // a trailing & starts a PowerShell job that ends with this command
   if (/BackgroundJob/.test(out) || /&\s*$/.test(command)) tips.push("a trailing & → run_app for anything that keeps running (servers, tunnels; share_link for a public link)");
   return tips.length ? `\n\nThis terminal is PowerShell, not bash. Use: ${tips.join("; ")}.` : "";
+}
+
+/**
+ * Whether a whole HTML page came through complete. Told only "Overwrote index.html (N lines)", an agent
+ * guessed its 500-line page was "corrupted mid-write" and spent minutes writing it again; with the facts
+ * it can trust a good page, or fix a cut-off one where it stops.
+ */
+export function htmlShape(text: string) {
+  if (!/<html[\s>]/i.test(text)) return "";
+  const unclosed = ["head", "body", "style", "script"].filter((t) => (text.match(new RegExp(`<${t}[\s>]`, "gi")) ?? []).length > (text.match(new RegExp(`</${t}>`, "gi")) ?? []).length);
+  const ends = /<\/html>\s*$/i.test(text);
+  if (ends && !unclosed.length) return "\n\nThe page came through complete: it ends with </html> and every <head>, <body>, <style> and <script> is closed.";
+  return `\n\nThe page looks cut off: ${[!ends && "it doesn't end with </html>", ...unclosed.map((t) => `<${t}> isn't closed`)].filter(Boolean).join(", ")}. Add the missing end with edit_file (append after the last line that's there) rather than rewriting the whole page.`;
 }
 
 /** A script that runs a server (Node's http, Express, Fastify, Koa…) rather than code for a page. */
@@ -923,7 +944,7 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       await checkpoint(s, rel);
       await writeText(rel, input.contents);
       emit({ type: "file_changed", path: rel });
-      return { content: `${existed ? "Overwrote" : "Created"} ${rel} (${input.contents.split("\n").length} lines).`, summary: `${existed ? "Rewrote" : "Created"} ${rel}`, detail: diffDetail(rel, before, input.contents, !existed) };
+      return { content: `${existed ? "Overwrote" : "Created"} ${rel} (${input.contents.split("\n").length} lines).${/\.html?$/i.test(rel) ? htmlShape(input.contents) : ""}`, summary: `${existed ? "Rewrote" : "Created"} ${rel}`, detail: diffDetail(rel, before, input.contents, !existed) };
     }
     case "delete_file": {
       const { rel } = resolveInRoot(input.path);
