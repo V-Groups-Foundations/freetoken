@@ -548,8 +548,28 @@ async function main() {
   await check("a written page is reported complete or cut off, so the agent doesn't rewrite a good one", () => {
     const whole = ai.htmlShape("<!doctype html><html><head><style>a{}</style></head><body><p>hi</p><script>x()</script></body></html>\n");
     const cut = ai.htmlShape("<!doctype html><html><head><style>a{}</style></head><body><p>hi</p><script>x(");
-    return (/came through complete/.test(whole) && /looks cut off: it doesn't end with <\/html>, <body> isn't closed, <script> isn't closed/.test(cut) && ai.htmlShape("<p>a fragment</p>") === "")
-      || JSON.stringify({ whole, cut });
+    // the typo that blanked a whole page: the title never closes, so it swallows everything after it
+    const typo = ai.htmlShape('<!doctype html><html><head><title>Lumen Studio</meta><style>a{}</style></head><body><h1>Hi</h1></body></html>');
+    return (/came through complete/.test(whole) && /looks cut off: it doesn't end with <\/html>, <body> isn't closed, <script> isn't closed/.test(cut) && ai.htmlShape("<p>a fragment</p>") === ""
+      && /The page is broken: <title> isn't closed/.test(typo))
+      || JSON.stringify({ whole, cut, typo });
+  });
+
+  await check("a page that shows nothing, or whose title is the whole page, is called broken (not the preview)", async () => {
+    let title = "x".repeat(400), text = "";
+    runner.setPreviewHost({ open: async () => {}, inspect: async () => ({ url: "http://localhost:5173/", title, text, console: [] }) });
+    try {
+      const s = ai.getSession("blank-page");
+      const swallowed = await ai.execTool(s, "inspect_preview", {}, () => {}, "bp1");
+      title = "Shop";
+      const blank = await ai.execTool(s, "inspect_preview", {}, () => {}, "bp2");
+      text = "Bean Shop";
+      const fine = await ai.execTool(s, "inspect_preview", {}, () => {}, "bp3");
+      return (/title is 400 characters long/.test(swallowed.content) && swallowed.summary.endsWith("the page is broken") && /shows no text at all/.test(blank.content)
+        && !/⚠/.test(fine.content)) || JSON.stringify({ swallowed: swallowed.summary, blank: blank.content.slice(-200), fine: fine.summary });
+    } finally {
+      runner.setPreviewHost(null);
+    }
   });
 
   await check("having looked at the page already, a later change gets one more look, not the whole check again", () => {

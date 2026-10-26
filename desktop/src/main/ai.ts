@@ -809,10 +809,15 @@ export function notThisProject(url: string): string | null {
  */
 export function htmlShape(text: string) {
   if (!/<html[\s>]/i.test(text)) return "";
-  const unclosed = ["head", "body", "style", "script"].filter((t) => (text.match(new RegExp(`<${t}[\s>]`, "gi")) ?? []).length > (text.match(new RegExp(`</${t}>`, "gi")) ?? []).length);
+  // <title>, <textarea>, <style> and <script> end only at their own closing tag: one left open (a
+  // "<title>…</meta>" typo) swallows the rest of the page, which then shows nothing
+  const unclosed = ["head", "body", "title", "textarea", "style", "script"].filter((t) => (text.match(new RegExp(`<${t}[\s>]`, "gi")) ?? []).length > (text.match(new RegExp(`</${t}>`, "gi")) ?? []).length);
+  if ((text.match(/<!--/g) ?? []).length > (text.match(/-->/g) ?? []).length) unclosed.push("<!-- comment");
   const ends = /<\/html>\s*$/i.test(text);
-  if (ends && !unclosed.length) return "\n\nThe page came through complete: it ends with </html> and every <head>, <body>, <style> and <script> is closed.";
-  return `\n\nThe page looks cut off: ${[!ends && "it doesn't end with </html>", ...unclosed.map((t) => `<${t}> isn't closed`)].filter(Boolean).join(", ")}. Add the missing end with edit_file (append after the last line that's there) rather than rewriting the whole page.`;
+  const named = (t: string) => (t.startsWith("<") ? `a ${t}` : `<${t}>`);
+  if (ends && !unclosed.length) return "\n\nThe page came through complete: it ends with </html> and every <head>, <body>, <title>, <style> and <script> is closed.";
+  if (ends) return `\n\nThe page is broken: ${unclosed.map((t) => `${named(t)} isn't closed`).join(", ")} — everything after it is swallowed and won't show. Fix that tag with edit_file.`;
+  return `\n\nThe page looks cut off: ${["it doesn't end with </html>", ...unclosed.map((t) => `${named(t)} isn't closed`)].join(", ")}. Add the missing end with edit_file (append after the last line that's there) rather than rewriting the whole page.`;
 }
 
 /** A script that runs a server (Node's http, Express, Fastify, Koa…) rather than code for a page. */
@@ -1169,6 +1174,13 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
         // a probe: run JavaScript in the page and see the result (camera position, scene contents, DOM sizes…)
         const probe = typeof input?.script === "string" && input.script.trim()
           ? `\n\nResult of your script:\n${await host?.evaluate?.(input.script) ?? "(this preview can't run scripts)"}` : "";
+        // a page that shows nothing, or whose title is the whole page: the HTML is broken, not the preview
+        // (an agent decided "the preview tool is having issues" and called a blank page fully functional)
+        const broken = page.title.length > 150
+          ? `\n\n⚠ The page's title is ${page.title.length} characters long: a <title> that isn't closed with </title> has swallowed the rest of the page. Fix the HTML — the preview is working.`
+          : !page.text.trim() && !probe
+            ? "\n\n⚠ The page shows no text at all. If it should, the HTML is probably broken (an unclosed <title>, <textarea>, <script>, <style> or <!-- comment swallows everything after it) or a script failed: read the top of the file. The preview itself is working."
+            : "";
         let fit = "";
         if (width) {
           // the probe wrapper returns a string value quoted: unwrap until it's the measurement
@@ -1180,8 +1192,8 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
             : `\n\nAt ${width}px wide nothing sticks out sideways.`;
         }
         return {
-          content: `${width ? `Viewed ${width}px wide (the preview is back to normal now).\n` : ""}URL: ${page.url}\nTitle: ${page.title || "(none)"}\n\nVisible text:\n${clip(page.text.trim(), 6000) || "(the page shows no text)"}\n\nConsole:\n${page.console.join("\n") || "(empty)"}${probe}${fit}`,
-          summary: `Inspected ${page.url}${width ? ` at ${width}px` : ""}${errors ? ` — ${errors} console error/warning(s)` : ""}${fit.includes("scrolls sideways") ? " — overflows" : ""}`,
+          content: `${width ? `Viewed ${width}px wide (the preview is back to normal now).\n` : ""}URL: ${page.url}\nTitle: ${page.title || "(none)"}\n\nVisible text:\n${clip(page.text.trim(), 6000) || "(the page shows no text)"}\n\nConsole:\n${page.console.join("\n") || "(empty)"}${probe}${fit}${broken}`,
+          summary: `Inspected ${page.url}${width ? ` at ${width}px` : ""}${errors ? ` — ${errors} console error/warning(s)` : ""}${fit.includes("scrolls sideways") ? " — overflows" : ""}${broken ? " — the page is broken" : ""}`,
           image: page.jpeg,
         };
       } finally {
