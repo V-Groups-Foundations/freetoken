@@ -507,6 +507,22 @@ async function main() {
     }
   });
 
+  await check("a check that fails once and then passes was a timing fluke, not a broken feature; one that fails twice is reported", async () => {
+    const checks = await import("../src/main/checks");
+    let loads = 0;
+    const host = {
+      open: async () => { loads++; },
+      inspect: async () => null,
+      // "flaky" is false on the first page load only; "broken" never holds
+      evaluate: async (x: string) => String(x === "flaky" ? loads > 1 : x === "broken" ? false : true),
+    };
+    const flaky = await checks.runChecks(host, [{ name: "theme toggle", steps: [{ expect: "flaky", wait_ms: 0 }] }], "http://localhost:5173/");
+    const flakyLoads = loads;
+    loads = 0;
+    const broken = await checks.runChecks(host, [{ name: "cart total", steps: [{ expect: "broken", wait_ms: 0 }] }], "http://localhost:5173/");
+    return (flaky[0].ok && flakyLoads === 2 && !broken[0].ok && loads === 2) || JSON.stringify({ flaky, flakyLoads, broken, loads });
+  });
+
   await check("a saved check follows the app to whatever port it runs on now (a restart moved it, and every check failed)", async () => {
     const checks = await import("../src/main/checks");
     const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-checkport-"));

@@ -71,32 +71,41 @@ export const truthy = (r: string) => !/^(false|null|undefined|0|""|NaN)?$/.test(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Run checks against the preview: each loads its page fresh, then runs its steps in order. */
+/**
+ * Run checks against the preview: each loads its page fresh, then runs its steps in order. A check that
+ * fails is run once more from a fresh page before it counts: a timing fluke (a transition, a slow fetch)
+ * passing on the second go isn't a broken feature, and reporting it sent the agent rewriting checks.
+ */
 export async function runChecks(host: PreviewHost | null, checks: Check[], fallbackUrl?: string, signal?: AbortSignal): Promise<CheckResult[]> {
   if (!host?.evaluate) return checks.map((c) => ({ name: c.name, ok: false, detail: "no preview pane to run it in" }));
   const out: CheckResult[] = [];
   for (const c of checks) {
     if (signal?.aborted) break;
-    const url = pageFor(c.url, fallbackUrl);
-    if (!url) { out.push({ name: c.name, ok: false, detail: "no page to load: start the app first" }); continue; }
-    const err = await host.open(url);
-    if (err) { out.push({ name: c.name, ok: false, detail: `${url} didn't load: ${err}` }); continue; }
-    await sleep(500);
-    let failed: string | null = null;
-    for (const [i, step] of c.steps.entries()) {
-      if (step.action) {
-        const r = await host.evaluate(step.action);
-        if (r.startsWith("Error")) { failed = `step ${i + 1}: the action failed — ${r.slice(0, 200)}`; break; }
-      }
-      await sleep(step.wait_ms ?? 400);
-      // wait a little for it to become true (animations, fetches) before calling it a failure
-      let r = await host.evaluate(step.expect);
-      for (let t = 0; !truthy(r) && t < 4; t++) { await sleep(500); r = await host.evaluate(step.expect); }
-      if (!truthy(r)) { failed = `step ${i + 1}: expected \`${step.expect.slice(0, 120)}\` to be true, got ${r.slice(0, 200)}`; break; }
-    }
-    out.push({ name: c.name, ok: !failed, detail: failed ?? `${c.steps.length} step(s) passed` });
+    let r = await runOne(host as PreviewHost & { evaluate: NonNullable<PreviewHost["evaluate"]> }, c, fallbackUrl);
+    if (!r.ok && r.retry && !signal?.aborted) r = await runOne(host as PreviewHost & { evaluate: NonNullable<PreviewHost["evaluate"]> }, c, fallbackUrl);
+    out.push({ name: c.name, ok: r.ok, detail: r.detail });
   }
   return out;
+}
+
+async function runOne(host: PreviewHost & { evaluate: NonNullable<PreviewHost["evaluate"]> }, c: Check, fallbackUrl?: string): Promise<{ ok: boolean; detail: string; retry?: boolean }> {
+  const url = pageFor(c.url, fallbackUrl);
+  if (!url) return { ok: false, detail: "no page to load: start the app first" };
+  const err = await host.open(url);
+  if (err) return { ok: false, detail: `${url} didn't load: ${err}` };
+  await sleep(500);
+  for (const [i, step] of c.steps.entries()) {
+    if (step.action) {
+      const r = await host.evaluate(step.action);
+      if (r.startsWith("Error")) return { ok: false, detail: `step ${i + 1}: the action failed — ${r.slice(0, 200)}`, retry: true };
+    }
+    await sleep(step.wait_ms ?? 400);
+    // wait a little for it to become true (animations, fetches) before calling it a failure
+    let r = await host.evaluate(step.expect);
+    for (let t = 0; !truthy(r) && t < 4; t++) { await sleep(500); r = await host.evaluate(step.expect); }
+    if (!truthy(r)) return { ok: false, detail: `step ${i + 1}: expected \`${step.expect.slice(0, 120)}\` to be true, got ${r.slice(0, 200)}`, retry: true };
+  }
+  return { ok: true, detail: `${c.steps.length} step(s) passed` };
 }
 
 export const describeResults = (rs: CheckResult[]) => rs.map((r) => `${r.ok ? "✓" : "✗"} ${r.name} — ${r.detail}`).join("\n");
