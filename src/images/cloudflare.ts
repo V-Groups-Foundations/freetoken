@@ -1,31 +1,92 @@
-// Text-to-image via Cloudflare Workers AI (FLUX.1 schnell). Free within the account's 10,000 Neurons a day
-// (reset 00:00 UTC): a 1024×1024 image at 4 steps costs about 58 Neurons, so roughly 170 images a day —
-// shared with any chat that goes through the same Cloudflare key. Unlike keyless Pollinations, this is a
-// documented API on the user's own account.
+// Text-to-image and image editing via Cloudflare Workers AI. Free within the account's 10,000 Neurons a day
+// (reset 00:00 UTC), shared with any chat that goes through the same Cloudflare key:
+// - new images: FLUX.1 schnell — a 1024×1024 image at 4 steps costs about 58 Neurons (~170 a day)
+// - edits: FLUX.2 klein 4B, which takes up to 4 reference images (an uploaded photo, a second face for a
+//   swap…) — the input images are billed too, so an edit costs about twice a new image
+// Unlike keyless Pollinations, this is a documented API on the user's own account.
 
 import type { FetchFn } from '@/providers/client';
 import type { GenerateInput, GenerateResult } from './generate';
 import { describeNetworkFailure, unreachableHint } from '@/providers/network';
 
 const MODEL = '@cf/black-forest-labs/flux-1-schnell';
+const EDIT_MODEL = '@cf/black-forest-labs/flux-2-klein-4b';
+export const MAX_EDIT_IMAGES = 4;
+// the Images page shrinks pictures to 1024px before sending, so ~1.5 MB each is plenty; this is the hard stop
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+type CloudflareCreds = { key: string; accountId: string | null };
+
+export interface EditInput {
+  prompt: string;
+  /** Reference images in order — the instruction can name them ("the first image", "the second image"). */
+  images: { bytes: Uint8Array; type: string }[];
+  width?: number;
+  height?: number;
+}
+
+/** Output size: keep the photo's shape, longest side at most 1024, both sides multiples of 16. */
+export function editSize(width?: number, height?: number): { width: number; height: number } {
+  if (!width || !height || width <= 0 || height <= 0) return { width: 1024, height: 1024 };
+  const scale = Math.min(1, 1024 / Math.max(width, height));
+  const fit = (n: number) => Math.max(256, Math.round((n * scale) / 16) * 16);
+  return { width: fit(width), height: fit(height) };
+}
 
 export async function generateImageCloudflare(
   input: GenerateInput,
-  creds: { key: string; accountId: string | null },
+  creds: CloudflareCreds,
   opts: { fetchImpl?: FetchFn; timeoutMs?: number } = {},
 ): Promise<GenerateResult> {
   const prompt = input.prompt.trim();
   if (!prompt) return { ok: false, status: 400, message: 'Enter a prompt describing the image.' };
-  if (!creds.accountId) return { ok: false, status: 400, message: 'Your Cloudflare key has no Account ID saved — reconnect it at /connect.' };
+  return run(creds, MODEL, {
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: prompt.slice(0, 2048), steps: 4, ...(input.seed != null ? { seed: input.seed } : {}) }),
+  }, opts);
+}
 
+export async function editImageCloudflare(
+  input: EditInput,
+  creds: CloudflareCreds,
+  opts: { fetchImpl?: FetchFn; timeoutMs?: number } = {},
+): Promise<GenerateResult> {
+  const prompt = input.prompt.trim();
+  if (!prompt) return { ok: false, status: 400, message: 'Say how to change the picture.' };
+  if (input.images.length === 0) return { ok: false, status: 400, message: 'Add a picture to edit.' };
+  if (input.images.length > MAX_EDIT_IMAGES) return { ok: false, status: 400, message: `Up to ${MAX_EDIT_IMAGES} pictures at a time.` };
+  const size = editSize(input.width, input.height);
+  const form = new FormData();
+  form.append('prompt', prompt.slice(0, 2048));
+  form.append('width', String(size.width));
+  form.append('height', String(size.height));
+  input.images.forEach((img, i) => form.append(`input_image_${i}`, new Blob([img.bytes as BlobPart], { type: img.type }), `image${i}`));
+  return run(creds, EDIT_MODEL, { body: form }, opts);
+}
+
+/** `data:image/png;base64,…` → bytes, or null when it isn't a base64 image data URL. */
+export function parseImageDataUrl(url: string): { bytes: Uint8Array; type: string } | null {
+  const m = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i.exec(url);
+  if (!m) return null;
+  const bytes = Buffer.from(m[2], 'base64');
+  return bytes.length > 0 && bytes.length <= MAX_IMAGE_BYTES ? { bytes, type: m[1].toLowerCase() } : null;
+}
+
+async function run(
+  creds: CloudflareCreds,
+  model: string,
+  init: { headers?: Record<string, string>; body: BodyInit },
+  opts: { fetchImpl?: FetchFn; timeoutMs?: number },
+): Promise<GenerateResult> {
+  if (!creds.accountId) return { ok: false, status: 400, message: 'Your Cloudflare key has no Account ID saved — reconnect it at /connect.' };
   const fetchImpl = opts.fetchImpl ?? fetch;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 90_000);
   try {
-    const res = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${creds.accountId}/ai/run/${MODEL}`, {
+    const res = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${creds.accountId}/ai/run/${model}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${creds.key}` },
-      body: JSON.stringify({ prompt: prompt.slice(0, 2048), steps: 4, ...(input.seed != null ? { seed: input.seed } : {}) }),
+      headers: { ...init.headers, authorization: `Bearer ${creds.key}` },
+      body: init.body,
       signal: ctrl.signal,
     });
     const json = (await res.json().catch(() => null)) as
