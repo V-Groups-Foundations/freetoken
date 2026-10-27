@@ -290,6 +290,8 @@ export interface Session {
   inspectNudged?: boolean;
   /** it has looked at the page in the preview this task */
   lookedAt?: boolean;
+  /** this task it saw something broken (a blank page, console errors, an app that exits) */
+  sawProblem?: boolean;
   /** every version each file had this turn (hashes): writing one back is undoing, not progress */
   fileStates?: Map<string, Set<string>>;
   /** the request asks for changes; when it doesn't ("run the app", a question), the first edit is questioned */
@@ -644,6 +646,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.unchecked = false;
   s.checkNudged = false;
   s.lookedAt = false;
+  s.sawProblem = false;
   s.selfReviewed = false;
   const followUp = /\b(build|make|create|do|start|implement|go ahead)\b/i.test(req.text) && isBigJob(earlier);
   s.bigJob = canAct(s.mode) && !req.worker && s.mode !== "team" && (isBigJob(req.text) || followUp);
@@ -708,7 +711,9 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
     return { content: "Not yet: this is Team mode, so the changes are made by agents. Split the job into 2-4 parts with separate files and start an agent for each with spawn_agent (a self-contained task each: goal, files it owns, the shared contract, how to verify). You can read files, run commands and run the app to plan first. Once agents have started, you can edit too (for shared contracts and integration). If the request needs no file changes (run the app, answer a question), just do it: no agents needed.", summary: "Team mode: start agents first" };
   }
   // the request didn't ask for changes: the first edit has to be justified (asked once, then allowed)
-  if (WRITES.has(name) && s.changeAsked === false && !s.scopeWarned) {
+  // …unless it has just seen something broken while doing what was asked ("check it works" and the page
+  // is blank): fixing that is the point of the check
+  if (WRITES.has(name) && s.changeAsked === false && !s.scopeWarned && !s.sawProblem) {
     s.scopeWarned = true;
     return { content: "Not changed: the user's request doesn't ask for changes to files (they asked to run, check, share or explain something). Do what they asked first. If a change is truly needed for that — the app won't start without it — say in one sentence what you'll change and why, then call the tool again and change only that. Don't fix or improve other things you noticed: mention them at the end instead.", summary: "Not asked to change files" };
   }
@@ -751,6 +756,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   // had the agent writing browser checks for JSON endpoints that could never pass
   if (rel && WRITES.has(name) && /\.(html?|css|scss|jsx?|tsx|vue|svelte|astro)$/i.test(rel) && !s.worker && !(await isServerCode(rel))) s.unchecked = true;
   if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) { s.unchecked = false; s.lookedAt = true; }
+  if ((name === "inspect_preview" && /the page is broken|console error|didn't load/i.test(r.summary)) || (name === "run_app" && /^Ran: /.test(r.summary))) s.sawProblem = true;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
   if (rel && WRITES.has(name)) team.noteWrite(s.id, rel, r.summary);
   const plan = planNotes(s, name, input);

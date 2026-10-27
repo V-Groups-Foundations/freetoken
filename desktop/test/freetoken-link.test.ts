@@ -393,6 +393,23 @@ async function main() {
       && link.summary === "No app running") || JSON.stringify({ seen, restore: restore.summary, cmd: cmd.summary, link: link.summary });
   });
 
+  await check("'check it works' that finds the page broken may fix it at once (the check found the problem)", async () => {
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-sawproblem-"));
+    ws.setRoot(own);
+    fs.writeFileSync(path.join(own, "index.html"), "<title>Lumen</meta><h1>Hi</h1>");
+    const s = ai.getSession("saw-problem");
+    ai.startTurnState(s, { sessionId: "saw-problem", mode: "agent", text: "run the site and check it works" });
+    runner.setPreviewHost({ open: async () => {}, inspect: async () => ({ url: "http://localhost:5173/", title: "Lumen</meta><h1>Hi</h1>".repeat(10), text: "", console: [] }) });
+    try {
+      const before = s.sawProblem;
+      await ai.execTool(s, "inspect_preview", {}, () => {}, "sp1");
+      const fix = await ai.execTool(s, "edit_file", { path: "index.html", old_string: "</meta>", new_string: "</title>" }, () => {}, "sp2");
+      return (before === false && s.sawProblem === true && fix.summary.startsWith("Edited")) || JSON.stringify({ before, saw: s.sawProblem, fix: fix.summary });
+    } finally {
+      runner.setPreviewHost(null);
+    }
+  });
+
   await check("a request that doesn't ask for changes questions the first edit (and only the first)", async () => {
     // "run the app, I want to send a link" became a half-hour layout rewrite
     const no = ["run the app i want to send the link to someone and test it", "is it necessary for the person to be in the same wifi as me?",
