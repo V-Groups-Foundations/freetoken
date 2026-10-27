@@ -29,14 +29,14 @@ function download(image: GenImage) {
   a.remove();
 }
 
-type Engine = 'pollinations' | 'gemini';
+type Engine = 'pollinations' | 'gemini' | 'cloudflare';
 
-export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boolean }) {
+export function ImageStudio({ geminiConnected = false, cloudflareConnected = false }: { geminiConnected?: boolean; cloudflareConnected?: boolean }) {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<GenImage[]>([]);
-  const [engine, setEngine] = useState<Engine>('pollinations');
+  const [engine, setEngine] = useState<Engine>(cloudflareConnected ? 'cloudflare' : 'pollinations');
   const [style, setStyle] = useState<'flux' | 'turbo'>('flux');
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -62,6 +62,12 @@ export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boo
       // make the image, with the keyless FLUX engine, and say why
       if (!result.dataUrl && engine === 'gemini' && (result.status === 429 || result.status === 402)) {
         toast(result.status === 402 ? 'Gemini images need a paid key — made it with FLUX (free) instead' : 'Gemini was rate-limited — used FLUX instead');
+        result = await callEngine(clean, 'pollinations');
+      }
+
+      // Cloudflare's daily allowance used up, or Cloudflare unreachable / failing — make it with Pollinations
+      if (!result.dataUrl && engine === 'cloudflare' && (result.status === 429 || result.status === 0 || result.status >= 500)) {
+        toast(result.status === 429 ? "Today's Cloudflare allowance is used up — made it with Pollinations instead" : 'Cloudflare failed — used Pollinations instead');
         result = await callEngine(clean, 'pollinations');
       }
 
@@ -110,19 +116,30 @@ export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boo
           placeholder="A golden retriever puppy wearing tiny sunglasses, studio photo…"
           className="w-full resize-none rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3 text-sm outline-none transition focus:border-[var(--brand)]"
         />
-        {geminiConnected && (
+        {(geminiConnected || cloudflareConnected) && (
           <div className="flex items-center gap-2 text-xs">
             <span className="muted">Engine</span>
             <div className="inline-flex overflow-hidden rounded-lg border border-[var(--border)]">
+              {cloudflareConnected && (
+                <button
+                  type="button"
+                  onClick={() => setEngine('cloudflare')}
+                  data-active={engine === 'cloudflare'}
+                  title="FLUX.1 schnell on your Cloudflare account — free within 10,000 Neurons a day (about 170 images), reset 00:00 UTC"
+                  className="px-3 py-1.5 font-semibold text-[var(--muted)] transition data-[active=true]:bg-[var(--brand)] data-[active=true]:text-white"
+                >
+                  Cloudflare FLUX (free daily)
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setEngine('pollinations')}
                 data-active={engine === 'pollinations'}
                 className="px-3 py-1.5 font-semibold text-[var(--muted)] transition data-[active=true]:bg-[var(--brand)] data-[active=true]:text-white"
               >
-                FLUX (free)
+                Pollinations FLUX (free)
               </button>
-              <button
+              {geminiConnected && <button
                 type="button"
                 onClick={() => setEngine('gemini')}
                 data-active={engine === 'gemini'}
@@ -130,7 +147,7 @@ export function ImageStudio({ geminiConnected = false }: { geminiConnected?: boo
                 className="px-3 py-1.5 font-semibold text-[var(--muted)] transition data-[active=true]:bg-[var(--brand)] data-[active=true]:text-white"
               >
                 Gemini (paid key)
-              </button>
+              </button>}
             </div>
           </div>
         )}
