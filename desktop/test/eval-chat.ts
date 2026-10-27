@@ -42,17 +42,19 @@ import path from "node:path";
   });
   const t0 = Date.now();
   const log = (s: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(0).padStart(4)}s] ${s}`);
+  // a fresh session per run: a rerun under the same name inherited the last run's model pin
+  const sid = `eval-${scenario.name}-${Date.now()}`;
   console.log(`scenario ${scenario.name} in ${proj}`);
   for (const [i, turn] of scenario.turns.entries()) {
     console.log(`\n=== turn ${i + 1}${turn.mode ? ` (${turn.mode})` : ""}: ${turn.text}`);
     let text = "";
     const started = Date.now();
-    await new Promise<void>((resolve) => ft.chatFreeToken({ sessionId: `eval-${scenario.name}`, mode: (turn.mode ?? "agent") as any, text: turn.text }, (e: any) => {
+    await new Promise<void>((resolve) => ft.chatFreeToken({ sessionId: sid, mode: (turn.mode ?? "agent") as any, text: turn.text }, (e: any) => {
       if (e.type === "text") text += e.delta;
       else if (e.type === "model") log(`model ${e.model}${e.fallbacks ? ` (fell back from ${e.fallbacks})` : ""}`);
       else if (e.type === "tool_start") { if (text.trim()) log(`say: ${text.trim().slice(0, 400).replace(/\s+/g, " ")}`); text = ""; log(`tool ${e.name} ${String(JSON.stringify(e.input) ?? "(arguments were not valid JSON)").slice(0, 200)}`); }
       else if (e.type === "tool_end") log(`  → ${e.ok ? "" : "FAILED "}${String(e.summary).slice(0, 240)}`);
-      else if (e.type === "approval") setTimeout(() => ai.approve(`eval-${scenario.name}`, e.id, true), 5);
+      else if (e.type === "approval") setTimeout(() => ai.approve(sid, e.id, true), 5);
       else if (e.type === "waiting") log(`waiting ${e.seconds}s (${e.reason})`);
       else if (e.type === "error") log(`ERROR ${e.message}`);
       else if (e.type === "done") { if (text.trim()) log(`final: ${text.trim().slice(0, 2500).replace(/\n+/g, " ⏎ ")}`); log(`done (${e.stopReason}) in ${((Date.now() - started) / 1000).toFixed(0)}s`); resolve(); }

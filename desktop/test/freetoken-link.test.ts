@@ -661,7 +661,10 @@ async function main() {
     await ai.execTool(s, "write_file", { path: "server.js", contents: "const http = require('http');\nhttp.createServer((q, r) => r.end('[]')).listen(4100);\n" }, () => {}, "w1");
     const afterServer = s.unchecked;
     await ai.execTool(s, "write_file", { path: "public/app.js", contents: "document.getElementById('total').textContent = '0';\n" }, () => {}, "w2");
-    return (afterServer === false && s.unchecked === true) || JSON.stringify({ afterServer, after: s.unchecked });
+    const afterPage = s.unchecked;
+    s.unchecked = false;
+    await ai.execTool(s, "write_file", { path: "src/app.test.js", contents: "const { test } = require('node:test');\ntest('x', () => {});\n" }, () => {}, "w3");
+    return (afterServer === false && afterPage === true && s.unchecked === false) || JSON.stringify({ afterServer, afterPage, afterTest: s.unchecked });
   });
 
   await check("a check that could never fail isn't saved (it would pass forever and prove nothing)", async () => {

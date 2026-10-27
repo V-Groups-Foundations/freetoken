@@ -832,8 +832,10 @@ export function htmlShape(text: string) {
   return `\n\nThe page looks cut off: ${["it doesn't end with </html>", ...unclosed.map((t) => `${named(t)} isn't closed`)].join(", ")}. Add the missing end with edit_file (append after the last line that's there) rather than rewriting the whole page.${escapes ? ` Also, ${escapes}` : ""}`;
 }
 
-/** A script that runs a server (Node's http, Express, Fastify, Koa…) rather than code for a page. */
+/** A script that runs a server (Node's http, Express, Fastify, Koa…), or a test, rather than code for a page. */
 export async function isServerCode(rel: string) {
+  // tests aren't the page either: writing an API's test file sent the agent to "check the page" of an API
+  if (/(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/i.test(rel.replace(/\\/g, "/"))) return true;
   if (!/\.[cm]?[jt]sx?$/i.test(rel) || /\.(jsx|tsx)$/i.test(rel)) return false;
   try {
     return /\brequire\(\s*['"](node:)?(http|https|express|fastify|koa|@hapi\/hapi)['"]\s*\)|\bfrom\s+['"](node:)?(http|https|express|fastify|koa)['"]|\bcreateServer\s*\(|\bexpress\s*\(\s*\)/.test(await readText(rel));
