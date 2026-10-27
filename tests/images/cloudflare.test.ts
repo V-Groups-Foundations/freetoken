@@ -14,6 +14,17 @@ describe('generateImageCloudflare', () => {
     expect(f.calls[0].body).toEqual({ prompt: 'a red fox', steps: 4 });
   });
 
+  it('sends another shape than 1024×1024 to FLUX.2 klein at that shape', async () => {
+    const calls: { url: string; form: FormData }[] = [];
+    const fn = (async (url: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(url), form: init.body as FormData });
+      return Response.json({ success: true, result: { image: 'AQID' } });
+    }) as typeof fetch;
+    expect(await generateImageCloudflare({ prompt: 'a banner', width: 1600, height: 900 }, creds, { fetchImpl: fn })).toMatchObject({ ok: true });
+    expect(calls[0].url).toMatch(/flux-2-klein-4b$/);
+    expect([calls[0].form.get('width'), calls[0].form.get('height')]).toEqual(['1024', '576']);
+  });
+
   it('rejects an empty prompt or a missing Account ID without calling out', async () => {
     const f = fakeFetch(() => Response.json({}));
     expect(await generateImageCloudflare({ prompt: '  ' }, creds, { fetchImpl: f.fn })).toMatchObject({ ok: false, status: 400 });

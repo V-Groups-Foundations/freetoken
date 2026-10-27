@@ -91,6 +91,12 @@ export async function writeText(rel: string, text: string) {
   await fsp.writeFile(abs, text, "utf8");
 }
 
+export async function writeBytes(rel: string, bytes: Uint8Array) {
+  const { abs } = resolveInRoot(rel);
+  await fsp.mkdir(path.dirname(abs), { recursive: true });
+  await fsp.writeFile(abs, bytes);
+}
+
 export async function deletePath(rel: string) {
   const { abs, rel: r } = resolveInRoot(rel);
   if (!r || r === ".") throw new PathError("Refusing to delete the workspace root");

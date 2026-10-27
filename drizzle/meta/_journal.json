@@ -57,6 +57,13 @@
       "when": 1792557540628,
       "tag": "0007_model_feedback",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793079441692,
+      "tag": "0008_generated_images",
+      "breakpoints": true
     }
   ]
 }

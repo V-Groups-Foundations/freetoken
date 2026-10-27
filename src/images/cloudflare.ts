@@ -40,6 +40,15 @@ export async function generateImageCloudflare(
 ): Promise<GenerateResult> {
   const prompt = input.prompt.trim();
   if (!prompt) return { ok: false, status: 400, message: 'Enter a prompt describing the image.' };
+  // FLUX.1 schnell only makes 1024×1024; another shape (a banner, a phone screen) goes to FLUX.2 klein
+  if (input.width && input.height && (input.width !== 1024 || input.height !== 1024)) {
+    const size = editSize(input.width, input.height);
+    const form = new FormData();
+    form.append('prompt', prompt.slice(0, 2048));
+    form.append('width', String(size.width));
+    form.append('height', String(size.height));
+    return run(creds, EDIT_MODEL, { body: form }, opts);
+  }
   return run(creds, MODEL, {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: prompt.slice(0, 2048), steps: 4, ...(input.seed != null ? { seed: input.seed } : {}) }),
@@ -101,6 +110,10 @@ async function run(
       // 4006: "you have used up your daily free allocation of 10,000 neurons"
       if (res.status === 429 || /4006|neurons|allocation/i.test(text)) {
         return { ok: false, status: 429, message: "Today's free Cloudflare allowance (10,000 Neurons) is used up — it resets at 00:00 UTC. Switch to the Pollinations engine meanwhile." };
+      }
+      // Cloudflare's own safety check on the result ("Your output has been flagged…") — no setting turns it off
+      if (/flagged/i.test(text)) {
+        return { ok: false, status: 422, message: "Cloudflare's safety filter blocked this result. Realistic face swaps and photos of real people are the usual reason — try a different picture, or a stylized edit (anime, 3D cartoon, sketch)." };
       }
       if (res.ok) return { ok: false, status: 502, message: 'Cloudflare returned no image (the prompt may have been blocked).' };
       return { ok: false, status: res.status, message: `Cloudflare image generation failed (HTTP ${res.status}${err?.message ? `: ${err.message.slice(0, 160)}` : ''}).` };

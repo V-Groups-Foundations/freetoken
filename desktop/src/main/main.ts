@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ai from "./ai";
 import * as ft from "./ai-freetoken";
+import * as images from "./images";
 import * as index from "./indexer";
 import * as link from "./freetoken-link";
 import * as memory from "./memory";
@@ -94,6 +95,7 @@ web.setFreeTokenSearch(async (query) => {
   return j.answer ? [{ title: "Summary", url: hits[0]?.url ?? "", snippet: j.answer }, ...hits] : hits;
 });
 ft.configureFreeToken({ url: ftBase, token: ftToken, model: () => settings.ftModel || "auto-smart" });
+images.configureImages({ url: ftBase, token: ftToken });
 // the agent must never take over or stop the FreeToken server it runs on (when that's on this machine)
 runner.setProtectedPorts(() => {
   try {

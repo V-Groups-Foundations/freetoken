@@ -183,3 +183,17 @@ export const modelFeedback = pgTable('model_feedback', {
   reason: text('reason'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('feedback_user_task_time').on(t.userId, t.task, t.createdAt)]);
+
+/** Pictures made in the Image studio or through /v1/images. The bytes live on disk (src/images/gallery.ts),
+ * one JPEG per row, so the database stays small. */
+export const generatedImages = pgTable('generated_images', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  prompt: text('prompt').notNull(),
+  kind: text('kind').notNull(), // create | edit | api
+  engine: text('engine').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  bytes: integer('bytes').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('images_user_time').on(t.userId, t.createdAt)]);

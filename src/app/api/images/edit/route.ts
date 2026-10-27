@@ -3,6 +3,7 @@ import { loadCredentials } from '@/keys/service';
 import { editImageCloudflare, MAX_EDIT_IMAGES, MAX_IMAGE_BYTES, parseImageDataUrl } from '@/images/cloudflare';
 import { sessionUserId } from '@/lib/session';
 import { getDeps } from '@/server/deps';
+import { dataUrlBytes, saveImage } from '@/images/gallery';
 
 const bodySchema = z.object({
   prompt: z.string().trim().min(1).max(2000),
@@ -32,5 +33,9 @@ export async function POST(req: Request) {
     { fetchImpl: deps.fetchImpl },
   );
   if (!result.ok) return Response.json({ error: { message: result.message } }, { status: result.status || 502 });
-  return Response.json({ dataUrl: result.dataUrl });
+  const bytes = dataUrlBytes(result.dataUrl);
+  const id = bytes
+    ? await saveImage(deps.db, { userId: uid, prompt: parsed.data.prompt, kind: 'edit', engine: 'cloudflare', bytes }).catch((e) => { console.error('[images] saving to the gallery failed', e); return null; })
+    : null;
+  return Response.json({ dataUrl: result.dataUrl, id });
 }

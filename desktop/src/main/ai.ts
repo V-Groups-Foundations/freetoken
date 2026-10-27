@@ -16,6 +16,7 @@ import * as skills from "./skills";
 import * as team from "./team";
 import * as web from "./web";
 import * as video from "./video";
+import * as images from "./images";
 import { diffDetail, outputDetail, type ToolDetail } from "./diff";
 import * as runner from "./runner";
 import * as share from "./share";
@@ -24,7 +25,7 @@ import * as checks from "./checks";
 import * as publisher from "./publish";
 import * as android from "./android";
 import { fuzzyFiles, grep } from "./search";
-import { deletePath, exists, getRoot, listDir, readText, resolveInRoot, writeText } from "./workspace";
+import { deletePath, exists, getRoot, listDir, readText, resolveInRoot, writeBytes, writeText } from "./workspace";
 
 type MessageParam = Anthropic.Beta.Messages.BetaMessageParam;
 type Tool = Anthropic.Beta.Messages.BetaTool;
@@ -90,6 +91,7 @@ export const schemas = {
   fetch_url: z.object({ url: z.string().min(4).max(4000), start: z.number().int().min(0).optional() }),
   save_skill: z.object({ name: z.string().min(1).max(64), description: z.string().min(1).max(600), instructions: z.string().min(1).max(40_000), scope: z.enum(["user", "project"]).optional() }),
   install_skills: z.object({ source: z.string().min(3) }),
+  generate_image: z.object({ prompt: z.string().min(3).max(2000), path: z.string().min(1), width: z.number().int().min(256).max(2048).optional(), height: z.number().int().min(256).max(2048).optional() }),
   export_video: z.object({ path: z.string().min(1), duration: z.number().positive().max(180).optional(), fps: z.number().int().min(1).max(60).optional(), width: z.number().int().min(64).max(3840).optional(), height: z.number().int().min(64).max(2160).optional() }),
   // team mode: the supervisor's tools, and the one workers get
   spawn_agent: z.object({ name: z.string().min(1).max(32), task: z.string().min(10).max(20_000), files: z.array(z.string()).max(60).optional() }),
@@ -191,6 +193,8 @@ export const TOOLS: Tool[] = [
     input_schema: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, instructions: { type: "string" }, scope: { type: "string", enum: ["user", "project"] } }, required: ["name", "description", "instructions"] } },
   { name: "install_skills", description: "Install skills from a GitHub repository (owner/repo or a github.com link, optionally to a folder: https://github.com/o/r/tree/main/skills/x). Every folder with a SKILL.md becomes a skill. If the repo has none, you get its README: then learn it yourself — write a skill with save_skill that captures how to use that project (install, key commands/APIs, examples). The user must approve.",
     input_schema: { type: "object", properties: { source: { type: "string" } }, required: ["source"] } },
+  { name: "generate_image", description: "Make a real picture for the app and save it in the project: hero and background images, product or food photos, illustrations, avatars, app icons and logos (free FLUX through FreeToken). Use it instead of grey placeholder boxes, stock-photo links or emoji when the design needs an image. Describe the picture concretely (subject, style, colors, lighting; 'flat vector icon, no text' for icons — image models spell words badly). width/height set the shape (default 1024x1024; the long side is capped at 1024). The file extension is fixed to match the image format; the result says the path actually written — reference that path.",
+    input_schema: { type: "object", properties: { prompt: { type: "string" }, path: { type: "string", description: "Where to save it, e.g. public/images/hero.jpg" }, width: { type: "number" }, height: { type: "number" } }, required: ["prompt", "path"] } },
   { name: "export_video", description: "Render an HTML video page (see the html-video skill) to a video file (MP4, 1920x1080, 30 fps by default) next to it. Time is virtual, so animations are exact. Takes a while for long videos.",
     input_schema: { type: "object", properties: { path: { type: "string", description: "The .html file in the project" }, duration: { type: "number", description: "Seconds; default: window.__video.duration or the animations' length" }, fps: { type: "number" }, width: { type: "number" }, height: { type: "number" } }, required: ["path"] } },
   { name: "spawn_agent", description: "Team mode: start a worker agent that works IN PARALLEL with you and the other agents on one well-defined part of the job. It doesn't see this conversation, so `task` must be self-contained: the goal, the exact files/folders it owns, any shared contract (types, API routes, names) it must follow, how to verify, and what to report. `files` = paths it owns (others can't edit them while it works). Give each agent different files.",
@@ -692,7 +696,7 @@ function planNotes(s: Session, name: string, input: any): string {
   return "";
 }
 
-const WRITES = new Set(["edit_file", "write_file", "delete_file"]);
+const WRITES = new Set(["edit_file", "write_file", "delete_file", "generate_image"]);
 /** Tools that change things: a Team-mode supervisor may only use them once it has started agents. */
 const ACTS = new Set([...WRITES, "run_terminal_command", "run_app", "export_video", "setup_android", "build_android_app"]);
 /** Messages from the team (another agent changed a file this one read, the supervisor wrote…) ride along. */
@@ -1278,6 +1282,17 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
         return { content: `Installed ${r.installed.length} skill(s) from ${r.source}: ${r.installed.map((x) => `${x.name} (${x.files} files${x.skipped ? `, ${x.skipped} large files skipped` : ""})`).join(", ")}. They're now listed under Skills; load one with use_skill when a task fits.`, summary: `Installed ${r.installed.length} skill${r.installed.length > 1 ? "s" : ""} from ${r.source}` };
       }
       return { content: `${r.source} has no SKILL.md files (${r.files} files in the repo). Its README follows — learn it: write a skill with save_skill (name it after the project) that captures what it is, how to install it, the key commands/APIs and a short example.\n\n${r.readme || "(no README found)"}`, summary: `No skills in ${r.source} — learning from its README` };
+    }
+    case "generate_image": {
+      emit({ type: "progress", id, text: "Making the image…" });
+      const bytes = await images.generateImage(input.prompt, input.width && input.height ? { width: input.width, height: input.height } : undefined, fetch, s.abort?.signal);
+      const rel = images.fitPath(resolveInRoot(input.path).rel, images.imageExt(bytes));
+      const existed = await exists(rel);
+      // a new file is checkpointed (undo removes it); an existing picture can't be read back as text to restore
+      if (!existed) await checkpoint(s, rel);
+      await writeBytes(rel, bytes);
+      emit({ type: "file_changed", path: rel });
+      return { content: `${existed ? "Replaced" : "Saved"} ${rel} (${Math.round(bytes.length / 1024)} KB).${rel !== resolveInRoot(input.path).rel ? ` Note: saved as ${rel}, not ${input.path} — the image is ${images.imageExt(bytes).slice(1).toUpperCase()}; reference ${rel}.` : ""}`, summary: `Made image: ${rel}` };
     }
     case "export_video": {
       const { abs, rel } = resolveInRoot(input.path);

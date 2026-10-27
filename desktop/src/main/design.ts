@@ -168,7 +168,7 @@ Never default to: Inter + slate + an indigo/purple gradient hero; a centred hero
 - Stack: if the project already has one (React, Next, Vue, Tailwind…), use it. For a new site: a single index.html with Tailwind via its CDN (<script src="https://cdn.tailwindcss.com"></script>) configured with this direction's colours and fonts (tailwind.config in a <script>), and small vanilla JS.
 - A real type scale and spacing system; contrast that passes WCAG AA; hover/focus states on everything clickable; a working mobile menu; fully responsive (check it with inspect_preview width: 375 — nothing overflows); semantic HTML, alt text, a <title> and favicon.
 - Motion with taste: one or two meaningful animations (reveal on load, hover), respect prefers-reduced-motion.
-- Images: real-looking imagery (https://images.unsplash.com/... with descriptive queries, or https://picsum.photos/seed/<word>/1200/800) or SVG illustration in the direction's style — never broken links or grey boxes.
+- Images: make the key pictures (hero, product/food photos, avatars, illustrations) with generate_image into the project, described to match this direction — a handful, not one per card. If it fails, use https://picsum.photos/seed/<word>/1200/800 or an SVG illustration in the direction's style — never broken links or grey boxes.
 - Copy: specific, confident copy for this exact product/person/business; invent plausible details rather than placeholders. No lorem ipsum, no "Feature 1".
 - Then look at it: start it with run_app (static site: npx serve .) and call inspect_preview. Check the hero, spacing, alignment, mobile layout and console errors; fix what's off before you say you're done. Summarise what you built, the design direction, and how to open it.
 `.trim();
