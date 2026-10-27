@@ -821,9 +821,15 @@ export function htmlShape(text: string) {
   if ((text.match(/<!--/g) ?? []).length > (text.match(/-->/g) ?? []).length) unclosed.push("<!-- comment");
   const ends = /<\/html>\s*$/i.test(text);
   const named = (t: string) => (t.startsWith("<") ? `a ${t}` : `<${t}>`);
-  if (ends && !unclosed.length) return "\n\nThe page came through complete: it ends with </html> and every <head>, <body>, <title>, <style> and <script> is closed.";
-  if (ends) return `\n\nThe page is broken: ${unclosed.map((t) => `${named(t)} isn't closed`).join(", ")} — everything after it is swallowed and won't show. Fix that tag with edit_file.`;
-  return `\n\nThe page looks cut off: ${["it doesn't end with </html>", ...unclosed.map((t) => `${named(t)} isn't closed`)].join(", ")}. Add the missing end with edit_file (append after the last line that's there) rather than rewriting the whole page.`;
+  // \" is a JavaScript escape, not HTML: in style="…url(\"data:…\")" the attribute ends at the first quote,
+  // the rest of the tag is garbage and the browser requests an address "�" (seen as a stray 404)
+  const markup = text.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, (m) => m.replace(/[^\n]/g, " "));
+  const escaped = [...markup.matchAll(/<[a-z][^<>]*\\"[^<>]*>/gi)].map((m) => markup.slice(0, m.index).split("\n").length);
+  const escapes = escaped.length ? `the tag${escaped.length > 1 ? "s" : ""} starting on line${escaped.length > 1 ? "s" : ""} ${[...new Set(escaped)].slice(0, 5).join(", ")} put \\" inside an attribute: HTML has no \\" escape, so the attribute ends at that quote. Use single quotes inside the attribute (or &quot;).` : "";
+  if (ends && !unclosed.length && !escapes) return "\n\nThe page came through complete: it ends with </html> and every <head>, <body>, <title>, <style> and <script> is closed.";
+  if (ends && !unclosed.length) return `\n\nThe page is broken in places: ${escapes}`;
+  if (ends) return `\n\nThe page is broken: ${unclosed.map((t) => `${named(t)} isn't closed`).join(", ")} — everything after it is swallowed and won't show. Fix that tag with edit_file.${escapes ? ` Also, ${escapes}` : ""}`;
+  return `\n\nThe page looks cut off: ${["it doesn't end with </html>", ...unclosed.map((t) => `${named(t)} isn't closed`)].join(", ")}. Add the missing end with edit_file (append after the last line that's there) rather than rewriting the whole page.${escapes ? ` Also, ${escapes}` : ""}`;
 }
 
 /** A script that runs a server (Node's http, Express, Fastify, Koa…) rather than code for a page. */

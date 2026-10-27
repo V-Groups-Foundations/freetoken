@@ -567,9 +567,13 @@ async function main() {
     const cut = ai.htmlShape("<!doctype html><html><head><style>a{}</style></head><body><p>hi</p><script>x(");
     // the typo that blanked a whole page: the title never closes, so it swallows everything after it
     const typo = ai.htmlShape('<!doctype html><html><head><title>Lumen Studio</meta><style>a{}</style></head><body><h1>Hi</h1></body></html>');
+    // \" inside a tag (written as if it were a JS string): the attribute ends at that quote and the
+    // browser asked for an address "�". Inside a script it's a real escape, and fine
+    const escaped = ai.htmlShape('<!doctype html><html><head><title>x</title></head><body>\n<p>hi</p>\n<span style="background-image: url(\\"data:image/svg+xml,%3Csvg%3E\\")"></span>\n<script>const s = "say \\"hi\\"";</script></body></html>');
+    const inScript = ai.htmlShape('<!doctype html><html><head><title>x</title></head><body><script>el.innerHTML = "<b class=\\"x\\">";</script></body></html>');
     return (/came through complete/.test(whole) && /looks cut off: it doesn't end with <\/html>, <body> isn't closed, <script> isn't closed/.test(cut) && ai.htmlShape("<p>a fragment</p>") === ""
-      && /The page is broken: <title> isn't closed/.test(typo))
-      || JSON.stringify({ whole, cut, typo });
+      && /The page is broken: <title> isn't closed/.test(typo) && /broken in places: the tag starting on line 3 put \\" inside an attribute/.test(escaped) && /came through complete/.test(inScript))
+      || JSON.stringify({ whole, cut, typo, escaped, inScript });
   });
 
   await check("console lines say which file failed to load; Tailwind's CDN warning is a note, not a warning to fix", () => {
