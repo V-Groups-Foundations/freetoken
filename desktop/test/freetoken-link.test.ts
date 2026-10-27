@@ -505,20 +505,27 @@ async function main() {
     }
   });
 
-  await check("inspect_preview with a url starts from a fresh page (even the one shown); without one the page keeps its state", async () => {
+  await check("the page keeps its state between looks (url or not); fresh: true or changed files reload it", async () => {
     let loads = 0;
     runner.setPreviewHost({
       open: async () => { loads++; },
       reload: async () => { loads++; },
-      inspect: async () => ({ url: "http://localhost:5173/", title: "Shop", text: "cart", console: [] }),
+      inspect: async () => ({ url: "http://localhost:5173/", title: "Tasks", text: "list", console: [] }),
+      evaluate: async (x: string) => (/setTimeout\(\(\) => console/.test(x) ? "undefined" : "2"),
     });
     try {
       const s = ai.getSession("fresh-page");
       s.pageStale = false;
-      await ai.execTool(s, "inspect_preview", {}, () => {}, "fp1");
+      // agents pass the url on every call: clicking Active in one call and reading in the next must work
+      await ai.execTool(s, "inspect_preview", { url: "http://localhost:5173/", script: "click()" }, () => {}, "fp1");
+      await ai.execTool(s, "inspect_preview", { url: "http://localhost:5173" }, () => {}, "fp2");
       const kept = loads;
-      await ai.execTool(s, "inspect_preview", { url: "http://localhost:5173/" }, () => {}, "fp2");
-      return (kept === 0 && loads === 1) || JSON.stringify({ kept, loads });
+      await ai.execTool(s, "inspect_preview", { url: "http://localhost:5173/", fresh: true }, () => {}, "fp3");
+      const afterFresh = loads;
+      await ai.execTool(s, "inspect_preview", { url: "http://localhost:5173/about" }, () => {}, "fp4");
+      const late = await ai.execTool(s, "inspect_preview", { script: "btn.click(); setTimeout(() => console.log(list.length), 50)" }, () => {}, "fp5");
+      return (kept === 0 && afterFresh === 1 && loads === 2 && /Nothing came back: what a setTimeout callback reads/.test(late.content))
+        || JSON.stringify({ kept, afterFresh, loads, late: late.content.slice(-200) });
     } finally {
       runner.setPreviewHost(null);
     }

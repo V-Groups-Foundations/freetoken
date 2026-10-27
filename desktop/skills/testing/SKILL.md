@@ -16,7 +16,10 @@ only when something is actually broken.
 - Bug fix: first write a test that reproduces the bug and fails, then fix, then see it pass.
 
 ## 2. Set up the runner (use what the project already has)
-- JS/TS (Vite or any modern project): Vitest. `npm i -D vitest`, script `"test": "vitest"`.
+- First look at package.json's "test" script (or pytest.ini / pyproject.toml): if the project already runs
+  tests one way — `node --test`, Jest, Vitest, pytest — write the tests for that and run them with it. Don't
+  install or switch to another framework unless the user asks.
+- JS/TS with no test setup yet (Vite or any modern project): Vitest. `npm i -D vitest`, script `"test": "vitest"`.
   Run once: `npx vitest run`. React components: `npm i -D @testing-library/react @testing-library/jest-dom jsdom`
   and `test: { environment: 'jsdom' }` in `vite.config.ts`.
 - Existing Jest project: keep Jest (`npx jest`).
