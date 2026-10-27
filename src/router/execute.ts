@@ -213,7 +213,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     // yet, so the next model can still take the request
     let streamBody: ReadableStream<Uint8Array> | null = r.response.body;
     if (stream && streamBody && /event-stream/i.test(r.response.headers.get('content-type') ?? '')) {
-      const peek = await peekFirstEvent(streamBody);
+      const peek = await peekFirstEvent(streamBody, deps.firstEventMs);
       streamBody = peek.stream;
       if (peek.error) {
         void peek.stream.cancel().catch(() => {});

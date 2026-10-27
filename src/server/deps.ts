@@ -8,6 +8,8 @@ export interface Deps {
   fetchImpl?: FetchFn;
   vaultKey?: Buffer;
   now?: () => number;
+  /** how long a stream may stay silent before its first event (default 75 s) */
+  firstEventMs?: number;
 }
 
 export function getDeps(): Deps {

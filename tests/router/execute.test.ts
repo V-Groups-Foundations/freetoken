@@ -164,6 +164,21 @@ describe('routeChat', () => {
     expect(second.f.calls.some((c) => !c.url.includes(GROQ))).toBe(false);
   });
 
+  it('falls back when a stream opens and then stays silent (headers, then nothing for minutes)', async () => {
+    await connect('groq', 'gsk_mine');
+    await connect('gemini', 'AIza_mine');
+    const silent = () => new Response(new ReadableStream({ start: (c) => c.enqueue(new TextEncoder().encode(': keep-alive\n\n')) }), { headers: { 'content-type': 'text/event-stream' } });
+    const f = fakeFetch((url) => url.includes(GROQ) ? silent()
+      : sse(['data: {"choices":[{"delta":{"content":"real answer"}}]}\n\n', 'data: [DONE]\n\n']));
+    const started = Date.now();
+    const out = await routeChat(
+      { userId, source: 'api', body: { model: 'auto-smart', stream: true, messages: [{ role: 'user', content: 'hi' }] } },
+      { db, kv, fetchImpl: f.fn, vaultKey: TEST_VAULT_KEY, firstEventMs: 200 });
+    expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('gemini/flash');
+    expect(out.ok && await out.response.text()).toContain('real answer');
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
   it('falls back when a stream opens with only an error (Kilo: "Upstream error from Nvidia: Service temporarily overloaded")', async () => {
     await connect('groq', 'gsk_mine');
     await connect('gemini', 'AIza_mine');
