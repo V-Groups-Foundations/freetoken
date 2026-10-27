@@ -653,6 +653,31 @@ async function main() {
       && checks.pageFor("/cart", undefined) === undefined) || JSON.stringify({ saved, moved: checks.pageFor(saved, now) });
   });
 
+  await check("type() in a page script reaches a React-style input (setting .value directly doesn't)", async () => {
+    const { chromium } = await import("playwright-core");
+    const browser = await chromium.launch({ channel: "chrome" }).catch(() => null);
+    if (!browser) return true;
+    const page = await browser.newPage();
+    // React's value tracker: a change it made itself (through the element's own setter) isn't news
+    await page.setContent(`<input id="new"><script>
+      const el = document.getElementById("new"), native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      let tracked = ""; window.changes = [];
+      Object.defineProperty(el, "value", { get() { return native.get.call(this); }, set(v) { tracked = v; native.set.call(this, v); } });
+      el.addEventListener("input", () => { const now = native.get.call(el); if (now !== tracked) { tracked = now; window.changes.push(now); } });
+    </script>`);
+    try {
+      const probe = (script: string) => page.evaluate(runner.probeScript(script)).then(String);
+      const direct = await probe(`const el = document.querySelector('#new'); el.value = 'Milk'; el.dispatchEvent(new Event('input', { bubbles: true })); await wait(); window.changes.length`);
+      const typed = await probe(`type('#new', 'Bread'); await wait(); window.changes`);
+      // after an await, the last expression is still the answer — also when it spans lines
+      const multi = await probe("const a = [1, 2];\nawait wait(1);\na.map((x) =>\n  x * 2)");
+      const explicit = await probe("await wait(1);\nreturn 'kept'");
+      return (direct === "0" && /Bread/.test(typed) && multi.replace(/\s/g, "") === "[2,4]" && explicit === '"kept"') || JSON.stringify({ direct, typed, multi, explicit });
+    } finally {
+      await browser.close();
+    }
+  });
+
   await check("changing server code doesn't send the agent to check a page; changing a page script does", async () => {
     const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-servercode-"));
     ws.setRoot(own);

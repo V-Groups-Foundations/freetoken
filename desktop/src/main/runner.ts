@@ -87,6 +87,22 @@ export function probeScript(script: string) {
       for (const k of Object.keys(v).slice(0, 40)) { try { out[k] = show(v[k], depth + 1, seen); } catch (e) { out[k] = "[unreadable]"; } }
       return out;
     };
+    // helpers for scripts: setting input.value directly never reaches React/Vue (they track the value
+    // through the native setter), so "typing" that way silently did nothing and the agent decided its
+    // add-task feature was broken. type() sets it the way a real keystroke does; wait() lets the page update
+    if (!globalThis.type) {
+      globalThis.wait = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+      globalThis.type = (target, text) => {
+        const el = typeof target === "string" ? document.querySelector(target) : target;
+        if (!el) throw new Error("type(): nothing matches " + target);
+        el.focus();
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, "value").set.call(el, String(text));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return el;
+      };
+    }
     try {
       // "await …" isn't valid in a plain eval: run it as an async expression, then as async statements
       const run = async (src) => {
@@ -94,7 +110,20 @@ export function probeScript(script: string) {
         catch (e) {
           if (!(e instanceof SyntaxError) || !/await/.test(String(e.message))) throw e;
           try { return await (0, eval)("(async () => (" + src + "\\n))()"); }
-          catch (e2) { if (!(e2 instanceof SyntaxError)) throw e2; return await (0, eval)("(async () => {" + src + "\\n})()"); }
+          catch (e2) { if (!(e2 instanceof SyntaxError)) throw e2; }
+          // statements with await: the value of the last expression is the answer ("click(); await wait();
+          // list.length" came back undefined). Find where that expression starts, from the end up: a split
+          // that doesn't parse fails before anything runs, so trying is safe
+          const body = src.replace(/[\\s;]+$/, "");
+          const cuts = [];
+          for (let i = body.length - 1; i >= 0 && cuts.length < 60; i--) if (body[i] === ";" || body[i] === "\\n") cuts.push(i);
+          for (const at of cuts) {
+            const last = body.slice(at + 1).trim();
+            if (!last || /^(?:(?:const|let|var|if|for|while|do|switch|try|return|throw|function|class|import|export|else|catch|finally)(?![\\w$])|\\}|\\/\\/)/.test(last)) continue;
+            try { return await (0, eval)("(async () => {" + body.slice(0, at + 1) + "\\nreturn (" + last + "\\n)})()"); }
+            catch (e3) { if (!(e3 instanceof SyntaxError)) throw e3; }
+          }
+          return await (0, eval)("(async () => {" + src + "\\n})()");
         }
       };
       const value = await run(${JSON.stringify(script)});
