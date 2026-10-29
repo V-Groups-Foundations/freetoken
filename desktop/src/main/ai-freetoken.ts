@@ -498,7 +498,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
           emit({ type: "tool_end", id: u.id, ok: false, summary: content });
           reportModel(stepModel, false, "unknown tool");
         } else if (!parsed?.success) {
-          content = `Invalid arguments for ${u.name}: ${parsed ? parsed.error.issues.map((i) => i.message).join("; ") : "not valid JSON"}. Retry with valid JSON matching the schema.`;
+          content = `Invalid arguments for ${u.name}: ${parsed ? parsed.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; ") : "not valid JSON"}. Retry with valid JSON matching the schema.`;
           emit({ type: "tool_end", id: u.id, ok: false, summary: "Invalid tool call" });
           reportModel(stepModel, false, "invalid tool call");
         } else {

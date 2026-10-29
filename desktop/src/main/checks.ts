@@ -71,28 +71,70 @@ export const truthy = (r: string) => !/^(false|null|undefined|0|""|NaN)?$/.test(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+type Host = PreviewHost & { evaluate: NonNullable<PreviewHost["evaluate"]> };
+type Saved = { url: string; data: { l: [string, string][]; s: [string, string][] } | null };
+
+const MAX_SNAPSHOT = 1_000_000;
+/** The page's localStorage + sessionStorage, read out in pieces (a script's answer is cut at 6000 characters); null when there is none or it's too big to put back. */
+async function snapshot(host: Host): Promise<Saved["data"]> {
+  const piece = (from: number) => `(() => { const d = JSON.stringify({ l: Object.entries(localStorage), s: Object.entries(sessionStorage) }); return ${from} < 0 ? d.length : d.slice(${from}, ${from + 4000}); })()`;
+  const len = Number(await host.evaluate(piece(-1)));
+  if (!Number.isFinite(len) || len <= 0 || len > MAX_SNAPSHOT) return null;
+  let d = "";
+  for (let i = 0; i < len; i += 4000) {
+    const r = await host.evaluate(piece(i));
+    try { d += JSON.parse(r); } catch { return null; }
+  }
+  try { return JSON.parse(d); } catch { return null; }
+}
+// the page may save its state as it unloads (that put cleared data straight back): no writes until it reloads
+const WIPE = "localStorage.clear(); sessionStorage.clear(); Storage.prototype.setItem = () => {}; true";
+const fill = (data: NonNullable<Saved["data"]>) =>
+  `localStorage.clear(); sessionStorage.clear(); for (const [k, v] of ${JSON.stringify(data.l)}) localStorage.setItem(k, v); for (const [k, v] of ${JSON.stringify(data.s)}) sessionStorage.setItem(k, v); Storage.prototype.setItem = () => {}; true`;
+
 /**
  * Run checks against the preview: each loads its page fresh, then runs its steps in order. A check that
  * fails is run once more from a fresh page before it counts: a timing fluke (a transition, a slow fetch)
  * passing on the second go isn't a broken feature, and reporting it sent the agent rewriting checks.
+ * Each check starts from the app's first-visit state: the page's saved data is cleared first (a task one
+ * check added stayed in localStorage, so another's "2 active" never held again and a working app kept
+ * failing), and what the user had is put back once the checks are done.
  */
 export async function runChecks(host: PreviewHost | null, checks: Check[], fallbackUrl?: string, signal?: AbortSignal): Promise<CheckResult[]> {
   if (!host?.evaluate) return checks.map((c) => ({ name: c.name, ok: false, detail: "no preview pane to run it in" }));
+  const h = host as Host;
+  const saved = new Map<string, Saved>();
   const out: CheckResult[] = [];
-  for (const c of checks) {
-    if (signal?.aborted) break;
-    let r = await runOne(host as PreviewHost & { evaluate: NonNullable<PreviewHost["evaluate"]> }, c, fallbackUrl);
-    if (!r.ok && r.retry && !signal?.aborted) r = await runOne(host as PreviewHost & { evaluate: NonNullable<PreviewHost["evaluate"]> }, c, fallbackUrl);
-    out.push({ name: c.name, ok: r.ok, detail: r.detail });
+  try {
+    for (const c of checks) {
+      if (signal?.aborted) break;
+      let r = await runOne(h, c, fallbackUrl, saved);
+      if (!r.ok && r.retry && !signal?.aborted) r = await runOne(h, c, fallbackUrl, saved);
+      out.push({ name: c.name, ok: r.ok, detail: r.detail });
+    }
+  } finally {
+    for (const { url, data } of saved.values()) {
+      if (!data || (await h.open(url))) continue;
+      await h.evaluate(fill(data));
+      await h.open(url);
+    }
   }
   return out;
 }
 
-async function runOne(host: PreviewHost & { evaluate: NonNullable<PreviewHost["evaluate"]> }, c: Check, fallbackUrl?: string): Promise<{ ok: boolean; detail: string; retry?: boolean }> {
+async function runOne(host: Host, c: Check, fallbackUrl: string | undefined, saved: Map<string, Saved>): Promise<{ ok: boolean; detail: string; retry?: boolean }> {
   const url = pageFor(c.url, fallbackUrl);
   if (!url) return { ok: false, detail: "no page to load: start the app first" };
-  const err = await host.open(url);
+  let err = await host.open(url);
   if (err) return { ok: false, detail: `${url} didn't load: ${err}` };
+  const origin = (() => { try { return new URL(url).origin; } catch { return url; } })();
+  if (!saved.has(origin)) saved.set(origin, { url, data: await snapshot(host) });
+  // only a page whose data could be put back is wiped
+  if (saved.get(origin)!.data) {
+    await host.evaluate(WIPE);
+    err = await host.open(url);
+    if (err) return { ok: false, detail: `${url} didn't load: ${err}` };
+  }
   await sleep(500);
   for (const [i, step] of c.steps.entries()) {
     if (step.action) {

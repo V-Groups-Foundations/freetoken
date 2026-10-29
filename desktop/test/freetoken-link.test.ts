@@ -640,6 +640,30 @@ async function main() {
     return (flaky[0].ok && flakyLoads === 2 && !broken[0].ok && loads === 2) || JSON.stringify({ flaky, flakyLoads, broken, loads });
   });
 
+  await check("each check starts from the app's first-visit state (what one check added doesn't fail the next), and the user's own data is put back after", async () => {
+    const checks = await import("../src/main/checks");
+    const vm = await import("node:vm");
+    // a page whose localStorage outlives reloads; the app keeps its tasks in memory and saves them as the page unloads
+    const kept: Record<string, string> = { tasks: '["mine","mine2","mine3","mine4"]', theme: "dark" };
+    let ctx: any = null;
+    const sync = () => { for (const k of Object.keys(kept)) delete kept[k]; Object.assign(kept, { ...ctx.localStorage }); };
+    const open = async () => {
+      if (ctx) { vm.runInContext("localStorage.setItem('tasks', JSON.stringify(__mem))", ctx); sync(); }
+      ctx = vm.createContext({ Element: class {} });
+      vm.runInContext(`class Storage { setItem(k, v) { this[k] = String(v); } getItem(k) { return k in this ? this[k] : null; } clear() { for (const k of Object.keys(this)) delete this[k]; } }
+        globalThis.localStorage = Object.assign(new Storage(), ${JSON.stringify(kept)}); globalThis.sessionStorage = new Storage();
+        globalThis.__mem = JSON.parse(localStorage.getItem('tasks') || '["seed1","seed2"]');`, ctx);
+    };
+    const host = {
+      open, inspect: async () => null,
+      evaluate: async (s: string) => { const r = await vm.runInContext(runner.probeScript(s), ctx); sync(); return String(r); },
+    };
+    await open();
+    const add = { name: "add a task", steps: [{ action: "__mem.push('new'); localStorage.setItem('tasks', JSON.stringify(__mem))", expect: "JSON.parse(localStorage.getItem('tasks')).length === 3", wait_ms: 0 }] };
+    const rs = await checks.runChecks(host, [add, { ...add, name: "add another" }], "http://localhost:5173/");
+    return (rs.every((r) => r.ok) && kept.tasks === '["mine","mine2","mine3","mine4"]' && kept.theme === "dark") || JSON.stringify({ rs, kept });
+  });
+
   await check("a saved check follows the app to whatever port it runs on now (a restart moved it, and every check failed)", async () => {
     const checks = await import("../src/main/checks");
     const own = fs.mkdtempSync(path.join(os.tmpdir(), "vrun-checkport-"));

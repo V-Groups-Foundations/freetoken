@@ -19,6 +19,7 @@ import path from "node:path";
   const ai = await import("../src/main/ai");
   const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".freetoken", "config.json"), "utf8"));
   ft.configureFreeToken({ url: () => cfg.baseUrl, token: () => cfg.token, model: () => "auto-smart" });
+  (await import("../src/main/images")).configureImages({ url: () => cfg.baseUrl, token: () => cfg.token });
   ws.setRoot(proj);
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ channel: "chrome" });

@@ -20,7 +20,7 @@ export function fitPath(rel: string, ext: string): string {
 
 export async function generateImage(prompt: string, size?: { width: number; height: number }, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<Buffer> {
   const token = cfg.token();
-  if (!token) throw new Error("Making images needs FreeToken: add your FreeToken API token (ft_…) in Settings.");
+  if (!token) throw new Error("Making images needs FreeToken: add your FreeToken API token (ft_…) in Settings. Trying again won't help until then: use a fallback picture.");
   const res = await fetchImpl(`${cfg.url().replace(/\/+$/, "")}/images/generations`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
