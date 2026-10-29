@@ -10,6 +10,9 @@ import {
 } from "./ai";
 import { prepareAttachments, type Prepared } from "./attachments";
 import { readText } from "./workspace";
+import { outputDetail } from "./diff";
+import { changesForReview, parseReview, reviewFindings, reviewPrompt, REVIEW_SYSTEM } from "./review";
+import type { Session } from "./ai";
 
 export const FREETOKEN_DEFAULT_URL = "http://localhost:3000/api/v1";
 
@@ -288,6 +291,39 @@ export function reportModel(model: string | null, good: boolean, reason: string)
   }).catch(() => { /* an older FreeToken without /feedback: nothing to learn from */ });
 }
 
+/**
+ * A second opinion on the task's changes from FreeToken's best reasoning model (its own session, so the
+ * working model keeps this one): the findings for the agent to check and fix, or null when it found
+ * nothing, or couldn't answer (then the agent reviews its own work, as before).
+ */
+export async function peerReview(s: Session, request: string, emit: (e: AgentEvent) => void, sessionId: string): Promise<string | null> {
+  const files = s.turns[s.turns.length - 1]?.files;
+  if (!files?.size || s.worker || s.mode === "team" || s.selfReviewed || s.mustStop || !(files.size >= 2 || s.bigJob)) return null;
+  const changes = await changesForReview(files, (rel) => readText(rel).catch(() => null));
+  if (!changes.trim()) return null;
+  const id = `review-${Date.now()}`;
+  emit({ type: "tool_start", id, name: "review_changes", input: { files: files.size } });
+  try {
+    const { data: r, response } = await client().chat.completions.create({
+      model: "auto-smart",
+      max_tokens: 6000, // reasoning models think first: room for that and the answer
+      messages: [{ role: "system", content: REVIEW_SYSTEM }, { role: "user", content: reviewPrompt(request, changes) }],
+    }, { signal: s.abort?.signal, timeout: 150_000, maxRetries: 1, headers: { "x-freetoken-session": `${sessionId}#review`, "x-freetoken-task": "reasoning" } }).withResponse();
+    const model = response.headers.get("x-freetoken-provider") ?? undefined;
+    const issues = parseReview(r.choices?.[0]?.message?.content ?? "");
+    if (!issues) { emit({ type: "tool_end", id, ok: true, summary: "Second opinion: no clear answer — the agent checks its own work" }); return null; }
+    s.selfReviewed = true;
+    const by = model ? ` (${model.split("/").pop()})` : "";
+    emit({ type: "tool_end", id, ok: !issues.length, summary: issues.length ? `Second opinion${by}: ${issues.length} thing${issues.length > 1 ? "s" : ""} to fix` : `Second opinion${by}: no problems found`,
+      detail: outputDetail(issues.map((i) => `${i.file}${i.line ? `:${i.line}` : ""} — ${i.problem}`).join("\n") || "no problems found") });
+    return issues.length ? reviewFindings(issues) : null;
+  } catch (e) {
+    if (s.abort?.signal.aborted) throw e;
+    emit({ type: "tool_end", id, ok: true, summary: `Second opinion unavailable (${String((e as Error).message).slice(0, 80)}) — the agent checks its own work` });
+    return null;
+  }
+}
+
 /** Have a vision model look at a screenshot of the page and list what's visibly wrong. */
 export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSignal): Promise<{ text: string; model?: string }> {
   try {
@@ -314,12 +350,28 @@ export async function lookAtPage(jpeg: Buffer, request: string, signal?: AbortSi
   }
 }
 
-/** Which kind of model this step needs: "reasoning" to plan or get unstuck, else FreeToken's own guess. */
-export function stepRole(s: { stuck?: boolean; bigJob?: boolean; planned?: boolean }, req: Pick<ChatRequest, "mode">, turn: number): "reasoning" | undefined {
+/**
+ * Which kind of model this step needs: "reasoning" to plan or get unstuck, else "agent". Said outright
+ * rather than left to FreeToken's guess from the request: the guess followed the last message's words
+ * ("error", "plan", a screenshot), each kind has its own model, and the task changed hands mid-way.
+ * A question in Ask mode is left to the guess.
+ */
+export function stepRole(s: { stuck?: boolean; bigJob?: boolean; planned?: boolean }, req: Pick<ChatRequest, "mode">, turn: number): "reasoning" | "agent" | undefined {
   if (s.stuck) return "reasoning";
   if (req.mode === "plan") return "reasoning";
   if (s.bigJob && !s.planned && turn === 0) return "reasoning";
-  return undefined;
+  return req.mode === "ask" ? undefined : "agent";
+}
+
+/**
+ * A stronger model that takes over a stuck task keeps it for a few steps, not one: a single step was
+ * spent reading, and the model that had been stuck took over again before anything was fixed. Once it
+ * changes a file it gets one more step (to check its fix), then the task goes back.
+ */
+export function stuckStep(s: { stuck?: boolean; stuckSteps?: number }, changedFile: boolean) {
+  if (!s.stuck) return;
+  s.stuckSteps = Math.min(s.stuckSteps ?? 4, changedFile ? 2 : Infinity) - 1;
+  if (s.stuckSteps <= 0) { s.stuck = false; s.stuckSteps = undefined; }
 }
 
 export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => void) {
@@ -366,7 +418,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
       let text = "";
       let calls: { id: string; name: string; args: string }[] = [];
       let finish: string | null = null;
-      let waits = 0, cutOff = false;
+      let waits = 0, cutOff = false, escalated = false, changed = false;
       const context = await contextFor(req.sessionId, msgs, userIndex, s.abort.signal, () => emit({ type: "thinking", delta: "\n\n*Summarising the earlier steps to keep the context small…*\n\n" }));
       for (let attempt = 0; ; attempt++) {
         text = ""; calls = []; finish = null;
@@ -425,7 +477,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             if (ch.finish_reason) finish = ch.finish_reason;
           }
           if (usage) emit({ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 });
-          if (role && s.stuck) s.stuck = false; // the reasoning model has had its step back
+          escalated = role === "reasoning" && !!s.stuck; // a stronger model took this step over (stuckStep below)
           break;
         } catch (e) {
           // free tiers rate-limit often and briefly: wait it out instead of failing the whole task
@@ -466,6 +518,17 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         quietStep = false;
         const gate = await regressionGate(s, emit);
         if (gate) { msgs.push({ role: "user", content: gate }); continue; }
+        // a reply with nothing to say is first asked for its summary (buildNudge); then a second model reviews
+        const second = text.trim() ? await peerReview(s, req.text, emit, req.sessionId) : null;
+        if (second) {
+          // quiet, like the self-review it replaces: the user's last message stays the summary written for
+          // them ("the second model's flags are false" isn't theirs to read) unless a finding is real and
+          // gets fixed — an edit ends the quiet, and the agent then speaks normally
+          msgs.push({ role: "user", content: second });
+          quietStep = true;
+          emit({ type: "thinking", delta: "\n\n*A second model reviewed the changes — checking what it found…*\n\n" });
+          continue;
+        }
         const nudge = buildNudge(s, text, req.text);
         if (nudge) {
           if (nudge.kind === "false-claim" || nudge.kind === "code-dump") reportModel(stepModel, false, nudge.kind);
@@ -505,6 +568,10 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
           try {
             const r = await execTool(s, u.name as ToolName, parsed.data, emit, u.id);
             content = r.content;
+            if (/^(edit_file|write_file|delete_file|generate_image)$/.test(u.name)) changed = true;
+            // a write that broke the file's syntax counts against the model that wrote it: routing learns
+            // which models write code that doesn't parse
+            if (/ doesn't parse now — /.test(r.content)) reportModel(stepModel, false, "wrote code that doesn't parse");
             if (quietStep && /^(edit_file|write_file|delete_file)$/.test(u.name)) quietStep = false;
             // the agent model may not see images: a vision model looks at the page and describes problems
             // once per version of the page: the same page reviewed again only repeats (or invents) problems
@@ -521,6 +588,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         }
         msgs.push({ role: "tool", tool_call_id: u.id, content });
       }
+      if (escalated) stuckStep(s, changed);
       const budget = stepsLeftNote(turn, req.maxSteps ?? MAX_STEPS);
       if (budget) msgs.push({ role: "user", content: budget });
       if (s.abort.signal.aborted) return emit({ type: "done", stopReason: "aborted" });

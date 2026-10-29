@@ -25,6 +25,7 @@ import * as checks from "./checks";
 import * as publisher from "./publish";
 import * as android from "./android";
 import { fuzzyFiles, grep } from "./search";
+import { projectTypeErrors, syntaxNote } from "./syntax";
 import { deletePath, exists, getRoot, listDir, readText, resolveInRoot, writeBytes, writeText } from "./workspace";
 
 type MessageParam = Anthropic.Beta.Messages.BetaMessageParam;
@@ -304,9 +305,12 @@ export interface Session {
   /** the page was already reviewed by a vision model since files last changed */
   reviewed?: boolean;
   stuck?: boolean;
+  /** steps the stronger model keeps a stuck task for (stuckStep) */
+  stuckSteps?: number;
   mustStop?: boolean;
   /** saved checks were rerun this task (regression gate), and files changed since the last run */
   checkGates?: number;
+  typeGates?: number;
   filesSinceGate?: boolean;
   /** replies dropped this turn for hitting the output limit */
   lengthRetries?: number;
@@ -544,8 +548,26 @@ export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "
  * Features that worked before and fail now send the agent back — at most twice per task.
  */
 export async function regressionGate(s: Session, emit: (e: AgentEvent) => void): Promise<string | null> {
-  if ((s.checkGates ?? 0) >= 2 || s.worker || s.mustStop || !canAct(s.mode ?? "agent")) return null;
-  if (!s.turns[s.turns.length - 1]?.files.size || !s.filesSinceGate) return null;
+  if (s.worker || s.mustStop || !canAct(s.mode ?? "agent")) return null;
+  const files = s.turns[s.turns.length - 1]?.files;
+  if (!files?.size || !s.filesSinceGate) return null;
+  // a TypeScript project's own type check first: a model's typo in a type passes a glance at the page
+  const ts = [...files.keys()].filter((f) => /\.(c|m)?tsx?$/i.test(f));
+  if (ts.length && (s.typeGates ?? 0) < 2) {
+    const id = `tsc-${Date.now()}`;
+    emit({ type: "tool_start", id, name: "run_terminal_command", input: { command: "tsc --noEmit" } });
+    const root = getRoot();
+    const errs = root ? await projectTypeErrors(root, ts) : null;
+    if (errs) {
+      s.typeGates = (s.typeGates ?? 0) + 1;
+      emit({ type: "tool_end", id, ok: !errs.length, summary: errs.length ? `Type check: ${errs.length} error${errs.length > 1 ? "s" : ""} in files changed now` : "Type check passes", detail: outputDetail(errs.join("\n") || "no errors") });
+      if (errs.length) {
+        if (s.typeGates >= 2) s.stuck = true; // the same kind of failure twice: a stronger model takes the next steps
+        return `Before you finish: the project's type check (tsc --noEmit) finds errors in files you changed:\n${errs.slice(0, 20).join("\n")}${errs.length > 20 ? `\n…and ${errs.length - 20} more` : ""}\n\nFix them, then finish.`;
+      }
+    } else emit({ type: "tool_end", id, ok: true, summary: "Type check skipped (no tsconfig.json or TypeScript in this project)" });
+  }
+  if ((s.checkGates ?? 0) >= 2) return null;
   const host = runner.previewHost();
   if (!host?.evaluate) return null;
   const { checks: saved } = await checks.loadChecks();
@@ -559,6 +581,7 @@ export async function regressionGate(s: Session, emit: (e: AgentEvent) => void):
   s.pageStale = true;
   emit({ type: "tool_end", id, ok: !failed.length, summary: failed.length ? `${failed.length} of ${results.length} saved checks fail` : `All ${results.length} saved checks pass`, detail: outputDetail(checks.describeResults(results)) });
   if (!failed.length) return null;
+  if (s.checkGates >= 2) s.stuck = true; // its fix didn't hold: a stronger model takes the next steps
   return `Before you finish: these saved checks — features that worked before — fail now:\n${checks.describeResults(failed)}\n\nFind what your changes broke and fix it (if the feature was meant to change, update its check with save_check instead), then run_checks to confirm.`;
 }
 
@@ -666,8 +689,10 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.scopeWarned = false;
   s.reviewed = false;
   s.stuck = false;
+  s.stuckSteps = undefined;
   s.mustStop = false;
   s.checkGates = 0;
+  s.typeGates = 0;
   s.filesSinceGate = false;
   s.planNudged = false;
 }
@@ -971,7 +996,11 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       await checkpoint(s, rel);
       await writeText(rel, eol === "\r\n" ? out.replace(/\n/g, "\r\n") : out);
       emit({ type: "file_changed", path: rel });
-      return { content: `Edited ${rel} (${input.replace_all && count ? count : 1} replacement${count > 1 && input.replace_all ? "s" : ""})${note}.`, summary: `Edited ${rel}`, detail: diffDetail(rel, text, out) };
+      // an edit can break a page or a script as easily as a rewrite: say so now, with the line
+      const shape = /\.html?$/i.test(rel) ? htmlShape(out) : "";
+      const broken = shape && !/came through complete/.test(shape) && shape !== htmlShape(text) ? shape : "";
+      const syntax = syntaxNote(rel, out, text);
+      return { content: `Edited ${rel} (${input.replace_all && count ? count : 1} replacement${count > 1 && input.replace_all ? "s" : ""})${note}.${broken}${syntax}`, summary: `Edited ${rel}${syntax ? " — doesn't parse yet" : ""}`, detail: diffDetail(rel, text, out) };
     }
     case "write_file": {
       const { rel } = resolveInRoot(input.path);
@@ -980,7 +1009,8 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       await checkpoint(s, rel);
       await writeText(rel, input.contents);
       emit({ type: "file_changed", path: rel });
-      return { content: `${existed ? "Overwrote" : "Created"} ${rel} (${input.contents.split("\n").length} lines).${/\.html?$/i.test(rel) ? htmlShape(input.contents) : ""}`, summary: `${existed ? "Rewrote" : "Created"} ${rel}`, detail: diffDetail(rel, before, input.contents, !existed) };
+      const syntax = syntaxNote(rel, input.contents);
+      return { content: `${existed ? "Overwrote" : "Created"} ${rel} (${input.contents.split("\n").length} lines).${/\.html?$/i.test(rel) ? htmlShape(input.contents) : ""}${syntax}`, summary: `${existed ? "Rewrote" : "Created"} ${rel}${syntax ? " — doesn't parse yet" : ""}`, detail: diffDetail(rel, before, input.contents, !existed) };
     }
     case "delete_file": {
       const { rel } = resolveInRoot(input.path);
@@ -1419,7 +1449,7 @@ export async function systemPrompt(mode: ChatRequest["mode"], task = "", worker?
     `You are an AI pair programmer inside a code editor, working in the user's project at ${getRoot()} on ${os.platform()}.`,
     canAct(mode) ? `Terminal commands run in ${process.platform === "win32" ? (runner.usingPwsh() ? "PowerShell 7 — use PowerShell syntax (e.g. $env:NAME=\"x\"; Get-ChildItem); && and || work, but not bash-only tools like printf, export or grep" : "Windows PowerShell 5.1 — use PowerShell syntax (e.g. $env:NAME=\"x\"; \"a\",\"b\" | python app.py), not bash (no printf, export or &&; chain commands with ;)") : "bash"}, in the project root, non-interactively, with a 2-minute limit.` : "",
     canAct(mode)
-      ? "You can read, search and edit files and run terminal commands with the tools provided. Make the changes the user asks for directly in the files rather than pasting code into chat. Read a file before editing it. Keep edits minimal and consistent with the surrounding code. Use the project's own tools, libraries and conventions (its test runner, package manager, style): don't add dependencies, switch frameworks or add extras the user didn't ask for — if one is truly needed, say why. For multi-step work keep a todo list with todo_write. After editing, verify where practical (for example run the project's tests or type checker, with the user's approval). Before a batch of tool calls, say in one short sentence what you are about to do (don't narrate every call). Finish with a short summary: what changed (cite path:line), how you verified it, and anything left for the user. Work efficiently: don't re-read lines you have just read; if edit_file fails twice on the same file, rewrite the whole file with write_file; write a big file in parts (a skeleton with write_file, then each further section with edit_file) rather than hundreds of lines in one call; to run the user's app or website, use run_app (it stays running inside the editor and web pages open in the preview pane), then check it with inspect_preview or app_output and fix what you see."
+      ? "You can read, search and edit files and run terminal commands with the tools provided. Make the changes the user asks for directly in the files rather than pasting code into chat. Read a file before editing it. Keep edits minimal and consistent with the surrounding code. Use the project's own tools, libraries and conventions (its test runner, package manager, style): don't add dependencies, switch frameworks or add extras the user didn't ask for — if one is truly needed, say why. For multi-step work keep a todo list with todo_write. After editing, verify where practical (for example run the project's tests or type checker, with the user's approval). Before a batch of tool calls, say in one short sentence what you are about to do (don't narrate every call). Finish with a short summary: what changed (cite path:line), how you verified it, and anything left for the user. Work efficiently: don't re-read lines you have just read; if edit_file fails twice on the same file, rewrite the whole file with write_file; write a big file in parts (a skeleton with write_file, then each further section with edit_file), keeping each call under about 250 lines — long single writes are where typos, duplicated blocks and missing pieces creep in; after each write, read the result note: it says if the file doesn't parse; to run the user's app or website, use run_app (it stays running inside the editor and web pages open in the preview pane), then check it with inspect_preview or app_output and fix what you see."
       : mode === "plan"
       ? "You are in Plan mode: investigate before anything is changed. Read and search the code you need (you cannot edit files or run commands yet), then reply with a concrete plan: one line on the goal, a numbered list of steps that each name the files and functions to change, how you will verify it, and any risks or questions for the user. Keep it short and specific to this codebase. Do not write the full code. The user will approve the plan and you will then carry it out."
       : "You are in Ask mode: answer questions about the code. You can read and search files but cannot modify them or run commands. If the user wants changes, show the code and suggest switching to Agent mode.",

@@ -5,6 +5,7 @@ import { callChat } from '@/providers/client';
 import { getProvider, keylessIds } from '@/providers/registry';
 import type { Deps } from '@/server/deps';
 import { peekFirstEvent } from '@/router/peek';
+import { noteLatency, timeoutFor } from './latency';
 import { estimateTokens, learnedScores, outputSpeed, recentFailures, recordUsage, usageToday } from '@/usage/ledger';
 import { detectTask, type Task } from './quality';
 import { noteReachable, noteUnreachable, unreachableHint } from '@/providers/network';
@@ -36,10 +37,11 @@ const pinKey = (userId: string, task: string, session: string) => `pin:${userId}
 
 export type RouteOutcome =
   | { ok: true; response: Response }
-  | { ok: false; status: number; code: string; message: string };
+  | { ok: false; status: number; code: string; message: string; retryAfterMs?: number };
 
 const cooldownKey = (userId: string, provider: string) => `cd:${userId}:${provider}`;
-const fail = (status: number, code: string, message: string): RouteOutcome => ({ ok: false, status, code, message });
+const fail = (status: number, code: string, message: string, retryAfterMs?: number): RouteOutcome =>
+  ({ ok: false, status, code, message, ...(retryAfterMs != null ? { retryAfterMs } : {}) });
 
 export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutcome> {
   const now = deps.now ?? Date.now;
@@ -140,7 +142,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
   // providers that couldn't be reached from this network (blocked / no connection) this request
   const unreachable = new Set<string>();
   let otherFailures = 0;
-  for (const m of candidates) {
+  for (const [i, m] of candidates.entries()) {
     if (cooling.has(m.provider)) continue; // a model of this provider failed earlier in this loop
     const def = getProvider(m.provider);
     const c = creds.get(m.provider);
@@ -151,16 +153,23 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     // Gemini refuses earlier tool calls without their thought signatures: put them back
     const plain = forProvider(m.provider, { ...body, model: m.modelId, ...(m.provider === 'gemini' && Array.isArray(body.tools) ? { messages: await withSignatures(deps.kv, userId, body.messages) } : {}) });
     const askUsage = stream && !clientWantsUsage;
-    let r = await callChat(def, c.creds, askUsage ? { ...plain, stream_options: { ...(body.stream_options as object), include_usage: true } } : plain, { fetchImpl: deps.fetchImpl });
+    // One global 30s / 75s wait meant a model that normally answers in 2s held a stuck request for 30s before the
+    // next model was tried. So each model waits 3 × its own measured p90 (never more than the global wait) —
+    // except when no other model is left to try: cutting off the only option would turn a slow answer into none.
+    const lastLeft = !candidates.slice(i + 1).some((n) => !cooling.has(n.provider) && getProvider(n.provider) && creds.has(n.provider));
+    const firstDefault = deps.firstEventMs ?? 75_000;
+    const callOpts = { fetchImpl: deps.fetchImpl, ...(lastLeft ? {} : { timeoutMs: await timeoutFor(deps.kv, m, 'headers', 30_000) }) };
+    let r = await callChat(def, c.creds, askUsage ? { ...plain, stream_options: { ...(body.stream_options as object), include_usage: true } } : plain, callOpts);
     // a provider that rejects stream_options: try again exactly as the client sent it
-    if (askUsage && !r.ok && r.error.kind === 'bad_request') r = await callChat(def, c.creds, plain, { fetchImpl: deps.fetchImpl });
+    if (askUsage && !r.ok && r.error.kind === 'bad_request') r = await callChat(def, c.creds, plain, callOpts);
     // the client asked for it itself (Claude Code / Codex through FreeToken do): if the provider rejects
     // it, try once without it rather than failing the whole request (usage is then estimated)
     else if (!askUsage && body.stream_options && !r.ok && r.error.kind === 'bad_request' && /stream_options|include_usage/i.test(r.error.message)) {
       const withoutOptions: Record<string, unknown> = { ...plain };
       delete withoutOptions.stream_options;
-      r = await callChat(def, c.creds, withoutOptions, { fetchImpl: deps.fetchImpl });
+      r = await callChat(def, c.creds, withoutOptions, callOpts);
     }
+    if (r.ok) await noteLatency(deps.kv, m, 'headers', now() - started).catch(() => {});
 
     if (!r.ok) {
       const e = r.error;
@@ -174,6 +183,16 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
         ...usageBase, promptTokens: 0, completionTokens: 0, latencyMs: now() - started,
         status: e.kind === 'rate_limit' ? 'rate_limited' : 'error',
       });
+      // Switching models mid-task loses the thread; a few seconds' wait for the model that has it is cheaper
+      // (V-Run already waits on 429 + Retry-After). Once per pin per minute, so a model that stays limited
+      // still gets replaced instead of holding the session up again and again.
+      if (e.kind === 'rate_limit' && !e.daily && !e.tokenLimit && e.retryAfterMs != null && e.retryAfterMs <= 20_000
+        && pinAt && pinned && !pinned.endsWith('#fallback') && pinned === `${m.provider}/${m.modelId}`
+        && !(await deps.kv.get(`held:${pinAt}`))) {
+        await deps.kv.set(`held:${pinAt}`, '1', 60_000);
+        const secs = Math.max(1, Math.ceil(e.retryAfterMs / 1000));
+        return fail(429, 'rate_limited', `The model working on this session is busy for a few seconds; retry after ${secs}s.`, e.retryAfterMs);
+      }
       // a 400 that's really the model's fault (a malformed tool call it generated) or too much for this
       // model's context: another model can take it. Anything else is the request's fault: report it.
       if (e.kind === 'bad_request' && !MODEL_SIDE_400.test(String(e.message))) return fail(e.status, 'upstream_bad_request', e.message);
@@ -213,8 +232,9 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     // yet, so the next model can still take the request
     let streamBody: ReadableStream<Uint8Array> | null = r.response.body;
     if (stream && streamBody && /event-stream/i.test(r.response.headers.get('content-type') ?? '')) {
-      const peek = await peekFirstEvent(streamBody, deps.firstEventMs);
+      const peek = await peekFirstEvent(streamBody, lastLeft ? deps.firstEventMs : await timeoutFor(deps.kv, m, 'first', firstDefault));
       streamBody = peek.stream;
+      if (!peek.error) await noteLatency(deps.kv, m, 'first', now() - started).catch(() => {});
       if (peek.error) {
         void peek.stream.cancel().catch(() => {});
         const limited = /rate.?limit|quota|too many requests|\b429\b/i.test(peek.error);

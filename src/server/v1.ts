@@ -5,9 +5,11 @@ import { validateChatBody } from './chat-body';
 import type { Deps } from './deps';
 import { userIdFromBearer } from './tokens';
 
-export function oaiError(status: number, code: string, message: string) {
+export function oaiError(status: number, code: string, message: string, retryAfterMs?: number) {
   const type = status === 401 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : 'invalid_request_error';
-  return Response.json({ error: { message, type, code } }, { status });
+  // whole seconds, rounded up: a client that retries early just gets refused again
+  const headers = retryAfterMs != null ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) } : undefined;
+  return Response.json({ error: { message, type, code } }, { status, headers });
 }
 
 const unauthorized = () => oaiError(401, 'invalid_api_key', 'Missing or invalid FreeToken API token.');
@@ -27,7 +29,7 @@ export async function handleCompletions(req: Request, deps: Deps): Promise<Respo
   // a client may say what kind of task this is (V-Run asks for a reasoning model to plan and debug)
   const out = await routeChat({ userId, source: 'api', body: v.body, task: parseTask(req.headers.get('x-freetoken-task')),
     session: req.headers.get('x-freetoken-session')?.slice(0, 200) || undefined }, deps);
-  return out.ok ? out.response : oaiError(out.status, out.code, out.message);
+  return out.ok ? out.response : oaiError(out.status, out.code, out.message, out.retryAfterMs);
 }
 
 export async function handleModels(req: Request, deps: Deps): Promise<Response> {

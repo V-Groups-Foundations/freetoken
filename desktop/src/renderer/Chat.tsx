@@ -53,6 +53,8 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   publish_site: { label: "Publish", arg: "name", verb: "Publishing the website" },
   share_link: { label: "Public link", verb: "Making a public link" },
   run_checks: { label: "Run checks", verb: "Re-running the saved checks" },
+  review_changes: { label: "Second opinion", verb: "A stronger model is reviewing the changes" },
+  generate_image: { label: "Make image", arg: "path", verb: "Making the image" },
   list_checkpoints: { label: "Checkpoints", verb: "Looking at the history" },
   restore_checkpoint: { label: "Restore", arg: "id", verb: "Restoring a snapshot" },
   undo_last_reply: { label: "Undo last reply", verb: "Undoing the last reply" },

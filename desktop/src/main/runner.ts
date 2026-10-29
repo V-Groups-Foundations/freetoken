@@ -108,7 +108,9 @@ export function probeScript(script: string) {
       const run = async (src) => {
         try { return await (0, eval)(src); }
         catch (e) {
-          if (!(e instanceof SyntaxError) || !/await/.test(String(e.message))) throw e;
+          // a top-level "return" ("Illegal return statement") is the same case: the script never ran, and the
+          // agent went on testing data it thought it had written
+          if (!(e instanceof SyntaxError) || !/await|return/.test(String(e.message))) throw e;
           try { return await (0, eval)("(async () => (" + src + "\\n))()"); }
           catch (e2) { if (!(e2 instanceof SyntaxError)) throw e2; }
           // statements with await: the value of the last expression is the answer ("click(); await wait();

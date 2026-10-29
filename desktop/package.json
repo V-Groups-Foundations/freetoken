@@ -13,7 +13,7 @@
     "start": "electron .",
     "test": "tsx test/core.test.ts",
     "e2e": "tsx test/e2e.ts",
-    "test:all": "tsx test/core.test.ts && tsx test/freetoken.test.ts && tsx test/freetoken-link.test.ts && tsx test/team.test.ts && tsx test/attachments.test.ts && tsx test/history.test.ts && tsx test/share.test.ts && tsx test/publish.test.ts && tsx test/android.test.ts && tsx test/bench.test.ts && tsx test/images.test.ts",
+    "test:all": "tsx test/core.test.ts && tsx test/freetoken.test.ts && tsx test/freetoken-link.test.ts && tsx test/team.test.ts && tsx test/attachments.test.ts && tsx test/history.test.ts && tsx test/share.test.ts && tsx test/publish.test.ts && tsx test/android.test.ts && tsx test/bench.test.ts && tsx test/images.test.ts && tsx test/syntax.test.ts && tsx test/review.test.ts",
     "e2e:ft": "tsx test/e2e-freetoken.ts"
   },
   "dependencies": {
@@ -22,6 +22,7 @@
     "mp4-muxer": "^5.2.2",
     "openai": "^7.34.0",
     "qrcode": "^1.5.4",
+    "typescript": "^5.9.3",
     "webm-muxer": "^5.1.4",
     "zod": "^4.6.7"
   },
@@ -39,7 +40,6 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3",
     "vite": "^6.4.4"
   }
 }

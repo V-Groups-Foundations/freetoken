@@ -767,8 +767,22 @@ async function main() {
   await check("thinking goes to a reasoning model: planning a big job, Plan mode, and getting unstuck", async () => {
     const r = ftAi.stepRole;
     return r({ stuck: true }, { mode: "agent" }, 9) === "reasoning" && r({}, { mode: "plan" }, 3) === "reasoning"
-      && r({ bigJob: true, planned: false }, { mode: "agent" }, 0) === "reasoning" && r({ bigJob: true, planned: false }, { mode: "agent" }, 1) === undefined
-      && r({ bigJob: true, planned: true }, { mode: "agent" }, 0) === undefined && r({}, { mode: "agent" }, 0) === undefined;
+      && r({ bigJob: true, planned: false }, { mode: "agent" }, 0) === "reasoning"
+      && r({ bigJob: true, planned: false }, { mode: "agent" }, 1) === "agent"
+      && r({ bigJob: true, planned: true }, { mode: "agent" }, 0) === "agent" && r({}, { mode: "agent" }, 0) === "agent" && r({}, { mode: "ask" }, 0) === undefined;
+  });
+
+  await check("a stronger model that takes over a stuck task keeps it until it has changed something and looked once more", async () => {
+    const reading: { stuck?: boolean; stuckSteps?: number } = { stuck: true };
+    const roles: (string | undefined)[] = [];
+    for (let i = 0; i < 6; i++) { roles.push(ftAi.stepRole(reading, { mode: "agent" }, i)); ftAi.stuckStep(reading, false); }
+    const fixing: { stuck?: boolean; stuckSteps?: number } = { stuck: true };
+    ftAi.stuckStep(fixing, false); // reads
+    ftAi.stuckStep(fixing, true); // fixes
+    const afterFix = ftAi.stepRole(fixing, { mode: "agent" }, 3);
+    ftAi.stuckStep(fixing, false); // looks again
+    return (roles.join() === "reasoning,reasoning,reasoning,reasoning,agent,agent" && afterFix === "reasoning" && !fixing.stuck)
+      || JSON.stringify({ roles, afterFix, fixing });
   });
 
   await check("a frontend and its backend run together; the same command again restarts only that one", async () => {
@@ -817,7 +831,11 @@ async function main() {
     const ok = JSON.parse(await (0, eval)(runner.probeScript("__probe")));
     const err = await (0, eval)(runner.probeScript("notDefinedAnywhere.x"));
     const num = await (0, eval)(runner.probeScript("await Promise.resolve(6 * 7)"));
-    return (ok.children[0].position.y === 3 && ok.children[0].parent === "[circular]" && /^Error: .*notDefinedAnywhere/.test(err) && num === "42") || JSON.stringify({ ok, err, num });
+    // a top-level return without await ran nothing ("Illegal return statement"): now it runs and answers
+    g.__ran = 0;
+    const ret = await (0, eval)(runner.probeScript("__ran = 1;\nconst n = 5;\nreturn n * 2;"));
+    return (ok.children[0].position.y === 3 && ok.children[0].parent === "[circular]" && /^Error: .*notDefinedAnywhere/.test(err) && num === "42" && ret === "10" && g.__ran === 1)
+      || JSON.stringify({ ok, err, num, ret, ran: g.__ran });
   });
 
   await check("FreeToken hears how each model did (bad tool calls, verified finished work)", async () => {

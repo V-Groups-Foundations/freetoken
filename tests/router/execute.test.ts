@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createTestDb, createUser } from '../helpers/db';
 import { fakeFetch, okJson, sse, type Handler } from '../helpers/fake-fetch';
@@ -288,6 +288,63 @@ describe('routeChat', () => {
     expect(who(await ask('s1', () => okJson(), later))).toBe('groq/llama-70b');
     expect(who(await ask('s2', () => okJson(), later))).toBe('groq/llama-70b');
     expect(who(await ask(undefined, () => okJson(), later))).toBe('groq/llama-70b');
+  });
+
+  describe('waiting for the pinned model, and per-model timeouts', () => {
+    const msgs = [{ role: 'user', content: 'hi' }];
+    const ask = (handler: Handler, extra: Record<string, unknown> = {}) => {
+      const f = fakeFetch(handler);
+      return { f, p: routeChat({ userId, source: 'api', session: 's1', body: { model: 'auto-smart', messages: msgs, ...extra } },
+        { db, kv, fetchImpl: f.fn, vaultKey: TEST_VAULT_KEY }) };
+    };
+    const limited = (secs: string) => (url: string) => url.includes(GROQ) ? new Response('{"error":{"message":"slow down"}}', { status: 429, headers: { 'retry-after': secs } }) : okJson();
+    const pinKey = async () => `pin:${userId}:auto-smart:${(await import('@/router/quality')).detectTask({ messages: msgs })}:s1`;
+
+    it('answers 429 + retry-after instead of switching, once a minute; then falls back', async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      await ask(() => okJson()).p; // pins groq
+      expect(await kv.get(await pinKey())).toBe('groq/llama-70b');
+      const first = ask(limited('5'));
+      const out = await first.p;
+      expect(out).toMatchObject({ ok: false, status: 429, code: 'rate_limited', retryAfterMs: 5000 });
+      expect(first.f.calls.some((c) => !c.url.includes(GROQ))).toBe(false);
+      const second = ask(limited('5'));
+      const out2 = await second.p;
+      expect(out2.ok && out2.response.headers.get('x-freetoken-provider')).toBe('gemini/flash');
+    });
+
+    it('never holds a #fallback pin, nor a long wait', async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      await kv.set(await pinKey(), 'groq/llama-70b#fallback', 60_000);
+      const out = await ask(limited('5')).p;
+      expect(out.ok && out.response.headers.get('x-freetoken-provider')).toBe('gemini/flash');
+      await kv.set(await pinKey(), 'groq/llama-70b', 60_000);
+      const long = await ask(limited('60')).p;
+      expect(long.ok).toBe(true);
+    });
+
+    it('passes a learned shorter timeout, but not to the last model left', async () => {
+      await connect('groq', 'gsk_mine');
+      await connect('gemini', 'AIza_mine');
+      const { noteLatency } = await import('@/router/latency');
+      for (let i = 0; i < 5; i++) await noteLatency(kv, { provider: 'groq', modelId: 'llama-70b' }, 'headers', 100);
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      try {
+        await ask(() => okJson()).p;
+        expect(spy.mock.calls.some((c) => c[1] === 10_000)).toBe(true);
+        spy.mockClear();
+        // gemini is cooling and groq's other model is in another tier: groq/llama-70b is the only option left,
+        // so it gets the full default
+        await kv.set(`cd:${userId}:gemini`, String(Date.now() + 60_000), 60_000);
+        await ask(() => okJson(), { model: 'groq/llama-70b' }).p;
+        expect(spy.mock.calls.some((c) => c[1] === 10_000)).toBe(false);
+        expect(spy.mock.calls.some((c) => c[1] === 30_000)).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 
   it("falls back when a model answers 400 'currently unavailable' (LLM7), instead of failing the request", async () => {
