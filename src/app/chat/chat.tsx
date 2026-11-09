@@ -296,7 +296,7 @@ export function Chat({
       </aside>
 
       {/* Conversation column */}
-      <div className="flex min-h-0 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-col">
         <div className="flex items-center justify-between gap-3 pb-3">
           <label className="muted flex items-center gap-2 text-sm">
             <span className="hidden sm:inline">Model</span>
@@ -402,7 +402,9 @@ export function Chat({
               ))}
             </div>
           )}
-          <div className="flex items-end gap-2">
+          {/* phones: the text box gets its own full-width row, the buttons sit under it (beside three
+              icon buttons it was squeezed down to a sliver) */}
+          <div className="flex flex-wrap items-end gap-2 sm:flex-nowrap">
             <input
               ref={fileRef}
               type="file"
@@ -446,9 +448,9 @@ export function Chat({
                 }
               }}
               placeholder="Send a message…  (Enter to send, Shift+Enter for a new line)"
-              className="max-h-[200px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] text-[var(--ink)] placeholder:text-[var(--faint)] focus:outline-none"
+              className="order-first max-h-[200px] min-w-0 flex-1 basis-full resize-none bg-transparent px-2 py-1.5 text-[16px] sm:order-none sm:basis-auto sm:text-[15px] text-[var(--ink)] placeholder:text-[var(--faint)] focus:outline-none"
             />
-            <button onClick={() => submit(input)} disabled={busy || reading || (!input.trim() && attachments.length === 0)} className="btn btn-primary shrink-0">
+            <button onClick={() => submit(input)} disabled={busy || reading || (!input.trim() && attachments.length === 0)} className="btn btn-primary ml-auto shrink-0 sm:ml-0">
               {busy ? 'Sending' : 'Send'}
             </button>
           </div>

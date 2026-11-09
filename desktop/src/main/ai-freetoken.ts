@@ -281,6 +281,14 @@ export function unreachableMessage(providers: string[]) {
 }
 
 /** Tell FreeToken how a model's answer worked out (fire and forget): auto routing learns from it. */
+/** A reply that's one character repeated at length ("!!!!…"): a model breaking down, not an answer. */
+export const junkReply = (text: string) => /(\S)\1{199}/.test(text);
+
+/** Tool-call arguments as the transcript keeps them: the JSON object the model sent, else "{}". */
+export function jsonOr(args: string) {
+  try { const v = JSON.parse(args); return v && typeof v === "object" && !Array.isArray(v) ? args : "{}"; } catch { return "{}"; }
+}
+
 export function reportModel(model: string | null, good: boolean, reason: string) {
   const token = cfg.token();
   if (!model || !token) return;
@@ -292,7 +300,7 @@ export function reportModel(model: string | null, good: boolean, reason: string)
 }
 
 /**
- * A second opinion on the task's changes from FreeToken's best reasoning model (its own session, so the
+ * A second opinion on the task's changes from FreeToken's best reviewing model (its own session, so the
  * working model keeps this one): the findings for the agent to check and fix, or null when it found
  * nothing, or couldn't answer (then the agent reviews its own work, as before).
  */
@@ -308,7 +316,7 @@ export async function peerReview(s: Session, request: string, emit: (e: AgentEve
       model: "auto-smart",
       max_tokens: 6000, // reasoning models think first: room for that and the answer
       messages: [{ role: "system", content: REVIEW_SYSTEM }, { role: "user", content: reviewPrompt(request, changes) }],
-    }, { signal: s.abort?.signal, timeout: 150_000, maxRetries: 1, headers: { "x-freetoken-session": `${sessionId}#review`, "x-freetoken-task": "reasoning" } }).withResponse();
+    }, { signal: s.abort?.signal, timeout: 150_000, maxRetries: 1, headers: { "x-freetoken-session": `${sessionId}#review`, "x-freetoken-task": "review" } }).withResponse();
     const model = response.headers.get("x-freetoken-provider") ?? undefined;
     const issues = parseReview(r.choices?.[0]?.message?.content ?? "");
     if (!issues) { emit({ type: "tool_end", id, ok: true, summary: "Second opinion: no clear answer — the agent checks its own work" }); return null; }
@@ -435,9 +443,10 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             stream: true,
             // the session keeps this task on the model it's working with (FreeToken switches only when that
             // one fails or a clearly better one frees up): changing models mid-task loses the thread
-          }, { signal: s.abort.signal, maxRetries: 0, headers: { "x-freetoken-session": req.sessionId, ...(role ? { "x-freetoken-task": role } : {}) } }).withResponse(); // retries happen below, visibly (rateLimitWait)
+          }, { signal: s.abort.signal, maxRetries: 0, headers: { "x-freetoken-session": req.sessionId, ...(role ? { "x-freetoken-task": role } : {}), ...(s.avoidModel ? { "x-freetoken-avoid": s.avoidModel } : {}) } }).withResponse(); // retries happen below, visibly (rateLimitWait)
           // which model FreeToken picked: what it gets right or wrong is reported back so routing learns
           stepModel = response.headers.get("x-freetoken-provider");
+          s.avoidModel = undefined;
           // providers the user's network couldn't reach: say so once per task (restricted Wi-Fi?)
           const unreachable = (response.headers.get("x-freetoken-unreachable") ?? "").split(",").map((p) => p.trim()).filter((p) => p && !warnedUnreachable.has(p));
           if (unreachable.length) {
@@ -500,19 +509,27 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
       const uses = calls.filter(Boolean).map((cl, i) => ({ ...cl, name: cl.name.split("<|")[0].trim(), id: cl.id || `call_${turn}_${i}` }));
       // the reply hit the output limit (a whole app in one write, or all the budget spent thinking):
       // drop it and ask again for a smaller step, instead of ending the task
-      if (finish === "length" && (s.lengthRetries ?? 0) < 2) {
+      // a model under load can stream one character over and over ("!!!!…") until the limit: as useless
+      // as a cut-off reply, and asking the same model again got the same junk
+      const junk = junkReply(text);
+      if ((finish === "length" || junk) && (s.lengthRetries ?? 0) < 2) {
         s.lengthRetries = (s.lengthRetries ?? 0) + 1;
-        reportModel(stepModel, false, "hit the output limit");
+        reportModel(stepModel, false, junk ? "garbled reply" : "hit the output limit");
+        s.avoidModel = stepModel ?? undefined;
         msgs.push({ role: "user", content: "Your last reply hit the output limit before it finished, so it was discarded. Work in smaller steps: think briefly, then make one change per tool call — write a big file as a skeleton first and add each section with edit_file (under ~250 lines per call)." });
         emit({ type: "text", delta: "\n\n*That reply was too long — continuing in smaller steps…*\n\n" });
         continue;
       }
+      // still cut off or garbled after the retries: an error, not a "done" for a task that wasn't
+      if (finish === "length" || junk) throw new Error(junk ? "The models kept sending garbled replies. Try again in a minute." : "A reply was cut off by the output limit again. Try a smaller step.");
       // an empty reply (no text, no tool calls) isn't recorded: providers reject a transcript containing
       // one ("must have non-empty content or tool calls") on every later request
       if (text || uses.length) msgs.push({
         role: "assistant",
         content: text || null,
-        ...(uses.length ? { tool_calls: uses.map((u) => ({ id: u.id, type: "function" as const, function: { name: u.name, arguments: u.args || "{}" } })) } : {}),
+        // arguments that aren't JSON are kept as {} (the tool result says what was wrong): providers
+        // refuse a transcript holding broken ones, and the task died on the next request
+        ...(uses.length ? { tool_calls: uses.map((u) => ({ id: u.id, type: "function" as const, function: { name: u.name, arguments: jsonOr(u.args) } })) } : {}),
       });
       if (!uses.length) {
         quietStep = false;
@@ -541,7 +558,6 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         if (s.turns[s.turns.length - 1]?.files.size && !s.unchecked) for (const m of turnModels) reportModel(m, true, "finished a task");
         return emit({ type: "done", stopReason: finish ?? "stop" });
       }
-      if (finish === "length") throw new Error("A tool call was cut off by the output limit. Try a smaller step.");
 
       for (const u of uses) {
         // stopped mid-batch: the rest of this reply's tool calls don't run (each still gets a result,

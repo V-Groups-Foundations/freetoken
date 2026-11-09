@@ -28,7 +28,7 @@ export async function handleCompletions(req: Request, deps: Deps): Promise<Respo
   if (!v.ok) return oaiError(400, 'invalid_request', v.message);
   // a client may say what kind of task this is (V-Run asks for a reasoning model to plan and debug)
   const out = await routeChat({ userId, source: 'api', body: v.body, task: parseTask(req.headers.get('x-freetoken-task')),
-    session: req.headers.get('x-freetoken-session')?.slice(0, 200) || undefined }, deps);
+    session: req.headers.get('x-freetoken-session')?.slice(0, 200) || undefined, avoid: req.headers.get('x-freetoken-avoid')?.slice(0, 200) || undefined }, deps);
   return out.ok ? out.response : oaiError(out.status, out.code, out.message, out.retryAfterMs);
 }
 

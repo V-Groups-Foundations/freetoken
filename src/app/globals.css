@@ -387,6 +387,12 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .rail-link:hover .rail-ico { transform: none; }
 }
+/* phones: the rail is a bar across the top — links don't squash, and the active mark sits underneath */
+.rail-link { flex-shrink: 0; }
+@media (max-width: 639px) {
+  .rail-link { padding: 0.45rem; }
+  .rail-link[data-active="true"]::after { left: 50%; top: auto; bottom: 1px; width: 1.1rem; height: 3px; margin: 0 0 0 -0.55rem; }
+}
 
 /* Rendered Markdown (chat replies) --------------------------------------- */
 .md { font-size: 15px; line-height: 1.65; color: var(--ink); overflow-wrap: anywhere; }

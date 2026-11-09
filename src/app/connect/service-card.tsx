@@ -85,7 +85,7 @@ export function ServiceCard({ service, connected }: { service: PublicService; co
       <button
         type="button"
         onClick={() => setShowGuide((v) => !v)}
-        className="faint flex items-center justify-between text-xs font-medium hover:text-[var(--ink)]"
+        className="faint -my-1.5 flex items-center justify-between py-2.5 text-xs font-medium hover:text-[var(--ink)] sm:my-0 sm:py-0"
         aria-expanded={showGuide}
       >
         <span>How to get your key &amp; what to paste</span>
@@ -119,7 +119,7 @@ export function ServiceCard({ service, connected }: { service: PublicService; co
       )}
       {connected && (
         <div className="flex items-center justify-end border-t border-[var(--border)] pt-3 text-sm">
-          <button onClick={remove} className="text-[var(--danger)] hover:underline">Remove</button>
+          <button onClick={remove} className="-my-2 px-1 py-2.5 text-[var(--danger)] hover:underline sm:my-0 sm:p-0">Remove</button>
         </div>
       )}
     </div>

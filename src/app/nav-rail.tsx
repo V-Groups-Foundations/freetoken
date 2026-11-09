@@ -22,7 +22,7 @@ const LINKS: { href: string; label: string; icon: string; also?: string[] }[] = 
 export function NavRail() {
   const pathname = usePathname();
   return (
-    <nav className="flex flex-col gap-1">
+    <nav className="flex flex-row gap-1 sm:flex-col">
       {LINKS.map((l, i) => {
         const active = [l.href, ...(l.also ?? [])].some((h) => pathname === h || pathname.startsWith(h + '/'));
         return (

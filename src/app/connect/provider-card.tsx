@@ -109,7 +109,7 @@ export function ProviderCard({ provider, connected, oauth = false, unreachable =
       <button
         type="button"
         onClick={() => setShowGuide((v) => !v)}
-        className="faint flex items-center justify-between text-xs font-medium hover:text-[var(--ink)]"
+        className="faint -my-1.5 flex items-center justify-between py-2.5 text-xs font-medium hover:text-[var(--ink)] sm:my-0 sm:py-0"
         aria-expanded={showGuide}
       >
         <span>How to get your key &amp; what to paste</span>
@@ -163,10 +163,10 @@ export function ProviderCard({ provider, connected, oauth = false, unreachable =
       {connected && (
         <div className="flex items-center justify-between border-t border-[var(--border)] pt-3 text-sm">
           <label className="muted flex items-center gap-2">
-            <input type="checkbox" checked={connected.excludedFromAuto} onChange={(e) => toggleExclude(e.target.checked)} />
+            <input type="checkbox" className="h-5 w-5 sm:h-auto sm:w-auto" checked={connected.excludedFromAuto} onChange={(e) => toggleExclude(e.target.checked)} />
             Exclude from auto
           </label>
-          <button onClick={remove} className="text-[var(--danger)] hover:underline">Remove</button>
+          <button onClick={remove} className="-my-2 px-1 py-2.5 text-[var(--danger)] hover:underline sm:my-0 sm:p-0">Remove</button>
         </div>
       )}
     </div>

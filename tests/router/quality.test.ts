@@ -36,13 +36,26 @@ describe('task detection', () => {
     expect(quality('groq', 'openai/gpt-oss-120b', 'reasoning')).toBeGreaterThan(quality('groq', 'qwen/qwen3.8-27b', 'reasoning'));
     expect(quality('x', 'mystery-model', 'chat')).toBe(60);
   });
+  it("a coding agent's three roles go to the models that did best at each in sandbox tests", () => {
+    const best = (task: 'agent' | 'reasoning' | 'review') => ['groq/openai/gpt-oss-120b', 'nvidia/nvidia/nemotron-3-ultra-550b-a55b', 'nvidia/deepseek-ai/deepseek-v4.1-flash',
+      'cohere/command-a-reasoning-08-2025', 'groq/qwen/qwen3.8-27b', 'nvidia/z-ai/glm-5.3-flash']
+      .map((k) => [k, quality(k.split('/')[0], k.split('/').slice(1).join('/'), task)] as const).sort((a, b) => b[1] - a[1])[0][0];
+    expect(best('reasoning')).toBe('groq/openai/gpt-oss-120b'); // planner
+    expect(best('agent')).toBe('nvidia/nvidia/nemotron-3-ultra-550b-a55b'); // worker
+    expect(best('review')).toBe('groq/openai/gpt-oss-120b'); // reviewer
+    // Cloudflare's gpt-oss-120b plans well but broke down as an agent ("!!!!…")
+    expect(quality('cloudflare', '@cf/openai/gpt-oss-120b', 'agent')).toBeLessThan(quality('cohere', 'command-a-plus-05-2026', 'agent'));
+    // a model never measured as a reviewer goes by its reasoning score
+    expect(quality('gemini', 'gemini-3.8-flash', 'review')).toBe(quality('gemini', 'gemini-3.8-flash', 'reasoning'));
+  });
 });
 
 describe('auto routing: best model for the task first, weaker ones once those are spent', () => {
   it('coding agents get the best coding agent model; reasoning gets the best reasoner', () => {
-    expect(order({ task: 'agent' })[0]).toBe('groq/qwen/qwen3.8-27b');
-    // reasoning: GPT-OSS 120B on the user's own key narrowly beats the keyless Nemotron Ultra (shared, so it gives way in a close call)
-    expect(order({ task: 'reasoning' }).slice(0, 2)).toEqual(['groq/openai/gpt-oss-120b', 'kilo/nvidia/nemotron-3-ultra-550b-a55b:free']);
+    // the worker: Nemotron Ultra fixed every planted bug in the sandbox test, even keyless (shared) it leads
+    expect(order({ task: 'agent' })[0]).toBe('kilo/nvidia/nemotron-3-ultra-550b-a55b:free');
+    // the planner: GPT-OSS 120B found every bug in each round
+    expect(order({ task: 'reasoning' })[0]).toBe('groq/openai/gpt-oss-120b');
   });
   it('skips a model with no quota left, demotes one that keeps failing', () => {
     expect(order({ task: 'agent', exhausted: new Set(['groq/qwen/qwen3.8-27b']) })).not.toContain('groq/qwen/qwen3.8-27b');
@@ -83,9 +96,11 @@ describe('auto routing learns from real results', () => {
     expect(learnedAdjustment({ ok: 30, errors: 0, good: 6, bad: 0, benchPassed: 8, benchTotal: 8 })).toBe(16); // capped
   });
   it('a model clients keep reporting as bad loses its first place for that task only', () => {
-    const learned = new Map([['groq/qwen/qwen3.8-27b', -12]]);
-    expect(order({ task: 'agent', learned })[0]).not.toBe('groq/qwen/qwen3.8-27b');
-    expect(order({ task: 'agent' })[0]).toBe('groq/qwen/qwen3.8-27b');
+    const top = 'kilo/nvidia/nemotron-3-ultra-550b-a55b:free';
+    const learned = new Map([[top, -12]]);
+    expect(order({ task: 'agent', learned })[0]).not.toBe(top);
+    expect(order({ task: 'agent' })[0]).toBe(top);
+    expect(order({ task: 'reasoning', learned })[0]).toBe('groq/openai/gpt-oss-120b');
   });
   it('reads per-task history and feedback from the database', async () => {
     const db = await createTestDb();

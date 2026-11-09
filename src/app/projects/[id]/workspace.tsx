@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ContinueInVRun, useInVRun } from '../../v-run/launch';
+import { Markdown } from '../../chat/markdown';
 
 type Msg = { role: 'user' | 'assistant'; content: string; provider?: string };
 type Model = { id: string; name: string };
@@ -115,12 +116,12 @@ export function Workspace({
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+        <label className="flex min-w-0 items-center gap-2 text-sm text-[var(--muted)]">
           <span>Model</span>
           <select
             value={model}
             onChange={(e) => changeModel(e.target.value)}
-            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-sm text-[var(--ink)] focus:border-[var(--brand)] focus:outline-none"
+            className="min-w-0 max-w-[14rem] rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-sm text-[var(--ink)] focus:border-[var(--brand)] focus:outline-none"
           >
             <optgroup label="Automatic">
               <option value="auto-smart">Auto · best</option>
@@ -172,7 +173,7 @@ function Composer({ busy, onSend, placeholder }: { busy: boolean; onSend: (t: st
           }
         }}
         placeholder={placeholder}
-        className="max-h-[180px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] text-[var(--ink)] placeholder:text-[var(--faint)] focus:outline-none"
+        className="max-h-[180px] min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-[16px] sm:text-[15px] text-[var(--ink)] placeholder:text-[var(--faint)] focus:outline-none"
       />
       <button
         onClick={() => { onSend(input); setInput(''); if (ref.current) ref.current.style.height = 'auto'; }}
@@ -191,7 +192,7 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [msgs]);
   return (
-    <div className="flex h-[calc(100vh-15rem)] flex-col">
+    <div className="flex h-[calc(100dvh-15rem)] flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
         {msgs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-[var(--muted)]">
@@ -218,8 +219,9 @@ function ChatPane({ msgs, busy, onSend }: { msgs: Msg[]; busy: boolean; onSend: 
                     <span className="text-sm font-medium capitalize text-[var(--ink)]">{p.name}</span>
                     {p.model && <span className="font-mono text-xs text-[var(--faint)]">{p.model}</span>}
                   </div>
-                  <div className={`whitespace-pre-wrap pl-8 text-[15px] leading-relaxed text-[var(--ink)] ${streaming && !m.content ? 'ft-caret' : ''}`}>
-                    {m.content}{streaming && m.content ? <span className="ft-caret" /> : null}
+                  {/* formatted like Chat: replies are Markdown (headings, tables, code), not raw ** and | */}
+                  <div className={`min-w-0 text-[var(--ink)] sm:pl-8 ${streaming && !m.content ? 'ft-caret' : ''}`}>
+                    {m.content ? <Markdown>{m.content}</Markdown> : null}
                   </div>
                 </div>
               );
@@ -241,7 +243,7 @@ function VRunPane({ projectId, projectName, msgs, busy, onChat }: { projectId: s
   const fromVRun = msgs.filter((m) => m.provider === 'v-run').length;
   const folder = `Desktop/FreeToken/${projectName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/^[.\s-]+|[.\s-]+$/g, '').trim() || 'project'}`;
   return (
-    <div className="flex h-[calc(100vh-15rem)] flex-col items-center justify-center gap-6 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 text-center">
+    <div className="flex h-[calc(100dvh-15rem)] flex-col items-center justify-center gap-6 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 text-center">
       {/* eslint-disable-next-line @next/next/no-img-element -- brand art */}
       <img src="/brand/vrun.jpg" alt="V-Run" width={360} height={196} className="w-[min(360px,80%)] rounded-2xl shadow-[0_10px_40px_#0008]" />
       <div className="max-w-lg space-y-2">

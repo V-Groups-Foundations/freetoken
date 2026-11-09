@@ -314,6 +314,8 @@ export interface Session {
   filesSinceGate?: boolean;
   /** replies dropped this turn for hitting the output limit */
   lengthRetries?: number;
+  /** the model whose last reply was thrown away (junk, cut off): the retry asks FreeToken for another */
+  avoidModel?: string;
 }
 const sessions = new Map<string, Session>();
 /** Put a saved conversation back into a session that has none (after a window reload or app restart). */

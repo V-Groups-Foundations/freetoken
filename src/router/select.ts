@@ -40,6 +40,8 @@ export interface SelectInput {
   pinnedFallback?: boolean;
   /** measured output speed per model (tokens per second) */
   speed?: Map<string, number>;
+  /** a model whose last answer the client threw away (junk, cut off): not pinned, and tried last */
+  avoid?: string;
 }
 
 const AUTO_TIERS = { 'auto-smart': 'smart', 'auto-fast': 'fast' } as const;
@@ -110,12 +112,14 @@ export function selectCandidates(input: SelectInput): CatalogModel[] {
   const task = input.task;
   const rank = (m: CatalogModel) => rankParts(m, task, input).score;
   const byQuality = (a: CatalogModel, b: CatalogModel) => rank(b) - rank(a) || a.priority - b.priority;
-  const main = pool(tier).sort(byQuality);
+  // the model whose answer the client just threw away goes last, so the retry reaches a different one
+  const last = (a: CatalogModel, b: CatalogModel) => Number(usageKey(a.provider, a.modelId) === input.avoid) - Number(usageKey(b.provider, b.modelId) === input.avoid);
+  const main = pool(tier).sort(byQuality).sort(last);
   // when every strong model is spent or failing, the other tier still answers (smart ⇄ fast)
   const other = pool(tier === 'smart' ? 'fast' : 'smart').sort(byQuality);
   // the conversation's own model goes first while it's usable and not failing — unless a clearly better
   // one is available (a top model that was busy earlier and is free again takes over)
-  const pin = input.pinned && main.find((m) => usageKey(m.provider, m.modelId) === input.pinned);
+  const pin = input.pinned && input.pinned !== input.avoid && main.find((m) => usageKey(m.provider, m.modelId) === input.pinned);
   // A fallback pin (a slower model that answered while the best one was rate-limited) kept a whole
   // session on it after the best one was free again: it holds only while nothing better is available
   const better = input.pinnedFallback && pin && main[0] !== pin;

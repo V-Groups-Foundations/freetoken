@@ -7,7 +7,7 @@ import { parseModelRef } from '@/router/select';
 const schema = z.object({
   /** "provider/modelId", as the x-freetoken-provider response header named it */
   model: z.string().trim().min(3).max(200),
-  task: z.enum(['agent', 'code', 'reasoning', 'vision', 'creative', 'chat']).default('agent'),
+  task: z.enum(['agent', 'code', 'reasoning', 'review', 'vision', 'creative', 'chat']).default('agent'),
   good: z.boolean(),
   // a long reason (a failure with its error output) is trimmed, not refused: refusing it dropped every
   // failed benchmark run, so only the passes were ever counted

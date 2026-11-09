@@ -41,12 +41,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <Intro />
         <div className="app-aurora" aria-hidden />
         <div className="app-circuit" aria-hidden />
-        <div className="flex min-h-screen">
-          <aside className="sticky top-0 z-20 flex h-screen w-[4.5rem] shrink-0 flex-col gap-4 overflow-y-auto border-r border-[color-mix(in_srgb,var(--border-strong)_55%,transparent)] bg-[color-mix(in_srgb,var(--surface)_55%,transparent)] p-2 backdrop-blur-xl md:w-56 md:p-4">
+        {/* phones: the rail is a bar across the top (its icons scroll sideways) and the page gets the whole
+            width — beside a 72px rail every page was wider than the screen; from sm up it's the side rail.
+            Clipped sideways: the hero glows reach past the edges on purpose (clip keeps the bar sticky) */}
+        <div className="flex min-h-screen flex-col overflow-x-clip sm:flex-row">
+          <aside className="sticky top-0 z-20 flex w-full shrink-0 flex-row items-center gap-2 overflow-x-auto border-b border-[color-mix(in_srgb,var(--border-strong)_55%,transparent)] bg-[color-mix(in_srgb,var(--surface)_80%,transparent)] p-2 backdrop-blur-xl sm:h-screen sm:w-[4.5rem] sm:flex-col sm:items-stretch sm:gap-4 sm:overflow-y-auto sm:overflow-x-hidden sm:border-b-0 sm:border-r sm:bg-[color-mix(in_srgb,var(--surface)_55%,transparent)] md:w-56 md:p-4">
             <Brand />
             {signedIn && <CommandPalette />}
             {signedIn && <NavRail />}
-            <div className="mt-auto flex flex-col gap-2 border-t border-[var(--border)] pt-3">
+            <div className="flex flex-row gap-2 sm:mt-auto sm:flex-col sm:border-t sm:border-[var(--border)] sm:pt-3">
               <ThemeToggle />
               {signedIn ? (
                 <form action={async () => { 'use server'; await signOut({ redirectTo: '/' }); }}>
@@ -63,7 +66,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               )}
             </div>
           </aside>
-          <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6 sm:py-10">{children}</main>
+          <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-4 py-6 sm:px-6 sm:py-10">{children}</main>
         </div>
       </body>
     </html>

@@ -145,7 +145,7 @@ function ProviderNumbers({ p }: { p: ProviderUsage }) {
 function ProviderCard({ p, now }: { p: ProviderUsage; now: number }) {
   const cooling = p.coolingUntil && new Date(p.coolingUntil).getTime() > now;
   return (
-    <div className="card card-pad space-y-2">
+    <div className="card card-pad min-w-0 space-y-2">
       <div className="flex items-center justify-between">
         <h2 className="font-semibold">{p.name}</h2>
         <div className="flex gap-2">

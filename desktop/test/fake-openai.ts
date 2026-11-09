@@ -198,6 +198,14 @@ export function startFakeOpenAI(token = "ft_test"): Promise<{ url: string; reque
       // the task kind V-Run asked for (a reasoning model to plan / get unstuck), kept for the tests
       Object.defineProperty(body, "task", { value: req.headers["x-freetoken-task"], enumerable: false });
       Object.defineProperty(body, "session", { value: req.headers["x-freetoken-session"], enumerable: false });
+      Object.defineProperty(body, "avoid", { value: req.headers["x-freetoken-avoid"], enumerable: false });
+      // mimic a model under load streaming one character over and over, once per conversation
+      if (/garbled test/i.test(lastUserText(body)) && !body.messages.some((m: any) => /hit the output limit/.test(String(m.content)))) {
+        res.writeHead(200, { "content-type": "text/event-stream", "x-freetoken-provider": "cloudflare/@cf/openai/gpt-oss-120b" });
+        res.write(`data: ${JSON.stringify({ id: "junk", object: "chat.completion.chunk", created: 0, model: "fake/model", choices: [{ index: 0, delta: { role: "assistant", content: "!".repeat(400) }, finish_reason: "stop" }] })}\n\n`);
+        res.write("data: [DONE]\n\n");
+        return res.end();
+      }
       // mimic every free provider being rate-limited for a moment (once per "busy test" message)
       if (/busy test/i.test(lastUserText(body)) && !busySeen.has(lastUserText(body))) {
         busySeen.add(lastUserText(body));

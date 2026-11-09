@@ -79,6 +79,11 @@ describe('selectCandidates', () => {
     // …and keeps the conversation while the best one is still busy
     expect(agent({ pinned: 'gemini/flash', pinnedFallback: true, cooling: new Set(['groq']) })).toBe('gemini/flash');
   });
+  it("a model whose answer the client threw away (x-freetoken-avoid) loses the pin and goes last", () => {
+    const agent = (o: Partial<SelectInput>) => ids(selectCandidates(base({ task: 'agent', needsTools: true, ...o }))).slice(0, 2); // the smart tier
+    expect(agent({ pinned: 'gemini/flash', avoid: 'gemini/flash' })).toEqual(['groq/llama-70b', 'gemini/flash']);
+    expect(agent({ avoid: 'groq/llama-70b' })).toEqual(['gemini/flash', 'groq/llama-70b']);
+  });
   it('between models of about the same quality, the faster writer goes first (a little, never more than 3 points)', () => {
     expect(speedBonus(34)).toBe(-2);
     expect(speedBonus(62)).toBe(1.5);

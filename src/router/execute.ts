@@ -29,6 +29,8 @@ export interface ChatInput {
   task?: Task;
   /** the client's conversation (x-freetoken-session): auto routing keeps it on the model it's working with */
   session?: string;
+  /** a model whose last answer the client threw away (x-freetoken-avoid): the retry goes elsewhere */
+  avoid?: string;
 }
 
 /** How long a conversation stays on its model after its last answer. */
@@ -117,6 +119,7 @@ export async function routeChat(input: ChatInput, deps: Deps): Promise<RouteOutc
     tokenCaps,
     pinned: pinned?.replace(/#fallback$/, ''),
     pinnedFallback: pinned?.endsWith('#fallback'),
+    avoid: input.avoid,
     speed: isAuto(requested) ? await outputSpeed(deps.db, userId, new Date(nowMs - 7 * 86_400_000)) : undefined,
   };
   const candidates = selectCandidates(selectInput);

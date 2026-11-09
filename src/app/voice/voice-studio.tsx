@@ -116,7 +116,7 @@ export function VoiceStudio({ service, serviceLabel }: { service: string | null;
       ) : (
         <div className="grid gap-5 lg:grid-cols-[1fr_20rem]">
           {/* Composer */}
-          <div className="card card-pad flex flex-col gap-4">
+          <div className="card card-pad flex min-w-0 flex-col gap-4">
             <textarea
               className="input min-h-[9rem] resize-y py-3 leading-relaxed"
               placeholder="Type a sentence to read aloud…"
@@ -164,7 +164,7 @@ export function VoiceStudio({ service, serviceLabel }: { service: string | null;
           </div>
 
           {/* Voice picker */}
-          <aside className="card card-pad flex flex-col gap-3">
+          <aside className="card card-pad flex min-w-0 flex-col gap-3">
             <div className="flex items-center justify-between">
               <h2 className="h2 text-base">Voice</h2>
               <span className="badge badge-off">{serviceLabel}</span>

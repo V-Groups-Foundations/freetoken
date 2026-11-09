@@ -73,12 +73,12 @@ export function CommandPalette() {
       <button
         type="button"
         onClick={() => { setOpen(true); setQuery(''); setActive(0); }}
-        className="rail-link w-full"
+        className="rail-link shrink-0 sm:w-full"
         title="Command palette (⌘K)"
       >
         <span className="rail-ico" aria-hidden>⌘</span>
         <span className="hidden flex-1 text-left md:inline">Search</span>
-        <kbd className="kbd hidden md:inline">⌘K</kbd>
+        <span className="hidden md:inline"><kbd className="kbd">⌘K</kbd></span>
       </button>
 
       {open && (

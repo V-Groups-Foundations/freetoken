@@ -156,6 +156,20 @@ async function main() {
     return (text.includes("smaller steps") && done.stopReason === "stop" && !events.some((e) => e.type === "error")) || JSON.stringify({ text, done });
   });
 
+  await check("a garbled reply (\"!!!!…\") is dropped and the retry asks FreeToken for another model", async () => {
+    const events: AI.AgentEvent[] = [];
+    const before = fake.requests.length;
+    await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "garbled", mode: "ask", text: "garbled test" }, (e) => { events.push(e); if (e.type === "done" || e.type === "error") r(); }));
+    const avoid = fake.requests.slice(before).map((b: any) => b.avoid);
+    const kept = fake.requests.slice(before + 1).some((b: any) => b.messages.some((m: any) => /!{50}/.test(String(m.content))));
+    return (avoid[0] === undefined && avoid[1] === "cloudflare/@cf/openai/gpt-oss-120b" && !kept && events.some((e) => e.type === "done")) || JSON.stringify({ avoid, kept, types: events.map((e) => e.type) });
+  });
+
+  await check("tool-call arguments that aren't JSON are kept as {} (providers refuse the whole transcript otherwise)", async () => {
+    return (ft.jsonOr('{"path":"a.js"}') === '{"path":"a.js"}' && ft.jsonOr('{"path":"a.js","contents":"x') === "{}" && ft.jsonOr("") === "{}" && ft.jsonOr("[1]") === "{}")
+      && ft.junkReply("!".repeat(300)) && !ft.junkReply("ok ".repeat(300)) && !ft.junkReply("=".repeat(80)) || "jsonOr/junkReply";
+  });
+
   await check("Plan mode asks FreeToken for a reasoning model; ordinary steps don't", async () => {
     const before = fake.requests.length;
     await new Promise<void>((r) => ft.chatFreeToken({ sessionId: "role-plan", mode: "plan", text: "what would you change?" }, (e) => { if (e.type === "done") r(); }));
