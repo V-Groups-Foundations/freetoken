@@ -15,6 +15,7 @@ const ITEMS: Item[] = [
   { label: 'Image studio', icon: '🎨', hint: 'Generate an image', run: go('/images') },
   { label: 'Documents', icon: '📄', hint: 'Chat with your files', run: go('/docs') },
   { label: 'Web', icon: '🌐', hint: 'Search · read any URL', run: go('/web') },
+  { label: 'Diet coach', icon: '🥗', hint: 'Log food · calories · macros', run: go('/diet') },
   { label: 'Mini-app studio', icon: '🕹️', hint: 'Build a game or app', run: go('/studio') },
   { label: 'Tools', icon: '🛠️', hint: 'Extract · translate · summarize', run: go('/tools') },
   { label: 'Connect providers', icon: '🔌', run: go('/connect') },

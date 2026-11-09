@@ -10,6 +10,7 @@ const LINKS: { href: string; label: string; icon: string; also?: string[] }[] = 
   { href: '/docs', label: 'Docs', icon: '📄' },
   { href: '/web', label: 'Web', icon: '🌐' },
   { href: '/voice', label: 'Voice', icon: '🎙️' },
+  { href: '/diet', label: 'Diet', icon: '🥗' },
   { href: '/studio', label: 'Studio', icon: '🕹️' },
   { href: '/tools', label: 'Tools', icon: '🛠️' },
   // projects live under V-Run: the list is /v-run, each project is /projects/<id>

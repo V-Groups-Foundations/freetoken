@@ -1,5 +1,5 @@
 import {
-  pgTable, text, timestamp, integer, boolean, serial, primaryKey, uniqueIndex, index,
+  pgTable, text, timestamp, integer, boolean, serial, primaryKey, uniqueIndex, index, real,
 } from 'drizzle-orm/pg-core';
 import type { AdapterAccountType } from 'next-auth/adapters';
 
@@ -197,3 +197,49 @@ export const generatedImages = pgTable('generated_images', {
   bytes: integer('bytes').notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('images_user_time').on(t.userId, t.createdAt)]);
+
+/** Diet coach: the user's body numbers and daily targets (one row per user). */
+export const dietProfiles = pgTable('diet_profiles', {
+  userId: text('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  sex: text('sex'), // male | female
+  age: integer('age'),
+  heightCm: real('height_cm'),
+  goal: text('goal'), // cut | maintain | bulk, or the user's own words
+  calories: integer('calories'),
+  protein: integer('protein'),
+  fat: integer('fat'),
+  carbs: integer('carbs'),
+  notes: text('notes'), // allergies, dislikes, training days…
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+/** One food or drink the user had. `day` is the user's own calendar day (YYYY-MM-DD, their time zone). */
+export const dietEntries = pgTable('diet_entries', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  day: text('day').notNull(),
+  meal: text('meal').notNull(), // breakfast | lunch | dinner | snack | drink
+  name: text('name').notNull(),
+  kcal: real('kcal').notNull(),
+  protein: real('protein').notNull().default(0),
+  fat: real('fat').notNull().default(0),
+  carbs: real('carbs').notNull().default(0),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('diet_entries_user_day').on(t.userId, t.day)]);
+
+/** A weigh-in: one per user per day (a second one that day replaces it). */
+export const dietWeights = pgTable('diet_weights', {
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  day: text('day').notNull(),
+  kg: real('kg').notNull(),
+}, (t) => [primaryKey({ columns: [t.userId, t.day] })]);
+
+/** The diet coach conversation (one per user). */
+export const dietMessages = pgTable('diet_messages', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  role: text('role').notNull(), // user | assistant
+  content: text('content').notNull(),
+  provider: text('provider'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('diet_messages_user').on(t.userId, t.id)]);

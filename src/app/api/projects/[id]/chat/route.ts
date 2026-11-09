@@ -5,6 +5,7 @@ import { persistAssistant } from '@/projects/stream';
 import { routeChat } from '@/router/execute';
 import { resolveUserId } from '@/server/identity';
 import { getDeps } from '@/server/deps';
+import { withChatStyle } from '@/chat/style';
 
 const MAX_HISTORY = 100;
 
@@ -22,7 +23,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Shared memory: the model sees the whole saved conversation, not just this message.
   const history = (await listMessages(db, id)).slice(-MAX_HISTORY).map((m) => ({ role: m.role, content: m.content }));
   const out = await routeChat(
-    { userId: uid, source: 'chat', body: { model: project.model, messages: [...history, { role: 'user', content: body.data.content }], stream: true } },
+    // one model per conversation (session), answering in the house style (precise, no reports for a one-liner)
+    { userId: uid, source: 'chat', session: `project:${id}`, body: { model: project.model, messages: withChatStyle([...history, { role: 'user', content: body.data.content }]), stream: true } },
     getDeps(),
   );
   if (!out.ok) return Response.json({ error: { message: out.message, code: out.code } }, { status: out.status });

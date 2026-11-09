@@ -5,6 +5,7 @@ import { tapAssistant } from '@/server/stream';
 import { routeChat } from '@/router/execute';
 import { sessionUserId } from '@/lib/session';
 import { getDeps } from '@/server/deps';
+import { withChatStyle } from '@/chat/style';
 
 const MAX_HISTORY = 100;
 
@@ -47,7 +48,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const prior = await listChatMessages(db, id);
   const history = prior.slice(-MAX_HISTORY).map((m) => ({ role: m.role, content: m.content }));
   const out = await routeChat(
-    { userId: uid, source: 'chat', body: { model: chat.model, messages: [...history, { role: 'user', content }], stream: true } },
+    // one model per conversation (session), answering in the house style (precise, no reports for a one-liner)
+    { userId: uid, source: 'chat', session: `chat:${id}`, body: { model: chat.model, messages: withChatStyle([...history, { role: 'user', content }]), stream: true } },
     getDeps(),
   );
   if (!out.ok) return Response.json({ error: { message: out.message, code: out.code } }, { status: out.status });

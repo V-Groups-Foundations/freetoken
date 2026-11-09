@@ -64,6 +64,13 @@
       "when": 1793079441692,
       "tag": "0008_generated_images",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794189157462,
+      "tag": "0009_diet",
+      "breakpoints": true
     }
   ]
 }

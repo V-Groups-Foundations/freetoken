@@ -30,8 +30,11 @@ const QUALITY: [RegExp, Scores][] = [
   [/gpt-oss-120b/, { base: 84, agent: 85, code: 84, reasoning: 94, review: 95, creative: 78 }],
   [/gemini-3\.8-flash|gemini-3(\.\d)?-flash(?!-lite)/, { base: 86, agent: 80, code: 85, reasoning: 86, vision: 92, creative: 86 }],
   [/nemotron-3-super-120b/, { base: 80, agent: 80, code: 80, reasoning: 85, creative: 78 }],
-  [/nemotron-3\.5-super-vl/, { base: 81, agent: 80, code: 79, reasoning: 83, vision: 86, creative: 76 }],
-  [/command-a-vision/, { base: 76, vision: 90, creative: 74 }],
+  // vision, tested on a photographed nutrition label with an app's recording format (2026-11-09): Nemotron
+  // Super VL read every number and the product name and recorded it; Command-A Vision asked for "the full
+  // label" and recorded nothing
+  [/nemotron-3\.5-super-vl/, { base: 81, agent: 80, code: 79, reasoning: 83, vision: 91, creative: 76 }],
+  [/command-a-vision/, { base: 76, vision: 80, creative: 74 }],
   [/command-a-reasoning/, { base: 80, agent: 66, code: 78, reasoning: 80, review: 70, creative: 76 }],
   [/command-a-plus/, { base: 80, agent: 74, code: 79, reasoning: 78, review: 68, creative: 82 }],
   [/kilo-auto/, { base: 78, agent: 78, code: 78, reasoning: 78 }],
