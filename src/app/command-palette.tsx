@@ -22,6 +22,7 @@ const ITEMS: Item[] = [
   { label: 'V-Run projects', icon: '▶', run: go('/v-run') },
   { label: 'V Groups', icon: '✦', run: go('/v-groups') },
   { label: 'Usage', icon: '📊', hint: 'Free quota left', run: go('/dashboard') },
+  { label: 'Use on your phone', icon: '📱', hint: 'Scan a QR code', run: go('/phone') },
   { label: 'API keys', icon: '🔑', run: go('/settings') },
   { label: 'Toggle theme', icon: '◐', hint: 'Light / dark', run: () => toggleTheme() },
 ];

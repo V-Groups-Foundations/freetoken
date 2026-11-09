@@ -18,6 +18,7 @@ const LINKS: { href: string; label: string; icon: string; also?: string[] }[] = 
   { href: '/v-groups', label: 'V Groups', icon: '✦' },
   { href: '/dashboard', label: 'Usage', icon: '📊' },
   { href: '/settings', label: 'API', icon: '🔑' },
+  { href: '/phone', label: 'Phone', icon: '📱' },
 ];
 
 export function NavRail() {

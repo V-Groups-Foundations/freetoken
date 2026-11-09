@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   cacheComponents: false,
   reactCompiler: true,
   serverExternalPackages: ["@electric-sql/pglite"],
+  // a phone on the same Wi-Fi reaches the dev server by this computer's private address (the 📱 Phone page)
+  allowedDevOrigins: ["192.168.*.*", "10.*.*.*", "172.*.*.*", "*.local"],
   turbopack: {
     rules: {
       "*.css": {

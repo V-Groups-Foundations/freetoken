@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
 import { Geist, Geist_Mono, Space_Grotesk } from 'next/font/google';
 import { signOut } from '@/auth';
@@ -17,7 +17,11 @@ export const metadata: Metadata = {
   title: 'FreeToken',
   description: 'Pool your free AI API tiers into one chat, one API, and one terminal.',
   icons: { icon: '/brand/freetoken.png', apple: '/brand/freetoken.png' },
+  // added to an iPhone's home screen: full screen, named FreeToken
+  appleWebApp: { capable: true, title: 'FreeToken', statusBarStyle: 'black-translucent' },
 };
+
+export const viewport: Viewport = { themeColor: '#070b16', viewportFit: 'cover' };
 
 function Brand() {
   return (

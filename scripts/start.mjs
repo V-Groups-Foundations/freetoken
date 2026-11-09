@@ -42,6 +42,6 @@ function openBrowser(url) {
     try { await fetch(`http://localhost:${port}/login`, { signal: AbortSignal.timeout(20_000) }); break; }
     catch { await new Promise((r) => setTimeout(r, 1000)); }
   }
-  console.log(`\n  ✓ FreeToken is running.\n  Sign-in link for this computer (no password):\n  ${link}\n`);
+  console.log(`\n  ✓ FreeToken is running.\n  Sign-in link for this computer (no password):\n  ${link}\n  On your phone (same Wi-Fi): open 📱 Phone in FreeToken and scan the QR code.\n`);
   if (!noOpen) openBrowser(link);
 })();
