@@ -10,7 +10,7 @@ export default async function DietPage() {
   const models = await listUserModels(getDb(), uid);
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Diet coach" title="Diet" subtitle="Tell the coach what you eat — it logs calories and macros, keeps your targets and plans what's left." />
+      <PageHeader eyebrow="Diet coach" title="Diet" subtitle="Your personal coach: log food by text or photo, get targets worked out from your own data, and track your body with progress photos the coach reads." />
       {models.length === 0 ? (
         <div className="card card-pad">
           <h2 className="font-semibold">No providers connected</h2>

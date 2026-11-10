@@ -33,7 +33,8 @@ export default function VGroupsPage() {
     <section className="space-y-8">
       <div className="relative overflow-hidden rounded-3xl border border-[var(--border)] shadow-[0_20px_60px_#0006]">
         <NeonLogo colorways={colorways()} />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[3] bg-gradient-to-t from-black/80 to-transparent p-6 text-sm text-white/80">
+        {/* phones: under the logo (over it, it covered the V and the colour dots); larger screens: over its foot */}
+        <div className="pointer-events-none relative z-[3] bg-[#04060c] px-4 pb-4 pt-1 text-center text-sm text-white/80 sm:absolute sm:inset-x-0 sm:bottom-0 sm:bg-transparent sm:bg-gradient-to-t sm:from-black/80 sm:to-transparent sm:p-6 sm:text-left">
           Free AI tools that work together — build it for free, use it for free.
         </div>
       </div>

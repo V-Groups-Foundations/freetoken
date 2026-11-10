@@ -1,12 +1,17 @@
 import { z } from 'zod';
+import { after } from 'next/server';
 import { getDb } from '@/db';
 import { sessionUserId } from '@/lib/session';
 import { tapAssistant } from '@/server/stream';
 import { routeChat } from '@/router/execute';
 import { getDeps } from '@/server/deps';
-import { coachSystemPrompt, parseDietBlocks, stripDietBlocks } from '@/diet/protocol';
+import { coachSystemPrompt, onlyAsking, parseDietBlocks, stripDietBlocks } from '@/diet/protocol';
 import { addDietMessage, applyDietActions, coachState, listDietMessages, savedReply } from '@/diet/service';
 import { dayParam } from '@/diet/day';
+import { currentPlan, generatePlan, trainingCoachLines } from '@/diet/plan';
+import { wantsPlanChange } from '@/diet/training';
+
+export const maxDuration = 300; // a plan rewrite asked for in the chat runs after the reply
 
 // the coach is told the user's numbers every turn, so it needs only the recent conversation
 const HISTORY = 30;
@@ -32,7 +37,8 @@ export async function POST(req: Request) {
   const today = dayParam(parsed.data.day);
   const db = getDb();
 
-  const [state, prior] = await Promise.all([coachState(db, uid, today), listDietMessages(db, uid, HISTORY)]);
+  const [state, prior, training] = await Promise.all([coachState(db, uid, today), listDietMessages(db, uid, HISTORY), trainingCoachLines(db, uid, today)]);
+  state.training = training;
   // earlier replies without their recording blocks: what was logged is in the system prompt already
   const history = prior.map((m) => ({ role: m.role, content: m.role === 'assistant' ? stripDietBlocks(m.content) || '(logged)' : m.content }));
   const out = await routeChat({
@@ -44,13 +50,31 @@ export async function POST(req: Request) {
   await addDietMessage(db, uid, { role: 'user', content: stored });
 
   const provider = out.response.headers.get('x-freetoken-provider');
+  // the reply's full text once it has streamed; the log and any plan change are applied after the response
+  let finished!: (text: string) => void;
+  const replyText = new Promise<string>((ok) => { finished = ok; });
+  after(async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const text = await Promise.race([replyText, new Promise<string>((ok) => { timer = setTimeout(() => ok(''), 280_000); })]);
+    clearTimeout(timer);
+    if (!text) return;
+    // a question with no photo reports nothing eaten: any food the model "logged" was its own suggestion
+    const asking = !photos && onlyAsking(words);
+    const actions = parseDietBlocks(text).map((a) => (asking ? { ...a, log: undefined, remove: undefined } : a));
+    try {
+      const applied = await applyDietActions(db, uid, today, actions, words);
+      await addDietMessage(db, uid, { role: 'assistant', content: savedReply(text, applied), provider });
+      // the coach asked for a plan change — or the message plainly asked for one and the coach forgot to
+      const replan = applied.replan ?? (wantsPlanChange(words, (await currentPlan(db, uid))?.plan ?? null) ? words.slice(0, 500) : null);
+      if (replan) {
+        const r = await generatePlan(db, uid, today, { instruction: `The client asked in chat: "${words.slice(0, 500)}". Change: ${replan}`, source: 'chat' });
+        if (!r.ok) console.error('diet: replanning from chat failed', r.message);
+      }
+    } catch (e) { console.error('diet: saving the reply failed', e); }
+  });
   const body = out.response.body
-    ? tapAssistant(out.response.body, (text) => {
-        // the log first, then the reply: the page waits for the reply to appear, and the log is ready by then
-        void applyDietActions(db, uid, today, parseDietBlocks(text), words)
-          .then((applied) => addDietMessage(db, uid, { role: 'assistant', content: savedReply(text, applied), provider }))
-          .catch((e) => console.error('diet: saving the reply failed', e));
-      })
+    ? tapAssistant(out.response.body, (text) => finished(text), () => finished(''))
     : null;
+  if (!body) finished('');
   return new Response(body, { status: 200, headers: out.response.headers });
 }

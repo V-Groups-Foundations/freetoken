@@ -5,14 +5,14 @@ import { sessionUserId } from '@/lib/session';
 import { getProvider } from '@/providers/registry';
 import { getDeps } from '@/server/deps';
 import { handleSaveKey } from '@/server/keys-handlers';
-import { localLoginEnabled, localOwner } from '@/server/local-login';
+import { onOwnComputer, localOwner } from '@/server/local-login';
 
 /**
  * Keys in this server's environment belong to whoever runs it, so only that person (the local owner
  * on a self-hosted install) may see or import them — never other users of a shared deployment.
  */
 async function canUseServerEnv(uid: string) {
-  return localLoginEnabled() && (await localOwner(getDb())).id === uid;
+  return onOwnComputer() && (await localOwner(getDb())).id === uid;
 }
 
 /** Keys found in this computer's environment variables (masked; the values never leave the server). */

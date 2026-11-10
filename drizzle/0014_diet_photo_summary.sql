@@ -1,0 +1,1 @@
+ALTER TABLE "diet_photos" ADD COLUMN "summary" text;

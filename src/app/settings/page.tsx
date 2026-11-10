@@ -4,9 +4,11 @@ import { PageHeader } from '../page-header';
 import { Tokens } from './tokens';
 import { GUIDES, setupText } from '@/cli/integrations.mjs';
 import { ToolConnect } from './tool-connect';
+import { PasswordCard } from './password';
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ pw?: string }> }) {
   await requireUserId();
+  const { pw } = await searchParams;
   const h = await headers();
   const proto = h.get('x-forwarded-proto') ?? 'http';
   const baseUrl = `${proto}://${h.get('host')}/api/v1`;
@@ -21,6 +23,7 @@ export default async function SettingsPage() {
         <div>Anthropic base URL <span className="muted">(Claude Code, Anthropic SDKs)</span> <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">{baseUrl.replace(/\/v1$/, '')}</code></div>
         <div>Models <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">auto-smart</code> <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">auto-fast</code> <span className="muted">or any from</span> <code className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs">/models</code></div>
       </div>
+      <PasswordCard status={pw} />
       <Tokens />
       <div id="tools" className="card card-pad scroll-mt-6 space-y-4">
         <div>

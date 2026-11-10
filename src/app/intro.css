@@ -37,6 +37,15 @@
 @keyframes vg-pulse { from { opacity: 0; transform: scale(.5); } 60% { opacity: 1; } to { opacity: .85; transform: scale(1); } }
 @keyframes vg-breathe { 50% { opacity: .6; transform: scale(1.06); } }
 @keyframes vg-shine { to { background-position: -200% 0; } }
+/* phones (portrait): the banner is wide (1408×768) — filling the screen cropped it to a slice of the V.
+   Show all of it across the width instead, edges fading into the black, with "presents" just below. */
+@media (orientation: portrait) {
+  .vg-art { inset: auto; left: -20vw; top: calc(50% - 38vw); width: 140vw; max-width: none; height: 76.4vw; object-fit: cover;
+    -webkit-mask-image: radial-gradient(ellipse 50% 50% at center, #000 62%, transparent 100%); mask-image: radial-gradient(ellipse 50% 50% at center, #000 62%, transparent 100%); }
+  .vg-sweep { top: calc(50% - 40vw); bottom: auto; height: 80vw;
+    -webkit-mask-image: radial-gradient(ellipse 50% 50% at center, #000 40%, transparent 100%); mask-image: radial-gradient(ellipse 50% 50% at center, #000 40%, transparent 100%); }
+  .vg-presents { bottom: auto; top: calc(50% + 30vw); font-size: 13px; letter-spacing: .6em; padding-left: .6em; }
+}
 @media (prefers-reduced-motion: reduce) {
   .vg-group { display: none; }
   .vg-product, .vg-mark, .vg-name, .vg-tag, .vg-glow, .vg-banner, .vg-skip { animation: none; opacity: 1; }

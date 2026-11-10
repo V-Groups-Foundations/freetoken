@@ -7,6 +7,7 @@
 export function tapAssistant(
   body: ReadableStream<Uint8Array>,
   onComplete: (text: string) => void,
+  onEnd?: () => void, // always, once: after onComplete, or when the stream failed or was cancelled
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -29,8 +30,8 @@ export function tapAssistant(
   const settle = (failed: boolean) => {
     if (settled) return;
     settled = true;
-    if (failed || !text) return; // don't persist a partial or empty reply
-    onComplete(text);
+    if (!failed && text) onComplete(text); // don't persist a partial or empty reply
+    onEnd?.();
   };
 
   return new ReadableStream<Uint8Array>({

@@ -1,0 +1,11 @@
+# What `vercel deploy` must never upload: secrets, this computer's database and pictures, the desktop app
+.env*
+!.env.example
+.data
+.next
+node_modules
+desktop
+tests
+docs
+coverage
+*.tsbuildinfo

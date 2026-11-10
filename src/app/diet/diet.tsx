@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Markdown } from '../chat/markdown';
 import { MEALS, parseDietBlocks, stripDietBlocks, type DietAction } from '@/diet/protocol';
+import type { Advice } from '@/diet/advisor';
+import { Progress, type FullProfile, type Photo } from './progress';
+import { Training } from './training';
 
 type Entry = { id: number; meal: string; name: string; kcal: number; protein: number; fat: number; carbs: number };
-type Profile = { sex: string | null; age: number | null; heightCm: number | null; goal: string | null; calories: number | null; protein: number | null; fat: number | null; carbs: number | null; notes: string | null } | null;
+type Profile = FullProfile;
 type Msg = { role: 'user' | 'assistant'; content: string; provider?: string | null; photos?: string[] };
 
 /**
@@ -14,7 +17,7 @@ type Msg = { role: 'user' | 'assistant'; content: string; provider?: string | nu
  */
 async function shrinkPhoto(file: File): Promise<string> {
   const bitmap = await createImageBitmap(file).catch(() => null);
-  if (!bitmap) throw new Error(`Couldn't read ${file.name} as a picture.`);
+  if (!bitmap) throw new Error(/\.hei[cf]$/i.test(file.name) ? `This browser can't open HEIC photos (${file.name}) — choose it from the Photos app on your phone, or save it as JPEG first.` : `Couldn't read ${file.name} as a picture.`);
   const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
@@ -27,6 +30,8 @@ type State = {
   totals: { kcal: number; protein: number; fat: number; carbs: number };
   week: { day: string; kcal: number; protein: number }[];
   weights: { day: string; kg: number }[];
+  advice: Advice;
+  photos: Photo[];
   messages: Msg[];
 };
 
@@ -37,9 +42,10 @@ const r = (n: number) => Math.round(n);
 const MEAL_ICON: Record<string, string> = { breakfast: '🌅', lunch: '🍱', dinner: '🍽️', snack: '🍎', drink: '🥤' };
 
 const STARTERS = [
-  "I'm 23, male, 186 cm, 95 kg — set my targets for a cut at 2000 kcal",
+  "I'm 23, male, 186 cm, 95 kg, I lift 4× a week — I want to cut to 85 kg. What should my targets be?",
   'Breakfast: 30 g SAVAS whey (coffee) with water',
-  "What's a good dinner for what I have left today?",
+  'Plan the rest of my day to hit my targets',
+  'Review my last week — what should I change?',
 ];
 
 export function Diet() {
@@ -49,25 +55,26 @@ export function Diet() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<'coach' | 'progress' | 'training'>('coach');
 
   const load = useCallback(async (d: string) => {
-    const res = await fetch(`/api/diet?day=${d}`);
+    const res = await fetch(`/api/diet?day=${d}&today=${today}`);
     if (!res.ok) return null;
     const j = (await res.json()) as State;
     setS(j);
     return j;
-  }, []);
+  }, [today]);
   // the day's tracker whenever the day changes; the conversation only with the first load
   const firstLoad = useRef(true);
   useEffect(() => {
     let live = true;
-    fetch(`/api/diet?day=${day}`).then((res) => (res.ok ? res.json() : null)).then((j: State | null) => {
+    fetch(`/api/diet?day=${day}&today=${today}`).then((res) => (res.ok ? res.json() : null)).then((j: State | null) => {
       if (!live || !j) return;
       setS(j);
       if (firstLoad.current) { firstLoad.current = false; setMsgs(j.messages); }
     }).catch(() => {});
     return () => { live = false; };
-  }, [day]);
+  }, [day, today]);
 
   async function send(content: string, photos: string[] = []) {
     const text = content.trim();
@@ -131,7 +138,33 @@ export function Diet() {
     setMsgs([]);
   }
 
+  const tabs = (
+    <div className="inline-flex rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1" role="tablist" aria-label="Diet">
+      {([['coach', '💬 Coach'], ['progress', '📈 Progress'], ['training', '🏋️ Training']] as const).map(([k, label]) => (
+        <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+          className={`rounded-lg px-3 py-1.5 text-sm sm:px-4 ${tab === k ? 'bg-[var(--surface-2)] font-semibold text-[var(--ink)]' : 'muted'}`}>{label}</button>
+      ))}
+    </div>
+  );
+
+  if (tab === 'training') return (
+    <div className="space-y-4">
+      {tabs}
+      <div className="mx-auto max-w-2xl"><Training today={today} onAsk={(text) => { setTab('coach'); void send(text); }} /></div>
+    </div>
+  );
+
+  if (tab === 'progress') return (
+    <div className="space-y-4">
+      {tabs}
+      {s ? <div className="mx-auto max-w-2xl"><Progress profile={s.profile} advice={s.advice} weights={s.weights} photos={s.photos} today={today} onChanged={() => load(day)} /></div>
+        : <div className="card card-pad muted text-sm">Loading…</div>}
+    </div>
+  );
+
   return (
+    <div className="space-y-4">
+    {tabs}
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
       {/* phones: the chat comes first (with a one-line summary), the full tracker under it — above it, the
           day's whole log had to be scrolled past to reach the message box */}
@@ -142,6 +175,7 @@ export function Diet() {
       <div className="min-w-0">
         {s ? <Tracker s={s} day={day} today={today} setDay={setDay} onRemove={removeEntry} onSaved={() => load(day)} /> : <div className="card card-pad muted text-sm">Loading…</div>}
       </div>
+    </div>
     </div>
   );
 }
@@ -326,6 +360,8 @@ function Logged({ actions }: { actions: DietAction[] }) {
     if (a.weight) chips.push(`⚖️ ${a.weight} kg`);
     if (a.targets && Object.keys(a.targets).length) chips.push(`🎯 targets: ${[a.targets.calories && `${r(a.targets.calories)} kcal`, a.targets.protein && `P ${r(a.targets.protein)}`, a.targets.fat && `F ${r(a.targets.fat)}`, a.targets.carbs && `C ${r(a.targets.carbs)}`].filter(Boolean).join(' · ')}`);
     if (a.profile && Object.keys(a.profile).length) chips.push('👤 profile updated');
+    for (const w of a.workout ?? []) chips.push(`🏋️ ${w.exercise} ${w.kg ? `${w.kg} kg × ` : ''}${w.reps}${w.sets > 1 ? ` × ${w.sets} sets` : ''}`);
+    if (a.replan) chips.push('📋 plan updating — see Training');
   }
   if (!chips.length) return null;
   return (
@@ -342,28 +378,38 @@ function CoachChat({ msgs, busy, error, onSend, onNew }: { msgs: Msg[]; busy: bo
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [msgs]);
   const submit = (t: string) => {
     if ((!t.trim() && !photos.length) || busy) return;
     onSend(t, photos); setInput(''); setPhotos([]); setPhotoError(null);
     if (taRef.current) taRef.current.style.height = 'auto';
   };
-  async function addPhotos(files: FileList | null) {
+  async function addPhotos(files: FileList | File[] | null) {
     setPhotoError(null);
-    for (const f of Array.from(files ?? []).slice(0, 3 - photos.length)) {
+    const pictures = Array.from(files ?? []).filter((f) => f.type.startsWith('image/') || /\.(heic|heif|jpe?g|png|webp|gif)$/i.test(f.name));
+    if (files && Array.from(files).length && !pictures.length) setPhotoError('Only pictures can be added here.');
+    for (const f of pictures.slice(0, 3 - photos.length)) {
       try { const url = await shrinkPhoto(f); setPhotos((p) => (p.length >= 3 ? p : [...p, url])); }
       catch (e) { setPhotoError(e instanceof Error ? e.message : 'Could not read that photo.'); }
     }
-    if (fileRef.current) fileRef.current.value = '';
+    if (pictures.length > 3 - photos.length) setPhotoError('Up to 3 pictures per message.');
+    for (const r of [fileRef, cameraRef]) if (r.current) r.current.value = '';
   }
 
   return (
-    <div className="flex h-[calc(100dvh-14rem)] min-h-[26rem] flex-col gap-3">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
+    <div className="flex h-[calc(100dvh-14rem)] min-h-[26rem] flex-col gap-3"
+      // on a computer: drop pictures anywhere on the chat
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
+      onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); setDragging(false); if (!busy) void addPhotos(e.dataTransfer.files); } }}>
+      <div ref={scrollRef} className={`relative flex-1 overflow-y-auto rounded-2xl border bg-[var(--surface)] ${dragging ? 'border-[var(--brand)] border-dashed' : 'border-[var(--border)]'}`}>
+        {dragging && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-[color-mix(in_srgb,var(--surface)_85%,transparent)] text-sm font-semibold">Drop pictures to add them</div>}
         {msgs.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
             <div className="text-3xl" aria-hidden>🥗</div>
-            <p className="muted max-w-sm text-sm">Tell the coach about you and your goal, then just say what you eat and drink. It logs it and keeps count.</p>
+            <p className="muted max-w-sm text-sm">Tell the coach about you and your goal, then say what you eat — or upload pictures of your meals and nutrition labels. It logs it and keeps count.</p>
             <div className="flex max-w-md flex-col gap-2">
               {STARTERS.map((t) => <button key={t} onClick={() => submit(t)} className="btn btn-secondary btn-sm h-auto whitespace-normal py-2 text-left">{t}</button>)}
             </div>
@@ -411,14 +457,18 @@ function CoachChat({ msgs, busy, error, onSend, onNew }: { msgs: Msg[]; busy: bo
         </div>
       )}
       <div className="flex items-end gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-2">
-        {/* on a phone this offers the camera or the photo library */}
-        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => addPhotos(e.target.files)} />
-        <button onClick={() => fileRef.current?.click()} disabled={busy || photos.length >= 3} className="btn btn-ghost shrink-0 px-2.5 text-lg" title="Add a photo of your meal or its nutrition label" aria-label="Add a photo">📷</button>
+        {/* two ways in: pictures already on the device (gallery / files, several at once) or the camera */}
+        <input ref={fileRef} type="file" accept="image/*,.heic,.heif" multiple className="hidden" onChange={(e) => addPhotos(e.target.files)} />
+        <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => addPhotos(e.target.files)} />
+        <button onClick={() => fileRef.current?.click()} disabled={busy || photos.length >= 3} className="btn btn-ghost shrink-0 px-2 text-lg" title="Upload pictures from your gallery or files" aria-label="Upload pictures">🖼️</button>
+        <button onClick={() => cameraRef.current?.click()} disabled={busy || photos.length >= 3} className="btn btn-ghost -ml-1 shrink-0 px-2 text-lg" title="Take a photo" aria-label="Take a photo">📷</button>
         <textarea
           ref={taRef} value={input} rows={1}
           onChange={(e) => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'; }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(input); } }}
-          placeholder={photos.length ? "Anything to add? (or just Send)" : "What did you eat? Or send a photo 📷"}
+          // a copied picture (screenshot, image from a website) pastes straight in
+          onPaste={(e) => { const files = Array.from(e.clipboardData.files); if (files.length) { e.preventDefault(); void addPhotos(files); } }}
+          placeholder={photos.length ? "Anything to add? (or just Send)" : "What did you eat? Or add pictures 🖼️ 📷"}
           className="max-h-[160px] min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-[16px] text-[var(--ink)] placeholder:text-[var(--faint)] focus:outline-none sm:text-[15px]"
         />
         <button onClick={() => submit(input)} disabled={busy || (!input.trim() && !photos.length)} className="btn btn-primary shrink-0">{busy ? '…' : 'Send'}</button>

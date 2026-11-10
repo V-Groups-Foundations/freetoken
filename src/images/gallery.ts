@@ -1,5 +1,6 @@
 // Saved pictures: a row per image in generated_images, the bytes in one file per image under
-// .data/images (IMAGES_DIR) — data URLs of ~1 MB each would bloat the database.
+// .data/images (IMAGES_DIR) — data URLs of ~1 MB each would bloat the database. Hosted online
+// (Vercel, or IMAGE_STORE=db) there's no lasting disk, so the bytes go in the row's data column.
 
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
@@ -9,6 +10,7 @@ import type { DB } from '@/db';
 import { generatedImages } from '@/db/schema';
 
 export type ImageKind = 'create' | 'edit' | 'api';
+export const imagesInDb = () => process.env.IMAGE_STORE === 'db' || (!!process.env.VERCEL && process.env.IMAGE_STORE !== 'disk');
 export const imagesDir = () => process.env.IMAGES_DIR ?? path.resolve('.data', 'images');
 
 /** Width and height from a JPEG's frame header or a PNG's IHDR; null for anything else. */
@@ -40,12 +42,16 @@ export async function saveImage(
   dir = imagesDir(),
 ): Promise<string> {
   const id = randomUUID();
-  await fsp.mkdir(dir, { recursive: true });
-  await fsp.writeFile(path.join(dir, `${id}.img`), input.bytes);
+  const inDb = imagesInDb();
+  if (!inDb) {
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, `${id}.img`), input.bytes);
+  }
   const size = imageSize(input.bytes);
   await db.insert(generatedImages).values({
     id, userId: input.userId, prompt: input.prompt.slice(0, 2000), kind: input.kind, engine: input.engine,
     width: size?.width ?? null, height: size?.height ?? null, bytes: input.bytes.length,
+    data: inDb ? Buffer.from(input.bytes) : null,
   });
   return id;
 }
@@ -60,10 +66,10 @@ export async function listImages(db: DB, userId: string, limit = 60) {
 /** The picture's bytes, only for its owner. */
 export async function readImage(db: DB, userId: string, id: string, dir = imagesDir()): Promise<{ bytes: Buffer; type: string } | null> {
   if (!/^[0-9a-f-]{36}$/.test(id)) return null;
-  const [row] = await db.select({ id: generatedImages.id }).from(generatedImages)
+  const [row] = await db.select({ id: generatedImages.id, data: generatedImages.data }).from(generatedImages)
     .where(and(eq(generatedImages.id, id), eq(generatedImages.userId, userId)));
   if (!row) return null;
-  const bytes = await fsp.readFile(path.join(dir, `${id}.img`)).catch(() => null);
+  const bytes = row.data ? Buffer.from(row.data) : await fsp.readFile(path.join(dir, `${id}.img`)).catch(() => null);
   return bytes ? { bytes, type: imageType(bytes) } : null;
 }
 

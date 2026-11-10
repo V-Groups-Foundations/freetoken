@@ -44,4 +44,18 @@ describe('gallery', () => {
     expect(fs.existsSync(path.join(dir, `${a}.img`))).toBe(false);
     expect((await listImages(db, me.id)).map((i) => i.id)).toEqual([b]);
   });
+
+  it('hosted online, keeps the picture in the database instead of on disk', async () => {
+    const db = await createTestDb();
+    const dir = tmp();
+    const me = await createUser(db);
+    process.env.IMAGE_STORE = 'db';
+    try {
+      const id = await saveImage(db, { userId: me.id, prompt: 'a fox', kind: 'create', engine: 'cloudflare', bytes: png }, dir);
+      expect(fs.readdirSync(dir)).toEqual([]);
+      expect(await readImage(db, me.id, id, dir)).toEqual({ bytes: png, type: 'image/png' });
+      expect(await deleteImage(db, me.id, id, dir)).toBe(true);
+      expect(await readImage(db, me.id, id, dir)).toBeNull();
+    } finally { delete process.env.IMAGE_STORE; }
+  });
 });

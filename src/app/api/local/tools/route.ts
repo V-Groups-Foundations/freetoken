@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { getDb } from '@/db';
 import { sessionUserId } from '@/lib/session';
 import { tokenForTool } from '@/server/tokens';
-import { localLoginEnabled, localOwner } from '@/server/local-login';
+import { onOwnComputer, localOwner } from '@/server/local-login';
 import { connectTool, detectEnv, disconnectTool, toolStatus } from '@/server/tools-connect';
 
 
@@ -11,7 +11,7 @@ import { connectTool, detectEnv, disconnectTool, toolStatus } from '@/server/too
  * person may do it: local installs only, the install's owner, and a header other websites can't send.
  */
 async function guard(req: Request) {
-  if (!localLoginEnabled()) return 'Connecting tools is only available on your own computer.';
+  if (!onOwnComputer()) return 'Connecting tools is only available on your own computer.';
   if (req.headers.get('x-freetoken-ui') !== '1') return 'Not allowed.';
   const uid = await sessionUserId();
   if (!uid || (await localOwner(getDb())).id !== uid) return 'Only the owner of this FreeToken can connect tools.';

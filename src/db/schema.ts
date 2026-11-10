@@ -1,7 +1,9 @@
 import {
-  pgTable, text, timestamp, integer, boolean, serial, primaryKey, uniqueIndex, index, real,
+  pgTable, text, timestamp, integer, boolean, serial, primaryKey, uniqueIndex, index, real, customType, jsonb,
 } from 'drizzle-orm/pg-core';
 import type { AdapterAccountType } from 'next-auth/adapters';
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
 
 export const users = pgTable('user', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -10,6 +12,8 @@ export const users = pgTable('user', {
   emailVerified: timestamp('emailVerified', { mode: 'date' }),
   image: text('image'),
   role: text('role').notNull().default('user'),
+  // email + password sign-in (scrypt hash, see src/server/passwords.ts); null for link/Google-only accounts
+  passwordHash: text('password_hash'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -195,6 +199,8 @@ export const generatedImages = pgTable('generated_images', {
   width: integer('width'),
   height: integer('height'),
   bytes: integer('bytes').notNull(),
+  // the picture itself when hosted online (no lasting disk there); on a computer it's a file instead
+  data: bytea('data'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('images_user_time').on(t.userId, t.createdAt)]);
 
@@ -210,8 +216,32 @@ export const dietProfiles = pgTable('diet_profiles', {
   fat: integer('fat'),
   carbs: integer('carbs'),
   notes: text('notes'), // allergies, dislikes, training days…
+  activity: text('activity'), // sedentary | light | moderate | active | athlete (see src/diet/advisor.ts)
+  goalWeightKg: real('goal_weight_kg'),
+  photoId: integer('photo_id'), // the progress photo shown as the profile picture
+  // training, for the plan the coach writes (src/diet/training.ts)
+  trainDays: integer('train_days'), // sessions a week
+  sessionMinutes: integer('session_minutes'),
+  experience: text('experience'), // beginner | intermediate | advanced
+  equipment: text('equipment'), // gym | home | dumbbells | bodyweight
+  injuries: text('injuries'), // injuries and exercises to avoid, in their words
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
+
+/** Body progress photos, with the coach's read of each one (kept in the database: hosts have no lasting disk). */
+export const dietPhotos = pgTable('diet_photos', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  day: text('day').notNull(), // the user's calendar day
+  pose: text('pose').notNull().default('front'), // front | side | back | other
+  data: bytea('data').notNull(),
+  kg: real('kg'), // weight on that day, if known
+  bodyFatLow: real('body_fat_low'), // the coach's estimate, as a range (%)
+  bodyFatHigh: real('body_fat_high'),
+  analysis: text('analysis'),
+  summary: text('summary'), // the analysis in one sentence, which the coach remembers
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('diet_photos_user_day').on(t.userId, t.day)]);
 
 /** One food or drink the user had. `day` is the user's own calendar day (YYYY-MM-DD, their time zone). */
 export const dietEntries = pgTable('diet_entries', {
@@ -243,3 +273,31 @@ export const dietMessages = pgTable('diet_messages', {
   provider: text('provider'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('diet_messages_user').on(t.userId, t.id)]);
+
+/** Wrong passwords per email, shared by every running copy of the app (see src/server/passwords.ts). */
+export const loginFailures = pgTable('login_failures', {
+  id: serial('id').primaryKey(),
+  email: text('email').notNull(),
+  failedAt: timestamp('failed_at').notNull().defaultNow(),
+}, (t) => [index('login_failures_email').on(t.email, t.failedAt)]);
+
+/** The coach's training plans; the newest is the current one, older ones are its history. */
+export const trainingPlans = pgTable('training_plans', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  plan: jsonb('plan').notNull(), // a TrainingPlan (src/diet/training.ts)
+  change: text('change'), // what changed from the previous plan and why
+  source: text('source').notNull().default('new'), // new | request | photo | chat
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('training_plans_user').on(t.userId, t.id)]);
+
+/** One logged set: an exercise, the weight and the reps, on the user's calendar day. */
+export const workoutSets = pgTable('workout_sets', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  day: text('day').notNull(),
+  exercise: text('exercise').notNull(),
+  kg: real('kg').notNull().default(0), // 0 for bodyweight
+  reps: integer('reps').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('workout_sets_user_ex').on(t.userId, t.exercise, t.day)]);

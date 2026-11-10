@@ -8,8 +8,11 @@ export async function GET(req: Request) {
   const uid = await sessionUserId();
   if (!uid) return Response.json({ error: 'Sign in first.' }, { status: 401 });
   const db = getDb();
-  const day = dayParam(new URL(req.url).searchParams.get('day'));
-  const [state, messages] = await Promise.all([dietState(db, uid, day), listDietMessages(db, uid)]);
+  const q = new URL(req.url).searchParams;
+  const day = dayParam(q.get('day'));
+  // the advisor's numbers are as of the user's today, whichever day the tracker shows
+  const today = q.get('today') ? dayParam(q.get('today')) : day;
+  const [state, messages] = await Promise.all([dietState(db, uid, day, today), listDietMessages(db, uid)]);
   return Response.json({ ...state, messages });
 }
 

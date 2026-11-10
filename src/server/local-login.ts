@@ -2,6 +2,8 @@
 // writes a fresh random token to .data/local-login.token each time it starts and opens
 // /welcome?t=<token>. Only someone who can read that file — i.e. you, on this machine — gets the link,
 // the same idea as Jupyter's login token. FREETOKEN_LOCAL_LOGIN=off turns it off (e.g. on a server).
+// Hosted online there's no such file: FREETOKEN_LOGIN_TOKEN (a long random secret kept in the host's
+// settings) is the token instead, and FREETOKEN_OWNER_ID says whose account it signs into.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -10,13 +12,17 @@ import type { DB } from '@/db';
 import { providerKeys, users } from '@/db/schema';
 
 export const localLoginEnabled = () => (process.env.FREETOKEN_LOCAL_LOGIN ?? '').toLowerCase() !== 'off';
+/** Hosted online (Vercel, or FREETOKEN_HOSTED=1) rather than on the owner's own computer. */
+export const isHosted = () => Boolean(process.env.VERCEL) || process.env.FREETOKEN_HOSTED === '1';
+/** Things that touch the computer FreeToken runs on (its files, its environment) — never on a host. */
+export const onOwnComputer = () => localLoginEnabled() && !isHosted();
 export const localLoginFile = (root = process.cwd()) => path.join(root, '.data', 'local-login.token');
 
 /** True when `token` is the current local sign-in token (constant-time compare). */
 export function localLoginMatches(token: unknown, file = localLoginFile()): boolean {
   if (!localLoginEnabled() || typeof token !== 'string' || token.length < 32) return false;
-  let current: string;
-  try { current = readFileSync(file, 'utf8').trim(); } catch { return false; }
+  let current = process.env.FREETOKEN_LOGIN_TOKEN?.trim() ?? '';
+  if (!current) try { current = readFileSync(file, 'utf8').trim(); } catch { return false; }
   if (current.length < 32) return false;
   const h = (s: string) => createHash('sha256').update(s).digest();
   return timingSafeEqual(h(token), h(current));
@@ -34,8 +40,8 @@ export const localOwnerFile = (root = process.cwd()) => path.join(root, '.data',
  * real account later — else the oldest account. Only an account with keys gets pinned.
  */
 export async function localOwner(db: DB, file = localOwnerFile()) {
-  let pinned = '';
-  try { pinned = readFileSync(file, 'utf8').trim(); } catch { /* not pinned yet */ }
+  let pinned = process.env.FREETOKEN_OWNER_ID?.trim() ?? '';
+  if (!pinned) try { pinned = readFileSync(file, 'utf8').trim(); } catch { /* not pinned yet */ }
   if (pinned) {
     const [owner] = await db.select().from(users).where(eq(users.id, pinned));
     if (owner) return owner;

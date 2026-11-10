@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { dietEntries, dietMessages, dietProfiles, dietWeights } from '@/db/schema';
+import { dietEntries, dietMessages, dietPhotos, dietProfiles, dietWeights, workoutSets } from '@/db/schema';
 import { stripDietBlocks, sumTotals, type CoachState, type DietAction } from './protocol';
+import { advise, adviceLines } from './advisor';
 
 /** The calendar day `n` days before `day` (both YYYY-MM-DD). */
 export function shiftDay(day: string, n: number) {
@@ -15,12 +16,12 @@ export async function getProfile(db: DB, userId: string) {
   return p ?? null;
 }
 
-type ProfilePatch = Partial<Pick<typeof dietProfiles.$inferInsert, 'sex' | 'age' | 'heightCm' | 'goal' | 'calories' | 'protein' | 'fat' | 'carbs' | 'notes'>>;
+type ProfilePatch = Partial<Pick<typeof dietProfiles.$inferInsert, 'sex' | 'age' | 'heightCm' | 'goal' | 'calories' | 'protein' | 'fat' | 'carbs' | 'notes' | 'activity' | 'goalWeightKg' | 'photoId' | 'trainDays' | 'sessionMinutes' | 'experience' | 'equipment' | 'injuries'>>;
 
 export async function updateProfile(db: DB, userId: string, patch: ProfilePatch) {
   const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as ProfilePatch;
   if (!Object.keys(clean).length) return;
-  for (const k of ['age', 'calories', 'protein', 'fat', 'carbs'] as const) if (clean[k] != null) clean[k] = Math.round(clean[k]!);
+  for (const k of ['age', 'calories', 'protein', 'fat', 'carbs', 'trainDays', 'sessionMinutes'] as const) if (clean[k] != null) clean[k] = Math.round(clean[k]!);
   await db.insert(dietProfiles).values({ userId, ...clean, updatedAt: new Date() })
     .onConflictDoUpdate({ target: dietProfiles.userId, set: { ...clean, updatedAt: new Date() } });
 }
@@ -75,18 +76,64 @@ export async function clearDietMessages(db: DB, userId: string) {
   await db.delete(dietMessages).where(eq(dietMessages.userId, userId));
 }
 
-/** Everything the page shows for one day. */
-export async function dietState(db: DB, userId: string, day: string) {
-  const [profile, entries, week, weights] = await Promise.all([
-    getProfile(db, userId), listEntries(db, userId, day), dayTotals(db, userId, day, 7), listWeights(db, userId),
+/** Everything the page shows for one day, with the advisor's numbers as of `today`. */
+export async function dietState(db: DB, userId: string, day: string, today = day) {
+  const [profile, entries, month, weights, photos] = await Promise.all([
+    getProfile(db, userId), listEntries(db, userId, day), dayTotals(db, userId, today, 28), listWeights(db, userId, 365), listPhotos(db, userId),
   ]);
-  return { day, profile, entries, totals: sumTotals(entries), week, weights };
+  const week = month.filter((d) => d.day > shiftDay(day, -7) && d.day <= day);
+  const advice = advise(profile, weights, month, today);
+  return { day, profile, entries, totals: sumTotals(entries), week, weights, advice, photos };
 }
 
 /** What the coach is told before it answers (yesterday and before, not today: today is listed item by item). */
 export async function coachState(db: DB, userId: string, today: string): Promise<CoachState> {
   const s = await dietState(db, userId, today);
-  return { today, profile: s.profile, entries: s.entries, week: s.week.filter((d) => d.day !== today), weights: s.weights };
+  // the latest read of each pose, so the coach remembers what the photos showed
+  const latest = new Map<string, (typeof s.photos)[number]>();
+  for (const ph of s.photos) if (ph.analysis && !latest.has(ph.pose)) latest.set(ph.pose, ph);
+  return {
+    today, profile: s.profile, entries: s.entries, week: s.week.filter((d) => d.day !== today), weights: s.weights.slice(-30),
+    advice: adviceLines(s.advice, s.profile),
+    physique: [...latest.values()].map((ph) => ({ day: ph.day, pose: ph.pose, bodyFat: bodyFatText(ph), summary: ph.summary ?? '' })),
+  };
+}
+
+/* ---------------------------------------------------------------- progress photos */
+
+export const bodyFatText = (p: { bodyFatLow: number | null; bodyFatHigh: number | null }) =>
+  p.bodyFatLow == null ? null : p.bodyFatHigh != null && p.bodyFatHigh !== p.bodyFatLow ? `${p.bodyFatLow}–${p.bodyFatHigh}` : `${p.bodyFatLow}`;
+
+/** Newest first, without the picture bytes. `summary` is the analysis's one-line takeaway. */
+export async function listPhotos(db: DB, userId: string, limit = 200) {
+  return db.select({
+    id: dietPhotos.id, day: dietPhotos.day, pose: dietPhotos.pose, kg: dietPhotos.kg,
+    bodyFatLow: dietPhotos.bodyFatLow, bodyFatHigh: dietPhotos.bodyFatHigh, analysis: dietPhotos.analysis, summary: dietPhotos.summary,
+    createdAt: dietPhotos.createdAt,
+  }).from(dietPhotos).where(eq(dietPhotos.userId, userId)).orderBy(desc(dietPhotos.day), desc(dietPhotos.id)).limit(limit);
+}
+
+export async function addPhoto(db: DB, userId: string, p: { day: string; pose: string; data: Buffer; kg: number | null }) {
+  const [row] = await db.insert(dietPhotos).values({ userId, ...p }).returning({ id: dietPhotos.id });
+  return row.id;
+}
+
+export async function saveAnalysis(db: DB, userId: string, id: number, a: { text: string; bodyFatLow: number | null; bodyFatHigh: number | null; summary: string | null }) {
+  await db.update(dietPhotos).set({ analysis: a.text, summary: a.summary, bodyFatLow: a.bodyFatLow, bodyFatHigh: a.bodyFatHigh })
+    .where(and(eq(dietPhotos.id, id), eq(dietPhotos.userId, userId)));
+}
+
+/** A photo's bytes, only for its owner. */
+export async function readPhoto(db: DB, userId: string, id: number) {
+  const [row] = await db.select({ data: dietPhotos.data }).from(dietPhotos).where(and(eq(dietPhotos.id, id), eq(dietPhotos.userId, userId)));
+  return row ? Buffer.from(row.data) : null;
+}
+
+export async function deletePhoto(db: DB, userId: string, id: number) {
+  const gone = await db.delete(dietPhotos).where(and(eq(dietPhotos.id, id), eq(dietPhotos.userId, userId))).returning({ id: dietPhotos.id });
+  if (!gone.length) return false;
+  await db.update(dietProfiles).set({ photoId: null }).where(and(eq(dietProfiles.userId, userId), eq(dietProfiles.photoId, id)));
+  return true;
 }
 
 // words that name a food ("salmon", "onigiri", "savas"), for telling a re-sent item from a new one
@@ -119,6 +166,16 @@ export async function applyDietActions(db: DB, userId: string, today: string, ac
       await db.insert(dietEntries).values({ userId, day, meal: i.meal, name: i.name, kcal: i.kcal, protein: i.protein, fat: i.fat, carbs: i.carbs });
       (applied.log ??= []).push(i);
     }
+    if (a.workout?.length) {
+      // the same sets already logged today are a re-send, not a second workout
+      const todays = await db.select({ exercise: workoutSets.exercise, kg: workoutSets.kg, reps: workoutSets.reps }).from(workoutSets)
+        .where(and(eq(workoutSets.userId, userId), eq(workoutSets.day, today)));
+      const seen = new Set(todays.map((t) => `${t.exercise.toLowerCase()}|${t.kg}|${t.reps}`));
+      const fresh = a.workout.filter((w) => !seen.has(`${w.exercise.toLowerCase()}|${w.kg}|${w.reps}`));
+      const rows = fresh.flatMap((w) => Array.from({ length: w.sets }, () => ({ userId, day: today, exercise: w.exercise, kg: w.kg, reps: w.reps })));
+      if (rows.length) { await db.insert(workoutSets).values(rows); applied.workout = [...(applied.workout ?? []), ...fresh]; }
+    }
+    if (a.replan) applied.replan = a.replan; // carried out by the chat route once the reply is saved
     if (a.weight) {
       const [w] = await db.select({ kg: dietWeights.kg }).from(dietWeights).where(and(eq(dietWeights.userId, userId), eq(dietWeights.day, today)));
       if (w?.kg !== a.weight) { await setWeight(db, userId, today, a.weight); applied.weight = a.weight; }
