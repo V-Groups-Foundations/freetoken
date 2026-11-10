@@ -16,7 +16,7 @@ export async function getProfile(db: DB, userId: string) {
   return p ?? null;
 }
 
-type ProfilePatch = Partial<Pick<typeof dietProfiles.$inferInsert, 'sex' | 'age' | 'heightCm' | 'goal' | 'calories' | 'protein' | 'fat' | 'carbs' | 'notes' | 'activity' | 'goalWeightKg' | 'photoId' | 'trainDays' | 'sessionMinutes' | 'experience' | 'equipment' | 'injuries'>>;
+type ProfilePatch = Partial<Pick<typeof dietProfiles.$inferInsert, 'sex' | 'age' | 'heightCm' | 'goal' | 'calories' | 'protein' | 'fat' | 'carbs' | 'notes' | 'activity' | 'goalWeightKg' | 'photoId' | 'trainDays' | 'sessionMinutes' | 'experience' | 'equipment' | 'injuries' | 'lastCheckin'>>;
 
 export async function updateProfile(db: DB, userId: string, patch: ProfilePatch) {
   const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as ProfilePatch;

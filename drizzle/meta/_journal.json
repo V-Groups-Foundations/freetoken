@@ -113,6 +113,13 @@
       "when": 1794275166660,
       "tag": "0015_training",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794279550252,
+      "tag": "0016_checkin_auth_tokens",
+      "breakpoints": true
     }
   ]
 }

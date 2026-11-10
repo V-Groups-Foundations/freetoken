@@ -1,0 +1,54 @@
+# Daily backup of the online database (Neon). This repository is public, so the dump is encrypted
+# (AES-256, the passphrase is a repository secret and in the owner's .env.local) before it is stored
+# as a workflow artifact for 30 days. How to restore: docs/backups.md.
+name: Database backup
+
+on:
+  schedule:
+    - cron: '30 18 * * *' # 03:30 Japan time
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check the secrets are set
+        env:
+          DB: ${{ secrets.BACKUP_DATABASE_URL }}
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          [ -n "$DB" ] || { echo "BACKUP_DATABASE_URL is not set"; exit 1; }
+          [ -n "$PASS" ] || { echo "BACKUP_PASSPHRASE is not set"; exit 1; }
+
+      - name: Install pg_dump 18 (must be at least the server's version)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-18
+          /usr/lib/postgresql/18/bin/pg_dump --version
+
+      - name: Dump and encrypt
+        env:
+          DB: ${{ secrets.BACKUP_DATABASE_URL }}
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          stamp=$(date -u +%Y%m%d-%H%M)
+          /usr/lib/postgresql/18/bin/pg_dump --format=custom --no-owner --no-privileges --dbname="$DB" --file=db.dump
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in db.dump -out "freetoken-$stamp.dump.enc" -pass env:PASS
+          rm -f db.dump
+          ls -la freetoken-*.dump.enc
+          echo "STAMP=$stamp" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freetoken-db-${{ env.STAMP }}
+          path: freetoken-*.dump.enc
+          retention-days: 30
+          if-no-files-found: error

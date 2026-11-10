@@ -5,7 +5,9 @@ import { devLoginEnabled, signIn } from '@/auth';
 import { getDb } from '@/db';
 import { sessionUserId } from '@/lib/session';
 import { onOwnComputer } from '@/server/local-login';
-import { MAX_TRIES, MIN_PASSWORD, SIGNUP_ERRORS, attempts, signUp, type SignUpError } from '@/server/passwords';
+import { MAX_TRIES, MIN_PASSWORD, SIGNUP_ERRORS, attempts, issueToken, noteSignup, signUp, signupAllowed, type SignUpError } from '@/server/passwords';
+import { emailEnabled, linkEmail, sendEmail } from '@/server/email';
+import { clientIp, siteUrl } from '@/server/site';
 import { PasswordInput } from '../password-input';
 
 async function signInWithPassword(fd: FormData) {
@@ -25,14 +27,25 @@ async function signInWithPassword(fd: FormData) {
 async function createAccount(fd: FormData) {
   'use server';
   const password = String(fd.get('password') ?? '');
-  const r = await signUp(getDb(), fd.get('email'), password, fd.get('name'));
+  const db = getDb();
+  const ip = await clientIp();
+  if (!(await signupAllowed(db, ip))) redirect('/login?mode=signup&error=busy');
+  const r = await signUp(db, fd.get('email'), password, fd.get('name'));
   if (!r.ok) redirect(`/login?mode=signup&error=${r.error}`);
+  await noteSignup(db, ip);
+  // confirm the address when this site can send email (signing in doesn't wait for it)
+  if (emailEnabled()) {
+    const link = `${await siteUrl()}/verify?token=${await issueToken(db, r.userId, 'verify')}`;
+    const m = linkEmail('Confirm your email', 'Thanks for creating a FreeToken account. Confirm this is your address so you can reset your password by email if you ever forget it.', 'Confirm email', link, 'If you did not create this account, ignore this email.');
+    const sent = await sendEmail(String(fd.get('email')).trim().toLowerCase(), 'Confirm your FreeToken email', m.text, m.html);
+    if (!sent.ok) console.error('signup: verification email failed', sent.error);
+  }
   await signIn('password', { email: fd.get('email'), password, redirectTo: '/connect?welcome=1' });
 }
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; mode?: string; left?: string; wait?: string }> }) {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; mode?: string; left?: string; wait?: string; reset?: string }> }) {
   if (await sessionUserId()) redirect('/connect');
-  const { error, mode, left, wait } = await searchParams;
+  const { error, mode, left, wait, reset } = await searchParams;
   const n = (v: string | undefined, max: number) => Math.min(max, Math.max(0, Math.floor(Number(v)) || 0));
   const signup = mode === 'signup';
   const local = onOwnComputer();
@@ -69,8 +82,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
             <PasswordInput name="password" required minLength={signup ? MIN_PASSWORD : 1} maxLength={200}
               autoComplete={signup ? 'new-password' : 'current-password'} />
           </label>
+          {reset && !message && <p role="status" className="text-sm text-[var(--success,#3ccf91)]">Password changed. Sign in with the new one.</p>}
           {message && <p role="alert" className="text-sm text-[var(--danger)]">{message}</p>}
           <button className="btn btn-primary w-full">{signup ? 'Create account' : 'Sign in'}</button>
+          {!signup && <p className="text-right text-xs"><Link href="/forgot" className="muted underline">Forgot password?</Link></p>}
         </form>
 
         <p className="muted text-center text-sm">

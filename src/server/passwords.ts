@@ -1,10 +1,10 @@
 // Email + password accounts: anyone can sign up on a hosted FreeToken and keep their own keys, chats and
 // diet log. Passwords are stored only as scrypt hashes (salted, memory-hard; Node's built-in crypto).
-import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { and, asc, eq, gt, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull, lte } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { loginFailures, users } from '@/db/schema';
+import { authTokens, loginFailures, users } from '@/db/schema';
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number, opts: { N: number; r: number; p: number; maxmem: number }) => Promise<Buffer>;
 const PARAMS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
@@ -63,6 +63,7 @@ export const SIGNUP_ERRORS = {
   short: `Use a password of at least ${MIN_PASSWORD} characters.`,
   long: 'That password is too long.',
   taken: 'There is already an account with this email — sign in instead.',
+  busy: 'Too many new accounts from this network just now — try again in 15 minutes.',
   unclaimed: 'This email already has an account without a password. Sign in the way you did before, then set a password under API → Password.',
 } as const;
 export type SignUpError = keyof typeof SIGNUP_ERRORS;
@@ -107,4 +108,59 @@ export async function setPassword(db: DB, userId: string, current: string, next:
   await db.update(users).set({ passwordHash: await hashPassword(next) }).where(eq(users.id, userId));
   if (user.email) await clearFailures(db, user.email); // a fresh password starts with all tries
   return null;
+}
+
+/* ---------------------------------------------------------------- sign-up limits */
+
+/** New accounts per network (IP) per 15 minutes — stops scripted mass sign-ups. */
+export const SIGNUPS_PER_WINDOW = 3;
+const signupKey = (ip: string) => `signup:${ip}`;
+export async function signupAllowed(db: DB, ip: string, now = Date.now()) {
+  return (await attempts(db, signupKey(ip), now)).left > MAX_TRIES - SIGNUPS_PER_WINDOW;
+}
+export const noteSignup = (db: DB, ip: string, now = Date.now()) => noteFailure(db, signupKey(ip), now);
+
+/* ---------------------------------------------------------------- one-time email links */
+
+const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+const HOUR = 60 * 60_000;
+
+/** A fresh link token (returned once, for the email); only its hash is stored. Older unused ones of that kind lapse. */
+export async function issueToken(db: DB, userId: string, kind: 'reset' | 'verify', now = Date.now()): Promise<string> {
+  const token = randomBytes(32).toString('base64url');
+  await db.update(authTokens).set({ usedAt: new Date(now) }).where(and(eq(authTokens.userId, userId), eq(authTokens.kind, kind), isNull(authTokens.usedAt)));
+  await db.insert(authTokens).values({ tokenHash: sha(token), userId, kind, expiresAt: new Date(now + (kind === 'reset' ? HOUR : 48 * HOUR)) });
+  return token;
+}
+
+/** The user a link token belongs to, if it's that kind, unused and not expired — and marks it used. */
+export async function redeemToken(db: DB, token: unknown, kind: 'reset' | 'verify', now = Date.now()): Promise<string | null> {
+  if (typeof token !== 'string' || token.length < 30) return null;
+  const [row] = await db.select().from(authTokens).where(eq(authTokens.tokenHash, sha(token)));
+  if (!row || row.kind !== kind || row.usedAt || row.expiresAt.getTime() < now) return null;
+  const used = await db.update(authTokens).set({ usedAt: new Date(now) }).where(and(eq(authTokens.tokenHash, row.tokenHash), isNull(authTokens.usedAt))).returning({ u: authTokens.userId });
+  return used.length ? row.userId : null;
+}
+
+/** A still-valid token, without using it (to show the reset form only for a good link). */
+export async function tokenValid(db: DB, token: unknown, kind: 'reset' | 'verify', now = Date.now()) {
+  if (typeof token !== 'string' || token.length < 30) return false;
+  const [row] = await db.select().from(authTokens).where(eq(authTokens.tokenHash, sha(token)));
+  return Boolean(row && row.kind === kind && !row.usedAt && row.expiresAt.getTime() >= now);
+}
+
+/** Reset with a link: the token must be good; the new password must be acceptable. */
+export async function resetPassword(db: DB, token: unknown, next: string): Promise<'ok' | 'bad-link' | 'weak'> {
+  if (passwordProblem(next)) return 'weak';
+  const userId = await redeemToken(db, token, 'reset');
+  if (!userId) return 'bad-link';
+  const problem = await setPassword(db, userId, '', next, true);
+  return problem ? 'weak' : 'ok';
+}
+
+export async function markVerified(db: DB, token: unknown) {
+  const userId = await redeemToken(db, token, 'verify');
+  if (!userId) return false;
+  await db.update(users).set({ emailVerified: new Date() }).where(eq(users.id, userId));
+  return true;
 }

@@ -225,6 +225,7 @@ export const dietProfiles = pgTable('diet_profiles', {
   experience: text('experience'), // beginner | intermediate | advanced
   equipment: text('equipment'), // gym | home | dumbbells | bodyweight
   injuries: text('injuries'), // injuries and exercises to avoid, in their words
+  lastCheckin: text('last_checkin'), // the day of the last weekly check-in (src/diet/checkin.ts)
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
 
@@ -301,3 +302,13 @@ export const workoutSets = pgTable('workout_sets', {
   reps: integer('reps').notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('workout_sets_user_ex').on(t.userId, t.exercise, t.day)]);
+
+/** One-time links sent by email: password reset and address verification. Only a hash of the token is kept. */
+export const authTokens = pgTable('auth_tokens', {
+  tokenHash: text('token_hash').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  kind: text('kind').notNull(), // reset | verify
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('auth_tokens_user').on(t.userId, t.kind)]);

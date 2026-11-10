@@ -60,8 +60,22 @@ export type Advice = {
   suggested: { calories: number; protein: number; fat: number; carbs: number } | null;
   adherence: { daysLogged: number; avgKcal: number; avgProtein: number; daysOnTarget: number } | null;
   goalEta: { weeks: number; date: string } | null;
+  targetsMismatch: Mismatch | null; // their macro targets come to a different calorie total
   missing: string[]; // what's needed for the rest
 };
+
+export type Mismatch = { macroKcal: number; calories: number; carbsForCalories: number };
+
+/**
+ * Protein and carbs are 4 kcal a gram, fat 9: when the macro targets add up to a different total than the
+ * calorie target (by more than 5%, at least 75 kcal), hitting one means missing the other.
+ */
+export function targetsMismatch(t: { calories?: number | null; protein?: number | null; fat?: number | null; carbs?: number | null } | null): Mismatch | null {
+  if (!t?.calories || t.protein == null || t.fat == null || t.carbs == null) return null;
+  const macroKcal = Math.round(t.protein * 4 + t.fat * 9 + t.carbs * 4);
+  if (Math.abs(macroKcal - t.calories) <= Math.max(75, t.calories * 0.05)) return null;
+  return { macroKcal, calories: t.calories, carbsForCalories: Math.max(0, Math.round((t.calories - t.protein * 4 - t.fat * 9) / 4)) };
+}
 
 const r = Math.round;
 const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -124,7 +138,7 @@ export function advise(p: Profile | null, weights: Weigh[], logs: DayLog[], toda
   return {
     weightKg, bmi: bmi ? r1(bmi) : null, bmr: base ? r(base) : null, maintenance: maintenance ? r(maintenance) : null,
     observedMaintenance: observedMaintenance ? r(observedMaintenance) : null, trendKgPerWeek: trend == null ? null : Math.round(trend * 100) / 100,
-    goal, safeRateKgPerWeek, suggested, adherence, goalEta, missing,
+    goal, safeRateKgPerWeek, suggested, adherence, goalEta, targetsMismatch: targetsMismatch(p), missing,
   };
 }
 
@@ -139,6 +153,7 @@ export function adviceLines(a: Advice, p: Profile | null): string {
     a.suggested && `evidence-based targets for this goal: ${a.suggested.calories} kcal · P ${a.suggested.protein} · F ${a.suggested.fat} · C ${a.suggested.carbs}`,
     a.adherence && `last 7 days: ${a.adherence.daysLogged} days logged, avg ${a.adherence.avgKcal} kcal, avg protein ${a.adherence.avgProtein} g${p?.calories ? `, ${a.adherence.daysOnTarget} days within 10% of target` : ''}`,
     p?.goalWeightKg && `goal weight ${p.goalWeightKg} kg${a.goalEta ? ` — at the current trend in ~${a.goalEta.weeks} weeks (${a.goalEta.date})` : ''}`,
+    a.targetsMismatch && `THEIR TARGETS DON'T ADD UP: P/F/C come to ${a.targetsMismatch.macroKcal} kcal but the calorie target is ${a.targetsMismatch.calories} — point this out once and offer a fix (carbs ${a.targetsMismatch.carbsForCalories} g keeps ${a.targetsMismatch.calories} kcal, or calories ${a.targetsMismatch.macroKcal} keeps the macros)`,
     a.missing.length && `unknown: ${a.missing.join(', ')}`,
   ];
   return lines.filter(Boolean).map((l) => `  - ${l}`).join('\n');

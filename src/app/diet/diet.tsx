@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Markdown } from '../chat/markdown';
 import { MEALS, parseDietBlocks, stripDietBlocks, type DietAction } from '@/diet/protocol';
-import type { Advice } from '@/diet/advisor';
+import { targetsMismatch, type Advice } from '@/diet/advisor';
 import { Progress, type FullProfile, type Photo } from './progress';
 import { Training } from './training';
 
@@ -33,6 +33,7 @@ type State = {
   advice: Advice;
   photos: Photo[];
   messages: Msg[];
+  checkinDue?: boolean;
 };
 
 /** The user's own calendar day (their time zone), as YYYY-MM-DD. */
@@ -56,6 +57,7 @@ export function Diet() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'coach' | 'progress' | 'training'>('coach');
+  const [checkinBusy, setCheckinBusy] = useState(false);
 
   const load = useCallback(async (d: string) => {
     const res = await fetch(`/api/diet?day=${d}&today=${today}`);
@@ -71,7 +73,17 @@ export function Diet() {
     fetch(`/api/diet?day=${day}&today=${today}`).then((res) => (res.ok ? res.json() : null)).then((j: State | null) => {
       if (!live || !j) return;
       setS(j);
-      if (firstLoad.current) { firstLoad.current = false; setMsgs(j.messages); }
+      if (firstLoad.current) {
+        firstLoad.current = false;
+        setMsgs(j.messages);
+        // a week since the last check-in: the coach writes this week's review into the conversation
+        if (j.checkinDue) {
+          setCheckinBusy(true);
+          fetch('/api/diet/checkin', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ today }) })
+            .then((r) => r.json()).then((c: { text?: string }) => { if (live && c.text) setMsgs((m) => [...m, { role: 'assistant', content: c.text! }]); })
+            .catch(() => {}).finally(() => setCheckinBusy(false));
+        }
+      }
     }).catch(() => {});
     return () => { live = false; };
   }, [day, today]);
@@ -133,6 +145,16 @@ export function Diet() {
     void load(day);
   }
 
+  async function runCheckin() {
+    setCheckinBusy(true); setError(null);
+    try {
+      const res = await fetch('/api/diet/checkin', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ today, force: true }) });
+      const j = await res.json().catch(() => null);
+      if (!res.ok || !j?.text) throw new Error(j?.error ?? 'The check-in failed — try again.');
+      setMsgs((m) => [...m, { role: 'assistant', content: j.text }]);
+    } catch (e) { setError(e instanceof Error ? e.message : 'The check-in failed.'); } finally { setCheckinBusy(false); }
+  }
+
   async function newConversation() {
     await fetch('/api/diet', { method: 'DELETE' });
     setMsgs([]);
@@ -170,7 +192,7 @@ export function Diet() {
           day's whole log had to be scrolled past to reach the message box */}
       <div className="min-w-0 space-y-3">
         {s && <Summary s={s} />}
-        <CoachChat msgs={msgs} busy={busy} error={error} onSend={send} onNew={newConversation} />
+        <CoachChat msgs={msgs} busy={busy || checkinBusy} error={error} onSend={send} onNew={newConversation} onCheckin={runCheckin} checkinBusy={checkinBusy} />
       </div>
       <div className="min-w-0">
         {s ? <Tracker s={s} day={day} today={today} setDay={setDay} onRemove={removeEntry} onSaved={() => load(day)} /> : <div className="card card-pad muted text-sm">Loading…</div>}
@@ -329,9 +351,11 @@ function TargetsForm({ p, onDone }: { p: Profile; onDone: () => void }) {
       </div>
     </label>
   );
+  const num = (x: string | number) => (x === '' ? null : Number(x));
+  // protein and carbs 4 kcal/g, fat 9: say so when the macros and the calories disagree, and offer a fix
+  const off = targetsMismatch({ calories: num(v.calories), protein: num(v.protein), fat: num(v.fat), carbs: num(v.carbs) });
   async function save() {
     setSaving(true);
-    const num = (x: string | number) => (x === '' ? null : Number(x));
     await fetch('/api/diet/profile', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ calories: num(v.calories), protein: num(v.protein), fat: num(v.fat), carbs: num(v.carbs) }) });
     setSaving(false);
     onDone();
@@ -341,6 +365,15 @@ function TargetsForm({ p, onDone }: { p: Profile; onDone: () => void }) {
       <div className="grid grid-cols-2 gap-3">
         {field('calories', 'Calories', 'kcal')}{field('protein', 'Protein', 'g')}{field('fat', 'Fat', 'g')}{field('carbs', 'Carbs', 'g')}
       </div>
+      {off && (
+        <div role="alert" className="space-y-2 rounded-lg border border-[color-mix(in_srgb,var(--warn,#e0b45c)_45%,transparent)] bg-[color-mix(in_srgb,var(--warn,#e0b45c)_10%,transparent)] p-2.5 text-xs">
+          <p>These don&apos;t add up: P {v.protein} g × 4 + F {v.fat} g × 9 + C {v.carbs} g × 4 = <b>{off.macroKcal} kcal</b>, not {off.calories}. Hitting the macros means eating {Math.abs(off.macroKcal - off.calories)} kcal {off.macroKcal > off.calories ? 'more' : 'less'} than planned.</p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setV({ ...v, carbs: off.carbsForCalories })} className="btn btn-secondary btn-sm">Carbs → {off.carbsForCalories} g (keep {off.calories} kcal)</button>
+            <button onClick={() => setV({ ...v, calories: off.macroKcal })} className="btn btn-ghost btn-sm">Calories → {off.macroKcal} (keep macros)</button>
+          </div>
+        </div>
+      )}
       <p className="faint text-xs">Or ask the coach to work them out from your height, weight and goal.</p>
       <div className="flex gap-2">
         <button onClick={save} disabled={saving} className="btn btn-primary btn-sm flex-1">{saving ? 'Saving…' : 'Save'}</button>
@@ -371,7 +404,7 @@ function Logged({ actions }: { actions: DietAction[] }) {
   );
 }
 
-function CoachChat({ msgs, busy, error, onSend, onNew }: { msgs: Msg[]; busy: boolean; error: string | null; onSend: (t: string, photos?: string[]) => void; onNew: () => void }) {
+function CoachChat({ msgs, busy, error, onSend, onNew, onCheckin, checkinBusy }: { msgs: Msg[]; busy: boolean; error: string | null; onSend: (t: string, photos?: string[]) => void; onNew: () => void; onCheckin: () => void; checkinBusy: boolean }) {
   const [input, setInput] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -473,7 +506,11 @@ function CoachChat({ msgs, busy, error, onSend, onNew }: { msgs: Msg[]; busy: bo
         />
         <button onClick={() => submit(input)} disabled={busy || (!input.trim() && !photos.length)} className="btn btn-primary shrink-0">{busy ? '…' : 'Send'}</button>
       </div>
-      {msgs.length > 0 && <button onClick={onNew} disabled={busy} className="faint self-start text-xs hover:text-[var(--ink)]">Start a new conversation (your log stays)</button>}
+      {checkinBusy && <p className="muted ft-caret text-sm">📋 Writing your weekly check-in</p>}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {msgs.length > 0 ? <button onClick={onNew} disabled={busy} className="faint text-xs hover:text-[var(--ink)]">Start a new conversation (your log stays)</button> : <span />}
+        <button onClick={onCheckin} disabled={busy} className="btn btn-ghost btn-sm text-xs" title="The coach reviews your last 7 days and suggests what to change">📋 Weekly check-in</button>
+      </div>
     </div>
   );
 }

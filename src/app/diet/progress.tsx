@@ -168,6 +168,7 @@ function Numbers({ profile: p, advice: a, onChanged }: { profile: FullProfile; a
         {a.safeRateKgPerWeek && <li>A good pace for your goal: <b className="text-[var(--ink)]">{a.safeRateKgPerWeek[0]} to {a.safeRateKgPerWeek[1]} kg</b> a week.</li>}
         {a.adherence && p?.calories && <li>Last 7 days: {a.adherence.daysLogged} logged, {a.adherence.daysOnTarget} within 10% of your calories, protein {a.adherence.avgProtein} g/day{p.protein ? ` (target ${p.protein})` : ''}.</li>}
         {a.goalEta && <li>At this rate you reach {p?.goalWeightKg} kg around <b className="text-[var(--ink)]">{fmtDay(a.goalEta.date)}</b>.</li>}
+        {a.targetsMismatch && <li className="text-[var(--warn,#e0b45c)]">Your targets don&apos;t add up: the macros come to {a.targetsMismatch.macroKcal} kcal, not {a.targetsMismatch.calories}. Fix them under Coach → Edit targets, or use the recommendation below.</li>}
         {a.missing.length > 0 && <li className="text-[var(--warn,#e0b45c)]">Missing for better numbers: {a.missing.join(', ')}.</li>}
       </ul>
       {s && (

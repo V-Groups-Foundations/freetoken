@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advise, adviceLines, bmr, goalKind, weeklyTrend } from '@/diet/advisor';
+import { advise, adviceLines, bmr, goalKind, targetsMismatch, weeklyTrend } from '@/diet/advisor';
 import { parsePhysique, physiquePrompt } from '@/diet/physique';
 import { coachSystemPrompt } from '@/diet/protocol';
 import { addPhoto, coachState, deletePhoto, dietState, listPhotos, readPhoto, saveAnalysis, shiftDay, updateProfile, setWeight } from '@/diet/service';
@@ -61,6 +61,17 @@ describe('advisor numbers', () => {
   it('no goal date when the trend goes the wrong way', () => {
     const up = [{ day: shiftDay(today, -14), kg: 93 }, { day: today, kg: 94 }];
     expect(advise(me, up, [], today).goalEta).toBeNull();
+  });
+});
+
+describe('targets that add up', () => {
+  it('catches macros that come to a different calorie total, and offers carbs that fit', () => {
+    // 200 P, 260 C, 55 F = 800 + 1040 + 495 = 2335 kcal against 2000
+    expect(targetsMismatch({ calories: 2000, protein: 200, fat: 55, carbs: 260 })).toEqual({ macroKcal: 2335, calories: 2000, carbsForCalories: 176 });
+    expect(targetsMismatch({ calories: 2000, protein: 175, fat: 55, carbs: 200 })).toBeNull(); // 1995: close enough
+    expect(targetsMismatch({ calories: 2000, protein: 200 })).toBeNull(); // not all set
+    const a = advise({ ...me, calories: 2000, protein: 200, fat: 55, carbs: 260 }, weights, logs, today);
+    expect(adviceLines(a, me)).toMatch(/TARGETS DON'T ADD UP: P\/F\/C come to 2335 kcal/);
   });
 });
 

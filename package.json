@@ -40,7 +40,8 @@
     "desktop": "node scripts/desktop.mjs",
     "dev:all": "node scripts/desktop.mjs --with-server",
     "test:desktop": "npm --prefix desktop run test:all",
-    "claude": "node bin/freetoken.mjs run claude"
+    "claude": "node bin/freetoken.mjs run claude",
+    "vercel-build": "node scripts/vercel-migrate.mjs && next build"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.3",
