@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { loadCredentials } from '@/keys/service';
-import { sessionUserId } from '@/lib/session';
+import { resolveUserId } from '@/server/identity';
 import { getDeps } from '@/server/deps';
 import { synthesizeTTS, TTS_SERVICES } from '@/tts/synthesize';
 
@@ -10,7 +10,7 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const uid = await sessionUserId();
+  const uid = await resolveUserId(req); // a browser session or an ft_ API token (apps like V-Bot)
   if (!uid) return Response.json({ error: { message: 'Sign in first.' } }, { status: 401 });
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));

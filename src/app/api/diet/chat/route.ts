@@ -5,8 +5,9 @@ import { sessionUserId } from '@/lib/session';
 import { tapAssistant } from '@/server/stream';
 import { routeChat } from '@/router/execute';
 import { getDeps } from '@/server/deps';
-import { cleanReply, coachSystemPrompt, onlyAsking, parseDietBlocks, stripDietBlocks } from '@/diet/protocol';
-import { addDietMessage, applyDietActions, coachState, deleteDietMessage, listDietMessages, savedReply } from '@/diet/service';
+import { cleanReply, coachSystemPrompt, onlyAsking, parseDietBlocks, stripDietBlocks, todayLine } from '@/diet/protocol';
+import { addDietMessage, applyDietActions, coachState, deleteDietMessage, exactNumbers, getProfile, listDietMessages, listEntries, myFoods, savedReply } from '@/diet/service';
+import { portionLine } from '@/diet/portion';
 import { dayParam } from '@/diet/day';
 import { currentPlan, generatePlan, trainingCoachLines } from '@/diet/plan';
 import { wantsPlanChange } from '@/diet/training';
@@ -66,7 +67,18 @@ export async function POST(req: Request) {
     const actions = parseDietBlocks(text).map((a) => (asking ? { ...a, log: undefined, remove: undefined } : a));
     try {
       const applied = await applyDietActions(db, uid, today, actions, words);
-      await addDietMessage(db, uid, { role: 'assistant', content: savedReply(text, applied), provider });
+      // food logged or taken back: the day's line comes from the real log (the model's sums went wrong)
+      const day = applied.log?.length || applied.remove?.length
+        ? todayLine(await listEntries(db, uid, today), await getProfile(db, uid)) : undefined;
+      // "how much should I eat": the app sizes the foods the coach named from what's really left
+      const ask = actions.find((a) => a.portion)?.portion;
+      let portion: string | null = null;
+      if (ask) {
+        const known = await myFoods(db, uid);
+        portion = portionLine({ meal: ask.meal, foods: ask.foods, keep: (ask.keep ?? []).map((k) => exactNumbers(k, known)), eaten: await listEntries(db, uid, today), targets: await getProfile(db, uid) });
+      }
+      const lines = [day, portion].filter(Boolean).join('\n\n') || undefined;
+      await addDietMessage(db, uid, { role: 'assistant', content: savedReply(text, applied, lines), provider });
       // the coach asked for a plan change — or the message plainly asked for one and the coach forgot to
       const replan = applied.replan ?? (wantsPlanChange(words, (await currentPlan(db, uid))?.plan ?? null) ? words.slice(0, 500) : null);
       if (replan) {

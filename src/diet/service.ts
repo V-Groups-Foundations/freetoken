@@ -1,7 +1,8 @@
+import { exactItem } from './foods';
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
 import { dietEntries, dietMessages, dietPhotos, dietProfiles, dietWeights, workoutSets } from '@/db/schema';
-import { stripDietBlocks, sumTotals, type CoachState, type DietAction } from './protocol';
+import { stripDietBlocks, sumTotals, withoutModelTotals, type CoachState, type DietAction } from './protocol';
 import { advise, adviceLines } from './advisor';
 
 /** The calendar day `n` days before `day` (both YYYY-MM-DD). */
@@ -93,12 +94,12 @@ export async function dietState(db: DB, userId: string, day: string, today = day
 
 /** What the coach is told before it answers (yesterday and before, not today: today is listed item by item). */
 export async function coachState(db: DB, userId: string, today: string): Promise<CoachState> {
-  const s = await dietState(db, userId, today);
+  const [s, mine] = await Promise.all([dietState(db, userId, today), myFoods(db, userId)]);
   // the latest read of each pose, so the coach remembers what the photos showed
   const latest = new Map<string, (typeof s.photos)[number]>();
   for (const ph of s.photos) if (ph.analysis && !latest.has(ph.pose)) latest.set(ph.pose, ph);
   return {
-    today, profile: s.profile, entries: s.entries, week: s.week.filter((d) => d.day !== today), weights: s.weights.slice(-30),
+    today, myFoods: mine, profile: s.profile, entries: s.entries, week: s.week.filter((d) => d.day !== today), weights: s.weights.slice(-30),
     advice: adviceLines(s.advice, s.profile),
     physique: [...latest.values()].map((ph) => ({ day: ph.day, pose: ph.pose, bodyFat: bodyFatText(ph), summary: ph.summary ?? '' })),
   };
@@ -152,6 +153,7 @@ const foodWords = (name: string) => name.toLowerCase().match(/[\p{L}]{4,}/gu) ??
  */
 export async function applyDietActions(db: DB, userId: string, today: string, actions: DietAction[], userText = '') {
   const said = userText.toLowerCase();
+  let known: Awaited<ReturnType<typeof myFoods>> | undefined;
   const applied: DietAction = {};
   const profile = await getProfile(db, userId);
   for (const a of actions) {
@@ -164,7 +166,9 @@ export async function applyDietActions(db: DB, userId: string, today: string, ac
         if (hit && await deleteEntry(db, userId, hit.id)) { (applied.remove ??= []).push(hit.name); todays.splice(todays.indexOf(hit), 1); }
       }
     }
-    for (const i of a.log ?? []) {
+    for (const raw of a.log ?? []) {
+      // exact numbers: a table food with an amount, else the same food as they logged before
+      const i = exactNumbers(raw, known ??= await myFoods(db, userId));
       const day = i.day ?? today;
       const already = (await listEntries(db, userId, day)).some((e) => e.name.toLowerCase() === i.name.toLowerCase() && Math.round(e.kcal) === Math.round(i.kcal));
       if (already && !foodWords(i.name).some((w) => said.includes(w))) continue;
@@ -201,8 +205,38 @@ export async function applyDietActions(db: DB, userId: string, today: string, ac
 }
 
 /** A reply as it's saved: its words, then one block of what was really recorded (none if nothing was). */
-export function savedReply(text: string, applied: DietAction) {
-  const words = stripDietBlocks(text);
+const sameFood = (s: string) => s.toLowerCase().replace(/[(（][^)）]*[)）]/g, ' ').replace(/[^\p{L}\p{N}]+/gu, '');
+
+/**
+ * The foods this user has logged in the last 90 days, most often first (their SAVAS latte, their usual
+ * rice): the coach reuses these numbers, and the same food logged again gets them exactly.
+ */
+export async function myFoods(db: DB, userId: string, limit = 40) {
+  const rows = await db.select({ name: dietEntries.name, kcal: dietEntries.kcal, protein: dietEntries.protein, fat: dietEntries.fat, carbs: dietEntries.carbs, day: dietEntries.day, id: dietEntries.id })
+    .from(dietEntries).where(and(eq(dietEntries.userId, userId), gte(dietEntries.day, shiftDay(new Date().toISOString().slice(0, 10), -90))))
+    .orderBy(desc(dietEntries.day), desc(dietEntries.id)).limit(1500);
+  const seen = new Map<string, { name: string; kcal: number; protein: number; fat: number; carbs: number; n: number }>();
+  for (const r of rows) {
+    const k = sameFood(r.name);
+    const hit = seen.get(k);
+    if (hit) hit.n++; // the newest numbers win (rows are newest first)
+    else seen.set(k, { name: r.name, kcal: r.kcal, protein: r.protein, fat: r.fat, carbs: r.carbs, n: 1 });
+  }
+  return [...seen.values()].sort((a, b) => b.n - a.n).slice(0, limit).map((f) => ({ name: f.name, kcal: f.kcal, protein: f.protein, fat: f.fat, carbs: f.carbs }));
+}
+
+/** A logged item with exact numbers: from the food table when it's a table food with an amount, else
+ *  copied from the same food logged before (same name), else as the model gave it. */
+export function exactNumbers<T extends { name: string; kcal: number; protein: number; fat: number; carbs: number }>(item: T, known: { name: string; kcal: number; protein: number; fat: number; carbs: number }[]): T {
+  const fromTable = exactItem(item);
+  if (fromTable !== item) return fromTable;
+  const k = sameFood(item.name);
+  const same = known.find((f) => sameFood(f.name) === k);
+  return same ? { ...item, kcal: same.kcal, protein: same.protein, fat: same.fat, carbs: same.carbs } : item;
+}
+
+export function savedReply(text: string, applied: DietAction, today?: string) {
+  const words = today ? `${withoutModelTotals(stripDietBlocks(text))}\n\n${today}` : stripDietBlocks(text);
   return Object.keys(applied).length ? `${words}\n\n\`\`\`diet\n${JSON.stringify(applied)}\n\`\`\`` : words;
 }
 

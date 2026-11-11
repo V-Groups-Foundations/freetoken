@@ -2,13 +2,13 @@ import { loadCredentials } from '@/keys/service';
 import { getProvider } from '@/providers/registry';
 import { STT_PROVIDERS, pickModality } from '@/router/modalities';
 import { callTranscription } from '@/providers/client';
-import { sessionUserId } from '@/lib/session';
+import { resolveUserId } from '@/server/identity';
 import { getDeps } from '@/server/deps';
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25 MB (Whisper API limit)
 
 export async function POST(req: Request) {
-  const uid = await sessionUserId();
+  const uid = await resolveUserId(req); // a browser session or an ft_ API token (apps like V-Bot)
   if (!uid) return Response.json({ error: { message: 'Sign in first.' } }, { status: 401 });
 
   const form = await req.formData().catch(() => null);

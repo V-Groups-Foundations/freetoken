@@ -1,11 +1,11 @@
 import { loadCredentials } from '@/keys/service';
-import { sessionUserId } from '@/lib/session';
+import { resolveUserId } from '@/server/identity';
 import { getDeps } from '@/server/deps';
 import { listVoices, TTS_SERVICES } from '@/tts/synthesize';
 
 /** List the selectable voices for the user's connected TTS service (first connected one wins). */
-export async function GET() {
-  const uid = await sessionUserId();
+export async function GET(req: Request) {
+  const uid = await resolveUserId(req); // a browser session or an ft_ API token
   if (!uid) return Response.json({ error: { message: 'Sign in first.' } }, { status: 401 });
 
   const deps = getDeps();
