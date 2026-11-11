@@ -5,7 +5,7 @@ import { api } from "./api";
 import { languageOf, monaco } from "./monaco";
 
 export interface Tab { path: string; text: string; saved: string }
-export interface Review { path: string; original: string; current: string }
+export interface Review { path: string; original: string; current: string; before?: string; accept?: string; reject?: string | null }
 export interface Selection { path: string; start: number; end: number; text: string }
 
 type Ed = monaco.editor.IStandaloneCodeEditor;
@@ -87,10 +87,10 @@ export function EditorArea(props: {
     return (
       <section className="editor-area" aria-label="Review change">
         <div className="review-head">
-          <span>Review: <b>{review.path}</b> <span className="muted">(left: before agent · right: now)</span></span>
+          <span>Review: <b>{review.path}</b> <span className="muted">(left: {review.before ?? "before agent"} · right: now)</span></span>
           <span className="spacer" />
-          <button className="btn" onClick={() => props.onRejectReview(review.path)}>Reject</button>
-          <button className="btn primary" onClick={() => props.onAcceptReview(review.path)}>Accept</button>
+          {review.reject !== null && <button className="btn" onClick={() => props.onRejectReview(review.path)}>{review.reject ?? "Reject"}</button>}
+          <button className="btn primary" onClick={() => props.onAcceptReview(review.path)}>{review.accept ?? "Accept"}</button>
           <button className="btn ghost" aria-label="Close review" onClick={props.onCloseReview}>✕</button>
         </div>
         <DiffEditor keepCurrentOriginalModel keepCurrentModifiedModel theme="cursor-dark" original={review.original} modified={review.current} language={languageOf(review.path)}

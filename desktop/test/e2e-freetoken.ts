@@ -545,9 +545,12 @@ async function main() {
       const panel = page.getByRole("dialog", { name: "Benchmark" });
       await panel.getByRole("group", { name: "Models to benchmark" }).getByRole("checkbox").first().waitFor({ timeout: 10000 });
       await panel.getByRole("button", { name: /^Run benchmark \(1 model\)/ }).click();
-      await panel.locator(".bench-table td.fail").nth(3).waitFor({ timeout: 120000 }); // all four tasks graded
+      // the run is over when Cancel turns back into Run (every task graded, however many there are)
+      await panel.getByRole("button", { name: "Cancel" }).waitFor({ timeout: 10000 });
+      await page.locator(".bench-status", { hasText: "Benchmark running" }).waitFor({ timeout: 10000 }); // visible with the panel closed too
+      await panel.getByRole("button", { name: /^Run benchmark/ }).waitFor({ timeout: 240000 });
       if (await panel.locator(".bench-table td.pass").count()) throw new Error("a model that changes nothing passed a task");
-      await panel.locator(".bench-result", { hasText: "0/4" }).waitFor();
+      await panel.locator(".bench-result", { hasText: /^0\/\d+/ }).waitFor();
       await page.screenshot({ path: path.join(shots, "benchmark.png") });
       await panel.getByRole("button", { name: "Close benchmark" }).click();
     });

@@ -7,25 +7,37 @@ import path from "node:path";
 
 let root: string | null = null;
 let ignore: IgnoreMatcher = () => false;
+let aiIgnore: IgnoreMatcher = () => false;
 
 // A task can work in its own folder without switching the app's (the model benchmark runs each task
 // in a throwaway project while the editor, terminal and chat stay on the user's): everything that
 // task starts, however deep, sees this folder instead.
-const scoped = new AsyncLocalStorage<{ root: string; ignore: IgnoreMatcher }>();
+const scoped = new AsyncLocalStorage<{ root: string; ignore: IgnoreMatcher; aiIgnore: IgnoreMatcher }>();
 /** Run `fn` (and everything it starts) with `dir` as the workspace. */
 export function withRoot<T>(dir: string, fn: () => T): T {
   const real = fs.realpathSync(path.resolve(dir));
-  return scoped.run({ root: real, ignore: loadIgnore(real) }, fn);
+  return scoped.run({ root: real, ignore: loadIgnore(real), aiIgnore: loadIgnore(real, [".cursorignore"]) }, fn);
 }
 export const getRoot = () => scoped.getStore()?.root ?? root;
 const currentIgnore = () => scoped.getStore()?.ignore ?? ignore;
 export function setRoot(dir: string) {
   root = fs.realpathSync(path.resolve(dir));
   ignore = loadIgnore(root);
+  aiIgnore = loadIgnore(root, [".cursorignore"]);
 }
 /** Close the folder (back to no project open). */
-export function clearRoot() { root = null; ignore = () => false; }
-export const reloadIgnore = () => { if (root) ignore = loadIgnore(root); };
+export function clearRoot() { root = null; ignore = () => false; aiIgnore = () => false; }
+export const reloadIgnore = () => { if (root) { ignore = loadIgnore(root); aiIgnore = loadIgnore(root, [".cursorignore"]); } };
+/**
+ * Whether the user hid this path from the AI with .cursorignore (it or a folder above it). The agent can't
+ * read, edit or attach it. (.gitignore alone doesn't hide a file from the agent: build output and local
+ * config are often ignored by git yet are what the agent needs to look at.)
+ */
+export function hiddenFromAI(rel: string) {
+  const parts = rel.split(path.sep).join("/").split("/").filter(Boolean);
+  const m = scoped.getStore()?.aiIgnore ?? aiIgnore;
+  return parts.some((_, i) => m(parts.slice(0, i + 1).join("/"), i < parts.length - 1));
+}
 export const isIgnored = (rel: string, isDir = false) => {
   const p = rel.split(path.sep).join("/");
   return p.split("/").some((seg) => ALWAYS_HIDDEN.has(seg)) || currentIgnore()(p, isDir);

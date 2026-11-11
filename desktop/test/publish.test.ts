@@ -47,9 +47,29 @@ function fakeExec(answers: { loggedIn: boolean; fail?: RegExp }) {
 
   await check("staging the project folder leaves out node_modules, .git, .v-run, .env files, notes and package files", () => {
     const root = project({ "index.html": "<h1>hi</h1>", "app.js": "x", "img/a.png": "png", "node_modules/x/i.js": "", ".git/HEAD": "", ".v-run/checks/a.json": "{}", ".env": "SECRET=1", "README.md": "", "package.json": "{}", "V.md": "" });
-    const into = pub.stageSite(root, path.join(root, ".v-run", "tmp", "site"));
+    const into = pub.stageSite(root, path.join(root, ".v-run", "tmp", "site")).dir;
     const got = fs.readdirSync(into).sort();
     return JSON.stringify(got) === JSON.stringify(["app.js", "img", "index.html"]) || JSON.stringify(got);
+  });
+
+  await check("secrets never go online, even inside a build folder; .gitignored files stay behind when it's the project folder", () => {
+    const root = project({ "dist/index.html": "<h1>hi</h1>", "dist/app.js": "x", "dist/.npmrc": "//registry.npmjs.org/:_authToken=abc", "dist/keys/server.pem": "-----BEGIN", "dist/config/credentials.json": "{}", "dist/prod.env": "A=1", "dist/id_rsa": "k", "dist/secrets.yml": "a: 1", "dist/my.secret.json": "{}", "dist/style.css": "b{}" });
+    const staged = pub.stageSite(path.join(root, "dist"), path.join(root, ".v-run", "tmp", "site"));
+    const files: string[] = [];
+    const walk = (d: string, rel = "") => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) walk(path.join(d, e.name), `${rel}${e.name}/`); else files.push(rel + e.name); } };
+    walk(staged.dir);
+    const own = project({ "index.html": "x", "private/notes.html": "x", "a.js": "x" });
+    const ownStaged = pub.stageSite(own, path.join(own, ".v-run", "tmp", "site"), { ignored: (r) => r === "private" || r.startsWith("private/") }).dir;
+    const leaked = files.filter((f) => !["app.js", "index.html", "style.css"].includes(f));
+    const ok = !leaked.length && staged.skipped.length === 7 && !fs.existsSync(path.join(ownStaged, "private")) && fs.existsSync(path.join(ownStaged, "a.js"));
+    return ok || JSON.stringify({ leaked, skipped: staged.skipped });
+  });
+
+  await check("a project path with $(...) or quotes in it can't run anything in the deploy command", () => {
+    const win = process.platform === "win32";
+    const p = win ? String.raw`C:\x\$(calc)\it's` : "/x/$(touch y)/it's";
+    const q = pub.shellPath(p);
+    return (win ? q === String.raw`'C:\x\$(calc)\it''s'` : q === String.raw`'/x/$(touch y)/it'\''s'`) || q;
   });
 
   await check("Cloudflare Pages: signs in when needed, creates the project (ok if it exists), deploys, records the address", async () => {
@@ -59,7 +79,7 @@ function fakeExec(answers: { loggedIn: boolean; fail?: RegExp }) {
     const rec = await pub.publish({ provider: "cloudflare", name: "My Tracker", build: null, dir: "." }, (l) => log.push(l), exec as any);
     const saved = pub.lastPublish(root);
     return (rec.url === "https://my-tracker.pages.dev" && saved?.url === rec.url
-      && ran.some((c) => c.endsWith("wrangler@4 login")) && ran.some((c) => /pages deploy ".*site" --project-name my-tracker --branch main/.test(c))
+      && ran.some((c) => c.endsWith("wrangler@4 login")) && ran.some((c) => /pages deploy '.*site' --project-name my-tracker --branch main/.test(c))
       && log.at(-1) === "Published: https://my-tracker.pages.dev") || JSON.stringify({ rec, ran });
   });
 
@@ -68,7 +88,7 @@ function fakeExec(answers: { loggedIn: boolean; fail?: RegExp }) {
     const { exec, ran } = fakeExec({ loggedIn: true });
     const rec = await pub.publish({ provider: "netlify", name: "my-tracker", build: "npm run build", dir: "dist" }, () => {}, exec as any);
     return (rec.url === "https://my-tracker.netlify.app" && ran[0] === "npm run build" && !ran.some((c) => /login/.test(c))
-      && ran.some((c) => /deploy --prod --no-build --json --dir ".*dist" --site-name my-tracker/.test(c))) || JSON.stringify({ rec, ran });
+      && ran.some((c) => /deploy --prod --no-build --json --dir '.*site' --site-name my-tracker/.test(c))) || JSON.stringify({ rec, ran });
   });
 
   await check("failures say what went wrong: a failed build, no index.html", async () => {

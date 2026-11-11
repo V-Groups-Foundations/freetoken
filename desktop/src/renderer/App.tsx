@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SourceControl } from "./Git";
 import { api, type AppStatus, type Entry, type FtViewState, type GrepHit, type IndexStatus, type PreviewState, type Settings, type ShareInfo, type PublishPlan } from "./api";
 import { ChatPanel } from "./Chat";
 import { Banner } from "./Logo";
@@ -46,7 +47,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [review, setReview] = useState<(Review & { sid: string }) | null>(null);
-  const [side, setSide] = useState<"files" | "search">("files");
+  const [side, setSide] = useState<"files" | "search" | "git">("files");
   const [quickOpen, setQuickOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // the model answering right now (the chat announces it; FreeToken may switch between steps)
@@ -179,6 +180,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
       if (mod && !e.shiftKey && e.key.toLowerCase() === "o") { e.preventDefault(); pickFolder(); }
       else if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); setQuickOpen(true); }
       else if (mod && e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); setSide("search"); }
+      else if (mod && e.shiftKey && e.key.toLowerCase() === "g") { e.preventDefault(); setSide("git"); }
       else if (mod && e.key === "`") { e.preventDefault(); setTermOpen((v) => !v); }
       else if (mod && e.key === ",") { e.preventDefault(); setSettingsOpen(true); }
       // zoom: Ctrl+= / Ctrl+- / Ctrl+0 (on Windows and Linux there's no menu that carries them)
@@ -217,6 +219,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
       <nav className="activity" aria-label="Views">
         <button className={side === "files" ? "on" : ""} onClick={() => setSide("files")} title="Explorer" aria-label="Explorer">🗀</button>
         <button className={side === "search" ? "on" : ""} onClick={() => setSide("search")} title="Search (Ctrl+Shift+F)" aria-label="Search">⌕</button>
+        <button className={side === "git" ? "on" : ""} onClick={() => setSide("git")} title="Source control (Ctrl+Shift+G)" aria-label="Source control">⑂</button>
         <button onClick={pickFolder} title="Open folder (Ctrl+O)" aria-label="Open folder">📂</button>
         <button onClick={onCloseFolder} title="Close folder" aria-label="Close folder">⏏</button>
         <button className={ftPane !== null ? "on ft-act" : "ft-act"} onClick={() => (ftPane !== null ? setFtPane(null) : openFt("hub"))} title="FreeToken — your models, projects and usage" aria-label="FreeToken"><img src={ftMark} alt="" className="act-img" /></button>
@@ -228,7 +231,11 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
       <aside className="sidebar">
         {side === "files"
           ? <Explorer root={root} version={treeVersion} active={active} onOpen={openFile} onError={setToast} />
-          : <SearchPanel onOpen={openFile} />}
+          : side === "git"
+            ? <SourceControl version={treeVersion} onToast={setToast}
+                onDiff={async (p) => { try { const d = await api.gitDiff(p); setReview({ sid: "git", path: p, original: d.original, current: d.current, before: "last commit", accept: "Stage", reject: null }); } catch (e) { setToast((e as Error).message); } }}
+                onChanged={(paths) => reloadFromDisk(paths)} />
+            : <SearchPanel onOpen={openFile} />}
       </aside>
       <main className={`main${termOpen && panelExpanded ? " panel-expanded" : ""}${ftPane !== null ? " ft-mode" : ""}`}>
         {ftPane === "hub" && <FreeTokenHub onSignIn={() => openFt("/v-run")} onClose={() => setFtPane(null)} onToast={setToast} />}
@@ -238,7 +245,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
           onChange={(p, text) => setTabs((ts) => ts.map((t) => (t.path === p ? { ...t, text } : t)))}
           onSave={save}
           onAddToChat={(s) => { setSelection(s.text ? s : null); setChatFocus((n) => n + 1); }}
-          onAcceptReview={async (p) => { await api.accept(review!.sid, p); setReview(null); setPendingVersion((v) => v + 1); }}
+          onAcceptReview={async (p) => { if (review!.sid === "git") { await api.gitStage([p]).catch((e) => setToast((e as Error).message)); setReview(null); setTreeVersion((v) => v + 1); return; } await api.accept(review!.sid, p); setReview(null); setPendingVersion((v) => v + 1); }}
           onRejectReview={async (p) => { await api.reject(review!.sid, p); setReview(null); reloadFromDisk([p]); setPendingVersion((v) => v + 1); }}
           onCloseReview={() => setReview(null)} />
         {termOpen && <BottomPanel tab={panelTab} onTab={setPanelTab} covered={quickOpen || settingsOpen} onClose={() => { setTermOpen(false); setPanelExpanded(false); }}
@@ -249,6 +256,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
       <footer className="status">
         <button className="linklike" onClick={pickFolder} title={`${root} — click to open another folder (Ctrl+O)`}>{root.split(/[\\/]/).pop()}</button>
         <span className="spacer" />
+        <BenchStatus />
         <button className="linklike" onClick={() => api.reindex()} title="Re-index codebase">
           {index.state === "indexing" ? "Indexing…" : index.state === "error" ? `Index error: ${index.message}` : `Indexed ${index.files} files · ${index.chunks} chunks`}
         </button>
@@ -259,6 +267,28 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenFreeToken={(route) => { setSettingsOpen(false); openFt(route); }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
+  );
+}
+
+/**
+ * A benchmark keeps running when its panel is closed, and chat waits for it: the status bar says so, and
+ * a click opens the panel (to watch or cancel it).
+ */
+function BenchStatus() {
+  const [run, setRun] = useState<{ graded: number; current: string | null } | null>(null);
+  useEffect(() => {
+    api.benchProgress().then((p) => { if (p) setRun({ graded: p.results.length, current: p.current ? `${shortModel(p.current.model)} · ${p.current.task}` : null }); }).catch(() => {});
+    return api.onBenchEvent((e) => {
+      if (e.type === "start") setRun((r) => ({ graded: r?.graded ?? 0, current: `${shortModel(e.model)} · ${e.task}` }));
+      else if (e.type === "result") setRun((r) => ({ graded: (r?.graded ?? 0) + 1, current: r?.current ?? null }));
+      else setRun(null);
+    });
+  }, []);
+  if (!run) return null;
+  return (
+    <button className="linklike bench-status" onClick={() => window.dispatchEvent(new CustomEvent("vrun-open-benchmark"))} title="A model benchmark is running — chat waits until it's done. Click to watch or cancel it.">
+      ⏱ Benchmark running · {run.graded} graded{run.current ? ` · ${run.current}` : ""}
+    </button>
   );
 }
 
@@ -368,6 +398,45 @@ function QuickOpen({ onClose, onPick }: { onClose: () => void; onPick: (p: strin
   );
 }
 
+const BUDGETS: [number, string][] = [[1_000_000, "1M tokens"], [2_000_000, "2M tokens"], [5_000_000, "5M tokens (default)"], [10_000_000, "10M tokens"], [25_000_000, "25M tokens"], [0, "No limit"]];
+const lines = (t: string) => t.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+
+/** Settings → Safety: what runs without asking, what never runs, how much one task may use, the web reader. */
+function SafetySettings() {
+  const [open, setOpen] = useState(false);
+  const [allow, setAllow] = useState("");
+  const [deny, setDeny] = useState("");
+  const [budget, setBudget] = useState(5_000_000);
+  const [reader, setReader] = useState(true);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    api.safetyGet().then((x) => { setAllow(x.rules.allow.join("\n")); setDeny(x.rules.deny.join("\n")); setBudget(x.tokenBudget); setReader(x.webReader); }).catch(() => {});
+  }, [open]);
+  async function save() {
+    try { await api.safetySet({ rules: { allow: lines(allow), deny: lines(deny) }, tokenBudget: budget, webReader: reader }); setMsg("Saved"); }
+    catch (e) { setMsg((e as Error).message); }
+  }
+  return (
+    <details className="safety" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary><b>Safety &amp; limits</b> <span className="muted small">— commands, token budget, web reading</span></summary>
+      <label>Run without asking (one per line — a command start like <code>npm test</code>, or a pattern like <code>npx tsc*</code>)
+        <textarea className="field" aria-label="Commands that run without asking" rows={3} value={allow} onChange={(e) => setAllow(e.target.value)} placeholder={"npm test\ngit status\nnode --test"} />
+      </label>
+      <label>Never run (the agent is told these are blocked)
+        <textarea className="field" aria-label="Commands that never run" rows={3} value={deny} onChange={(e) => setDeny(e.target.value)} placeholder={"git push\nrm -rf*\nRemove-Item -Recurse*"} />
+      </label>
+      <label>Token budget per task (the agent wraps up at 85% and stops at 100%)
+        <select className="field" aria-label="Token budget per task" value={budget} onChange={(e) => setBudget(Number(e.target.value))}>
+          {[...new Map([...BUDGETS, ...(BUDGETS.some(([n]) => n === budget) ? [] : [[budget, `${budget.toLocaleString()} tokens`] as [number, string]])]).entries()].map(([n, label]) => <option key={n} value={n}>{label}</option>)}
+        </select>
+      </label>
+      <label className="check"><input type="checkbox" checked={reader} onChange={(e) => setReader(e.target.checked)} /> Read pages that need JavaScript through r.jina.ai (a third-party reader; the page address is sent to it)</label>
+      <div className="row"><span className="spacer" />{msg && <span className="muted" role="status">{msg}</span>}<button className="btn" onClick={save}>Save safety settings</button></div>
+    </details>
+  );
+}
+
 function SettingsDialog({ onClose, onOpenFreeToken }: { onClose: () => void; onOpenFreeToken: (route: string) => void }) {
   const [s, setS] = useState<Settings | null>(null);
   const [provider, setProvider] = useState<Settings["provider"]>("anthropic");
@@ -449,6 +518,7 @@ function SettingsDialog({ onClose, onOpenFreeToken }: { onClose: () => void; onO
           </>
         )}
         <p className="muted">Keys and tokens are stored encrypted with your OS keychain (Electron safeStorage).</p>
+        <SafetySettings />
         {msg && <div className="muted" role="status">{msg}</div>}
         <div className="row">
           {provider === "anthropic" && s?.hasKey && <button className="btn" onClick={async () => { await api.setSettings({ apiKey: null }); setS(await api.getSettings()); setMsg("Key removed"); }}>Remove key</button>}
@@ -919,31 +989,70 @@ function SharePanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+/**
+ * The terminal: like a shell, `cd` and environment variables carry over from one command to the next;
+ * while a command runs, what you type goes to it (answers to its questions). Ctrl+C stops it, Ctrl+D
+ * ends its input, ↑/↓ go through earlier commands.
+ */
+const TERM_ID = "main";
 function Terminal() {
   const [lines, setLines] = useState<string>("");
   const [cmd, setCmd] = useState("");
-  const [running, setRunning] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [cwd, setCwd] = useState("");
+  const history = useRef<string[]>([]);
+  const histPos = useRef(-1);
   const out = useRef<HTMLPreElement>(null);
   useEffect(() => {
-    const a = api.onTermData(({ data }) => setLines((l) => (l + data).slice(-200_000)));
-    const b = api.onTermExit(({ id, code }) => { setLines((l) => `${l}\n[exit ${code}]\n`); setRunning((r) => (r === id ? null : r)); });
+    api.termCwd(TERM_ID).then(setCwd).catch(() => {});
+    const a = api.onTermData(({ id, data }) => { if (id === TERM_ID) setLines((l) => (l + data).slice(-200_000)); });
+    const b = api.onTermExit(({ id, code, cwd: dir }) => {
+      if (id !== TERM_ID) return;
+      if (code) setLines((l) => `${l}${l.endsWith("\n") ? "" : "\n"}[exit ${code}]\n`);
+      if (dir) setCwd(dir);
+      setRunning(false);
+    });
     return () => { a(); b(); };
   }, []);
   useEffect(() => { out.current?.scrollTo({ top: out.current.scrollHeight }); }, [lines]);
-  async function run() {
-    if (!cmd.trim() || running) return;
-    const id = `t${++termSeq}`;
-    setLines((l) => `${l}> ${cmd}\n`);
-    setRunning(id); setCmd("");
-    try { await api.termRun(id, cmd); } catch (e) { setLines((l) => `${l}${(e as Error).message}\n`); setRunning(null); }
+  const short = cwd.split(/[\\/]/).slice(-2).join("/");
+  async function submit() {
+    if (running) {
+      // a line of input for the running program
+      setLines((l) => `${l}${cmd}\n`);
+      setCmd("");
+      await api.termInput(TERM_ID, cmd).catch(() => {});
+      return;
+    }
+    if (!cmd.trim()) return;
+    history.current = [...history.current.filter((h) => h !== cmd), cmd].slice(-100);
+    histPos.current = -1;
+    setLines((l) => `${l}${short} ❯ ${cmd}\n`);
+    setRunning(true); setCmd("");
+    try { await api.termRun(TERM_ID, cmd); } catch (e) { setLines((l) => `${l}${(e as Error).message}\n`); setRunning(false); }
+  }
+  function onKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
+    else if (e.ctrlKey && e.key.toLowerCase() === "c" && running && !(e.currentTarget.selectionEnd! > e.currentTarget.selectionStart!)) { e.preventDefault(); api.termKill(TERM_ID); }
+    else if (e.ctrlKey && e.key.toLowerCase() === "d" && running) { e.preventDefault(); api.termEnd(TERM_ID); setLines((l) => `${l}^D\n`); }
+    else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !running && history.current.length) {
+      e.preventDefault();
+      const h = history.current;
+      const pos = histPos.current < 0 ? h.length : histPos.current;
+      const next = e.key === "ArrowUp" ? Math.max(0, pos - 1) : pos + 1;
+      histPos.current = next >= h.length ? -1 : next;
+      setCmd(next >= h.length ? "" : h[next]);
+    }
   }
   return (
     <section className="terminal" aria-label="Terminal">
-      <pre ref={out}>{lines || "Run a command in the project folder.\n"}</pre>
+      <pre ref={out}>{lines || "Run a command in the project folder. cd and environment variables carry over; while a command runs, type its input here (Ctrl+C stops it, Ctrl+D ends its input).\n"}</pre>
       <div className="term-input">
-        <span>&gt;</span>
-        <input className="field" aria-label="Terminal command" value={cmd} onChange={(e) => setCmd(e.target.value)} onKeyDown={(e) => e.key === "Enter" && run()} placeholder={running ? "Running…" : "e.g. npm test"} />
-        {running && <button className="btn small" onClick={() => api.termKill(running)}>Stop</button>}
+        <span className="muted small term-cwd" title={cwd}>{running ? "input ❯" : `${short} ❯`}</span>
+        <input className="field" aria-label="Terminal command" value={cmd} onChange={(e) => setCmd(e.target.value)} onKeyDown={onKey}
+          placeholder={running ? "Running — type its input and press Enter (Ctrl+C stops it)" : "e.g. npm test"} />
+        {running && <button className="btn small" onClick={() => api.termEnd(TERM_ID)} title="End the program's input (Ctrl+D)">End input</button>}
+        {running && <button className="btn small" onClick={() => api.termKill(TERM_ID)} title="Stop it and everything it started (Ctrl+C)">Stop</button>}
         <button className="btn small ghost" onClick={() => setLines("")}>Clear</button>
       </div>
     </section>

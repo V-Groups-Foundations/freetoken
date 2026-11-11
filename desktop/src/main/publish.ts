@@ -7,8 +7,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { getRoot } from "./workspace";
-import { killTree, windowsShell } from "./runner";
+import { getRoot, isIgnored } from "./workspace";
+import { killTree, shellArgs, textOutput, windowsShell } from "./runner";
 
 export type Provider = "cloudflare" | "netlify";
 export interface PublishPlan {
@@ -48,20 +48,40 @@ export function planPublish(root = getRoot()): PublishPlan {
   return { name: last?.name ?? siteName(pkg?.name || path.basename(root)), build, dir: dir ?? (build ? "dist" : null), server, last, problem };
 }
 
-/** The project folder as a website, without what must never go online. */
-export function stageSite(root: string, into: string) {
+/**
+ * Files that must never go online, wherever they sit in the site: keys, tokens and credentials (.env
+ * files, .npmrc, private keys, cloud credentials, password stores, local databases). A site only needs its
+ * pages, scripts, styles and media — anything shaped like a secret stays behind even in a build folder.
+ */
+const SECRET_NAME = /^(\.env(\..*)?|.*\.env|\.npmrc|\.yarnrc(\.yml)?|\.pypirc|\.netrc|\.git-credentials|\.htpasswd|\.dockercfg|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|asc|gpg|tfvars|tfstate|sqlite3?|db)|(credentials?|secrets?|service[-_]?account|firebase[-_]adminsdk)[^/]*\.(json|ya?ml|toml|ini|txt|env)|.*[-_.]secrets?\.(json|ya?ml|toml|ini|txt))$/i;
+export const isSecretFile = (name: string) => SECRET_NAME.test(name);
+
+/**
+ * A copy of `from` that's safe to put online: no dependencies, VCS or V-Run folders, no docs and lock
+ * files, nothing shaped like a secret, and — when `from` is the project folder itself — nothing the
+ * project's .gitignore keeps out of git either. `skipped` lists the secret-looking files left behind.
+ */
+export function stageSite(from: string, into: string, opts: { ignored?: (rel: string, dir: boolean) => boolean } = {}) {
   fs.rmSync(into, { recursive: true, force: true });
-  const copy = (from: string, to: string) => {
-    for (const e of fs.readdirSync(from, { withFileTypes: true })) {
-      if (SKIP.has(e.name) || e.name.startsWith(".env") || /\.(md|log|lock)$/i.test(e.name) || ["package.json", "package-lock.json", "V.md"].includes(e.name)) continue;
-      const src = path.join(from, e.name), dst = path.join(to, e.name);
-      if (e.isDirectory()) { fs.mkdirSync(dst, { recursive: true }); copy(src, dst); }
-      else if (e.isFile() && fs.statSync(src).size < 25 * 1024 * 1024) { fs.mkdirSync(to, { recursive: true }); fs.copyFileSync(src, dst); }
+  fs.mkdirSync(into, { recursive: true });
+  const skipped: string[] = [];
+  const copy = (src: string, dst: string, rel: string) => {
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (SKIP.has(e.name) || opts.ignored?.(r, e.isDirectory())) continue;
+      if (e.isFile() && isSecretFile(e.name)) { skipped.push(r); continue; }
+      if (/\.(md|log|lock)$/i.test(e.name) || ["package.json", "package-lock.json", "V.md"].includes(e.name)) continue;
+      const a = path.join(src, e.name), b = path.join(dst, e.name);
+      if (e.isDirectory()) { fs.mkdirSync(b, { recursive: true }); copy(a, b, r); }
+      else if (e.isFile() && fs.statSync(a).size < 25 * 1024 * 1024) { fs.mkdirSync(dst, { recursive: true }); fs.copyFileSync(a, b); }
     }
   };
-  copy(root, into);
-  return into;
+  copy(from, into, "");
+  return { dir: into, skipped };
 }
+
+/** A path as one argument in the shell commands run here (PowerShell on Windows): no $(…) or `…` inside it runs. */
+export const shellPath = (p: string) => process.platform === "win32" ? `'${p.replace(/'/g, "''")}'` : `'${p.replace(/'/g, "'\\''")}'`;
 
 /** The deployed address in a CLI's output. */
 export function publishedUrl(provider: Provider, out: string): string | null {
@@ -81,14 +101,13 @@ function run(cmd: string, cwd: string, log: Log, timeoutMs = 15 * 60_000): Promi
   return new Promise((resolve) => {
     log(`$ ${cmd}`);
     const win = process.platform === "win32";
-    const p = spawn(win ? windowsShell() : "/bin/bash", win ? ["-NoProfile", "-NonInteractive", "-Command", cmd] : ["-lc", cmd],
+    const p = spawn(win ? windowsShell() : "/bin/bash", shellArgs(cmd),
       { cwd, windowsHide: true, detached: !win, env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", CI: "", WRANGLER_SEND_METRICS: "false" } });
     current = p;
     let out = "";
     const timer = setTimeout(() => { log("(took too long — stopped)"); killTree(p); }, timeoutMs);
-    const onData = (d: Buffer) => { const t = d.toString().replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""); out += t; for (const l of t.split(/\r?\n/)) if (l.trim()) log(l); };
-    p.stdout?.on("data", onData);
-    p.stderr?.on("data", onData);
+    const onData = (d: string) => { const t = d.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""); out += t; for (const l of t.split(/\r?\n/)) if (l.trim()) log(l); };
+    textOutput(p, onData);
     p.on("error", (e) => { out += e.message; log(e.message); });
     p.on("close", (code) => { clearTimeout(timer); if (current === p) current = null; resolve({ code, out }); });
   });
@@ -115,7 +134,11 @@ export async function publish(opts: { provider: Provider; name: string; build: s
   // 2. the folder that goes online
   let dir = path.resolve(root, opts.dir || ".");
   if (!fs.existsSync(path.join(dir, "index.html"))) throw new Error(`${path.relative(root, dir) || "The project folder"} has no index.html to publish.`);
-  if (path.resolve(dir) === path.resolve(root)) dir = stageSite(root, path.join(root, ".v-run", "tmp", "site"));
+  // always a filtered copy: a build folder can hold a stray .env or key as easily as the project folder
+  const own = path.resolve(dir) === path.resolve(root);
+  const staged = stageSite(dir, path.join(root, ".v-run", "tmp", "site"), own ? { ignored: (r, d) => isIgnored(r, d) } : {});
+  if (staged.skipped.length) log(`Not uploaded (look like secrets): ${staged.skipped.slice(0, 10).join(", ")}${staged.skipped.length > 10 ? ` and ${staged.skipped.length - 10} more` : ""}`);
+  dir = staged.dir;
   const cli = CLI[opts.provider];
   // 3. signed in?
   const who = await exec(opts.provider === "cloudflare" ? `${cli} whoami` : `${cli} status`, root, log, 120_000);
@@ -129,11 +152,11 @@ export async function publish(opts: { provider: Provider; name: string; build: s
   if (opts.provider === "cloudflare") {
     const created = await exec(`${cli} pages project create ${name} --production-branch main`, root, log, 120_000);
     if (created.code !== 0 && !/already exists|already in use|8000002/i.test(created.out)) throw new Error("Couldn't create the Cloudflare Pages project — see the log (the name may be taken: try another).");
-    const d = await exec(`${cli} pages deploy "${dir}" --project-name ${name} --branch main --commit-dirty=true`, root, log);
+    const d = await exec(`${cli} pages deploy ${shellPath(dir)} --project-name ${name} --branch main --commit-dirty=true`, root, log);
     if (d.code !== 0) throw new Error("The deploy failed — see the log.");
     out = d.out;
   } else {
-    const d = await exec(`${cli} deploy --prod --no-build --json --dir "${dir}" --site-name ${name}`, root, log);
+    const d = await exec(`${cli} deploy --prod --no-build --json --dir ${shellPath(dir)} --site-name ${name}`, root, log);
     if (d.code !== 0) throw new Error("The deploy failed — see the log (the name may be taken: try another).");
     out = d.out;
   }

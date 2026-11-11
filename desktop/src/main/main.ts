@@ -1,5 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell, Tray, WebContentsView } from "electron";
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import * as ai from "./ai";
@@ -19,6 +18,9 @@ import * as team from "./team";
 import * as chats from "./chats";
 import * as video from "./video";
 import * as web from "./web";
+import * as mcp from "./mcp";
+import * as git from "./git";
+import * as terminal from "./terminal";
 import { fuzzyFiles, grep } from "./search";
 import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText, clearRoot } from "./workspace";
 
@@ -59,6 +61,12 @@ interface Settings {
   model: string; apiKeyEnc?: string;
   ftUrl: string; ftModel: string; ftTokenEnc?: string;
   recent: string[];
+  /** terminal commands that run without asking / never run (Settings → Safety) */
+  commandRules?: ai.CommandRules;
+  /** tokens one agent task may use; 0 = no limit */
+  tokenBudget?: number;
+  /** read JavaScript-built pages through r.jina.ai (a third party) */
+  webReader?: boolean;
 }
 const DEFAULTS: Settings = { provider: "anthropic", model: ai.DEFAULT_MODEL, ftUrl: ft.FREETOKEN_DEFAULT_URL, ftModel: "auto-smart", recent: [] };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -67,6 +75,13 @@ function loadSettings(): Settings {
   catch { return { ...DEFAULTS }; }
 }
 let settings = loadSettings();
+/** The safety settings take effect in the agent. */
+function applySafety() {
+  ai.setCommandRules(settings.commandRules ?? { allow: [], deny: [] });
+  ai.setTokenBudget(settings.tokenBudget ?? 5_000_000);
+  web.setUseReader(settings.webReader !== false);
+}
+applySafety();
 const saveSettings = () => { fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2)); };
 const decrypt = (enc?: string) => {
   if (!enc || !safeStorage.isEncryptionAvailable()) return "";
@@ -239,18 +254,9 @@ async function runIndex() {
 }
 
 // ---------------------------------------------------------------- terminal panel
-const terms = new Map<string, ChildProcess>();
+// each command its own process; the folder and environment carry over, and a running command takes input
 function termRun(id: string, command: string) {
-  const root = getRoot();
-  if (!root) throw new Error("Open a folder first");
-  const shellBin = process.platform === "win32" ? runner.windowsShell() : "/bin/bash";
-  const args = process.platform === "win32" ? ["-NoProfile", "-Command", command] : ["-lc", command];
-  const p = spawn(shellBin, args, { cwd: root, env: process.env, windowsHide: true });
-  terms.set(id, p);
-  p.stdout?.on("data", (d) => send("term-data", { id, data: d.toString() }));
-  p.stderr?.on("data", (d) => send("term-data", { id, data: d.toString() }));
-  p.on("error", (e) => send("term-data", { id, data: `\n${e.message}\n` }));
-  p.on("close", (code) => { terms.delete(id); send("term-exit", { id, code }); });
+  terminal.run(id, command, { data: (data) => send("term-data", { id, data }), exit: (code, cwd) => send("term-exit", { id, code, cwd }) });
 }
 
 // ---------------------------------------------------------------- app runner + preview pane
@@ -297,6 +303,14 @@ function ensurePreview() {
   const wc = v.webContents;
   desktopUA = wc.getUserAgent();
   wc.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) wc.loadURL(url).catch(() => {}); return { action: "deny" }; });
+  // a page can't take itself (or the agent) to a file:// or other non-web address either
+  wc.on("will-navigate", (e, url) => { if (runner.previewUrlProblem(url)) e.preventDefault(); });
+  wc.on("will-redirect", (e, url) => { if (runner.previewUrlProblem(url)) e.preventDefault(); });
+  // the project's page gets no camera, microphone, location, notifications… without the user knowing:
+  // Electron would grant them all silently. Clipboard writes and fullscreen stay (harmless, and apps use them)
+  const allowed = new Set(["clipboard-sanitized-write", "fullscreen"]);
+  wc.session.setPermissionRequestHandler((_wc, permission, done) => done(allowed.has(permission)));
+  wc.session.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
   wc.on("console-message", (e: any, legacyLevel?: number, legacyMessage?: string, _line?: number, legacySource?: string) => {
     const level = typeof e?.level === "string" ? e.level : ["verbose", "info", "warning", "error"][legacyLevel ?? 1];
     previewConsole.push(runner.consoleLine(level, String(e?.message ?? legacyMessage), e?.sourceId ?? legacySource));
@@ -357,6 +371,8 @@ video.setEncoderHost({
 
 runner.setPreviewHost({
   async open(url) {
+    const notWeb = runner.previewUrlProblem(url);
+    if (notWeb) return notWeb;
     const v = ensurePreview();
     previewConsole = [];
     send("preview-open", url);
@@ -486,6 +502,14 @@ function handleDeepLink(url: string) {
   if (!win) { pendingLink = url; return; } // cold start: handled once the window has loaded
   const d = link.parseDeepLink(url);
   if (d?.kind !== "project") return; // vrun://open only needed the window, which is up and focused
+  // any web page can fire a vrun:// link: switching projects stops the agent's work and the running app,
+  // so that's the user's call when something is running
+  const busy = [runningTasks.size ? "the agent is working" : "", runner.appStatus().running ? "your app is running" : ""].filter(Boolean);
+  if (busy.length && dialog.showMessageBoxSync(win, {
+    type: "question", title: "V-Run", buttons: ["Open the project", "Stay here"], defaultId: 1, cancelId: 1,
+    message: "A link wants to open a FreeToken project",
+    detail: `Opening it switches V-Run to that project, and ${busy.join(" and ")} — that will stop.`,
+  }) !== 0) return;
   openFreeTokenProject(d.id).catch((e) => dialog.showMessageBox(win!, { type: "warning", title: "V-Run", message: "Couldn't open the FreeToken project", detail: (e as Error).message }));
 }
 
@@ -686,6 +710,33 @@ function registerIpc() {
     catch (err) { return { ok: false, error: (err as Error).message }; }
   });
   handle("ai:approve", (sid: string, toolId: string, ok: boolean) => ai.approve(sid, toolId, ok));
+  handle("git:status", () => git.status());
+  handle("git:diff", (p: string) => git.diffPair(p));
+  handle("git:stage", (ps: string[]) => git.stage(ps));
+  handle("git:unstage", (ps: string[]) => git.unstage(ps));
+  handle("git:discard", (p: string, untracked: boolean) => git.discard(p, untracked));
+  handle("git:commit", (msg: string, all: boolean) => git.commit(msg, all));
+  handle("git:branches", () => git.branches());
+  handle("git:checkout", (b: string, create: boolean) => git.checkout(b, create));
+  handle("git:log", (n: number) => git.log(n));
+  handle("git:init", () => git.init());
+  handle("safety:get", () => ({ rules: ai.getCommandRules(), tokenBudget: ai.getTokenBudget(), webReader: web.readerOn() }));
+  handle("safety:set", (p: { rules?: ai.CommandRules; tokenBudget?: number; webReader?: boolean }) => {
+    if (p.rules) settings.commandRules = { allow: p.rules.allow ?? [], deny: p.rules.deny ?? [] };
+    if (typeof p.tokenBudget === "number" && p.tokenBudget >= 0) settings.tokenBudget = Math.round(p.tokenBudget);
+    if (typeof p.webReader === "boolean") settings.webReader = p.webReader;
+    saveSettings(); applySafety();
+    return true;
+  });
+  // "Always allow" on an approval card: the rule is saved, and this command runs
+  handle("safety:allow", (rule: string) => {
+    const r = String(rule ?? "").trim();
+    if (!r || r.length > 200) throw new Error("That rule is empty or too long.");
+    const cur = ai.getCommandRules();
+    settings.commandRules = { allow: [...new Set([...cur.allow, r])], deny: cur.deny };
+    saveSettings(); applySafety();
+    return true;
+  });
   handle("ai:stop", (sid: string) => ai.stop(sid));
   // the project's snapshots (before / during / after each task) and putting one back
   handle("history:list", () => history.list(getRoot()));
@@ -865,7 +916,11 @@ function registerIpc() {
     previewWanted = r && r.width > 0 && r.height > 0 ? r : null;
     applyPreviewBounds();
   });
-  handle("term:kill", (id: string) => terms.get(id)?.kill());
+  // the whole tree: on Windows p.kill() ends only the shell, and a dev server started in it kept running
+  handle("term:kill", (id: string) => terminal.stop(id));
+  handle("term:input", (id: string, text: string) => terminal.input(id, text));
+  handle("term:end", (id: string) => terminal.endInput(id));
+  handle("term:cwd", (id: string) => terminal.cwdOf(id));
 }
 
 app.whenReady().then(async () => {
@@ -890,11 +945,22 @@ app.whenReady().then(async () => {
       .catch(() => {});
 });
 app.on("will-quit", () => link.stopServer());
-app.on("before-quit", () => { quitting = true; share.stopTunnel(); });
+/**
+ * Everything V-Run started goes with it: terminal commands and the app, with all their children, killed
+ * synchronously — an async kill started while quitting may never run, and servers outlived the window.
+ */
+let cleanedUp = false;
+function stopEverything() {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  terminal.stopAll();
+  runner.stopApp(true);
+  mcp.stopAll();
+}
+app.on("before-quit", () => { quitting = true; share.stopTunnel(); stopEverything(); });
 app.on("window-all-closed", () => {
   watcher?.close(); watcher = null;
   clearTimeout(changeTimer); clearTimeout(indexTimer);
-  for (const p of terms.values()) p.kill();
-  runner.stopApp();
+  stopEverything();
   app.quit();
 });

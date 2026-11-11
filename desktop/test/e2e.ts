@@ -95,7 +95,8 @@ ${e.stack}` : ""}`));
       await page.getByRole("group", { name: "Command approval" }).waitFor({ timeout: 15000 });
       await shot("02-agent-approval");
       await page.getByRole("button", { name: "Run", exact: true }).click();
-      await page.locator(".msg-ai", { hasText: "Renamed" }).waitFor({ timeout: 15000 });
+      // .first(): the self-review that follows repeats the summary in a message of its own
+      await page.locator(".msg-ai", { hasText: "Renamed" }).first().waitFor({ timeout: 15000 });
       await page.getByLabel("Agent plan").waitFor();
       if (!fs.readFileSync(path.join(proj, "src/hello.ts"), "utf8").includes("sayHello")) throw new Error("edit not on disk");
     });

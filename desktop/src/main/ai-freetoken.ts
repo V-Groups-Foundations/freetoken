@@ -5,11 +5,11 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-  READ_ONLY, TOOLS, MAX_STEPS, beginTurn, buildNudge, regressionGate, startTurnState, stepsLeftNote, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
+  READ_ONLY, TOOLS, MAX_STEPS, spendTokens, schemaFor, mcpToolsFor, prepareProject, beginTurn, buildNudge, regressionGate, startTurnState, stepsLeftNote, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
   type AgentEvent, type ChatRequest, type ToolName,
 } from "./ai";
 import { prepareAttachments, type Prepared } from "./attachments";
-import { readText } from "./workspace";
+import { hiddenFromAI, readText } from "./workspace";
 import { outputDetail } from "./diff";
 import { changesForReview, parseReview, reviewFindings, reviewPrompt, REVIEW_SYSTEM } from "./review";
 import type { Session } from "./ai";
@@ -390,8 +390,12 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   let msgs = transcripts.get(req.sessionId);
   if (!msgs) transcripts.set(req.sessionId, (msgs = []));
   startTurnState(s, req, msgs.filter((m) => m.role === "user" && typeof m.content === "string").slice(-3).map((m) => String(m.content).slice(-2000)).join("\n"));
+  await prepareProject(s, emit);
   const allowed = toolNamesFor(req);
-  const tools = OA_TOOLS.filter((t) => t.type === "function" && allowed.has(t.function.name));
+  const extra = mcpToolsFor(req);
+  for (const t of extra) allowed.add(t.name);
+  const tools: ChatCompletionTool[] = [...OA_TOOLS.filter((t) => t.type === "function" && allowed.has(t.function.name)),
+    ...extra.map((t) => ({ type: "function" as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }))];
 
   const ctx: string[] = [];
   const c = req.context;
@@ -399,6 +403,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   if (c?.openFiles?.length) ctx.push(`Open tabs: ${c.openFiles.join(", ")}`);
   if (c?.selection?.text) ctx.push(`Selected code (${c.selection.path}:${c.selection.start}-${c.selection.end}):\n\`\`\`\n${c.selection.text}\n\`\`\``);
   for (const f of c?.mentionedFiles ?? []) {
+    if (hiddenFromAI(f)) { ctx.push(`@${f}: (hidden from the AI by .cursorignore)`); continue; }
     try { ctx.push(`@${f}:\n\`\`\`\n${clip(await readText(f), 30_000)}\n\`\`\``); } catch (e) { ctx.push(`@${f}: (could not read: ${(e as Error).message})`); }
   }
   let att: Prepared = { images: [], texts: [], note: "" };
@@ -422,6 +427,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
     // last message stays the summary written for them: it shows as thinking until it ends or edits a
     // file (a review that finds something fixes it, and from there the agent speaks normally)
     let quietStep = false;
+    let budgetNote: string | undefined, overBudget: string | undefined;
     for (let turn = 0; turn < (req.maxSteps ?? MAX_STEPS); turn++) {
       let text = "";
       let calls: { id: string; name: string; args: string }[] = [];
@@ -485,7 +491,11 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
             }
             if (ch.finish_reason) finish = ch.finish_reason;
           }
-          if (usage) emit({ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 });
+          if (usage) {
+            emit({ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 });
+            const spent = spendTokens(s, (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0));
+            if (spent.stop) overBudget = spent.stop; else if (spent.note) budgetNote = spent.note;
+          }
           escalated = role === "reasoning" && !!s.stuck; // a stronger model took this step over (stuckStep below)
           break;
         } catch (e) {
@@ -569,7 +579,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         let input: unknown = {};
         try { input = JSON.parse(u.args || "{}"); } catch { input = undefined; }
         emit({ type: "tool_start", id: u.id, name: u.name, input });
-        const schema = schemas[u.name as ToolName];
+        const schema = schemaFor(u.name);
         const parsed = input === undefined ? null : schema?.safeParse(input);
         let content: string;
         if (!schema || !allowed.has(u.name)) {
@@ -605,8 +615,10 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         msgs.push({ role: "tool", tool_call_id: u.id, content });
       }
       if (escalated) stuckStep(s, changed);
-      const budget = stepsLeftNote(turn, req.maxSteps ?? MAX_STEPS);
+      const budget = stepsLeftNote(turn, req.maxSteps ?? MAX_STEPS) ?? budgetNote;
+      budgetNote = undefined;
       if (budget) msgs.push({ role: "user", content: budget });
+      if (overBudget) { emit({ type: "error", message: overBudget }); return emit({ type: "done", stopReason: "budget" }); }
       if (s.abort.signal.aborted) return emit({ type: "done", stopReason: "aborted" });
     }
     emit({ type: "error", message: `Stopped after ${req.maxSteps ?? MAX_STEPS} steps.` });

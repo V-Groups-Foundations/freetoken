@@ -22,7 +22,7 @@ type Item =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string; start: number; ms?: number }
   | ToolItem
-  | { kind: "approval"; id: string; command: string; explanation?: string; decided?: boolean | null; auto?: boolean }
+  | { kind: "approval"; id: string; command: string; explanation?: string; decided?: boolean | null; auto?: boolean; rule?: string }
   | { kind: "todos"; todos: { content: string; status: string }[] }
   | { kind: "error"; text: string }
   | { kind: "turn"; ms: number; tokens: number; estimated: boolean; reason: string; tools: number; mode: Mode; next: string[]; synced?: true | string; models?: string[] }
@@ -326,7 +326,7 @@ export function ChatPanel(props: {
           break;
         }
         case "approval":
-          next.push({ kind: "approval", id: e.id, command: e.command, explanation: e.explanation, ...(auto ? { decided: true, auto: true } : {}) });
+          next.push({ kind: "approval", id: e.id, command: e.command, explanation: e.explanation, ...(e.rule ? { rule: e.rule } : {}), ...(auto ? { decided: true, auto: true } : {}) });
           break;
         case "todos": {
           const i = next.findIndex((x) => x.kind === "todos");
@@ -439,8 +439,9 @@ export function ChatPanel(props: {
     }
   }
 
-  function decide(id: string, ok: boolean, all = false) {
+  function decide(id: string, ok: boolean, all = false, rule?: string) {
     if (all) setAutoRun(true);
+    if (rule) api.safetyAllow(rule).catch(() => {});
     api.approve(sid, id, ok);
     setItems((p) => p.map((x) => (x.kind === "approval" && x.id === id ? { ...x, decided: ok } : x)));
     box.current?.focus();
@@ -549,6 +550,7 @@ export function ChatPanel(props: {
           e.preventDefault();
           return decide(waiting.id, k !== "3" && k !== "Escape", k === "2");
         }
+        if (k === "4" && waiting.rule) { e.preventDefault(); return decide(waiting.id, true, false, waiting.rule); }
       }
       if (e.key === "Escape" && busy && !waiting && !mentionHits.length && !slashHits.length
         && (typing ? e.target === box.current : document.activeElement?.closest(".chat"))) { e.preventDefault(); api.stop(sidRef.current); }
@@ -1021,7 +1023,7 @@ function ExploreGroup({ tools }: { tools: ToolItem[] }) {
   );
 }
 
-function Approval({ a, tool, onDecide }: { a: Extract<Item, { kind: "approval" }>; tool?: ToolItem; onDecide: (id: string, ok: boolean, all?: boolean) => void }) {
+function Approval({ a, tool, onDecide }: { a: Extract<Item, { kind: "approval" }>; tool?: ToolItem; onDecide: (id: string, ok: boolean, all?: boolean, rule?: string) => void }) {
   if (a.decided !== undefined) {
     return <div className={`approval-done ${a.decided ? "ok" : ""}`}>{a.auto ? "Auto-approved" : a.decided ? "Approved" : a.decided === false ? "Skipped" : "Cancelled"}</div>;
   }
@@ -1035,8 +1037,11 @@ function Approval({ a, tool, onDecide }: { a: Extract<Item, { kind: "approval" }
         <button className="choice primary" onClick={() => onDecide(a.id, true)}><kbd aria-hidden>1</kbd>Run</button>
         <button className="choice" onClick={() => onDecide(a.id, true, true)} title="Run this and every other command until this task finishes"><kbd aria-hidden>2</kbd>Run all for this task</button>
         <button className="choice" onClick={() => onDecide(a.id, false)}><kbd aria-hidden>3</kbd>Skip</button>
+        {a.rule && (tool?.name === "run_terminal_command" || tool?.name === "run_app" || tool?.name.startsWith("mcp__")) && (
+          <button className="choice" onClick={() => onDecide(a.id, true, false, a.rule)} title={`Run it, and from now on run commands starting with "${a.rule}" without asking (Settings → Safety to change)`}><kbd aria-hidden>4</kbd>Always allow <code>{a.rule}</code></button>
+        )}
       </div>
-      <div className="muted small">Press 1, 2 or 3 · Esc to skip</div>
+      <div className="muted small">Press 1, 2, 3{a.rule && (tool?.name === "run_terminal_command" || tool?.name === "run_app" || tool?.name.startsWith("mcp__")) ? " or 4" : ""} · Esc to skip</div>
     </div>
   );
 }

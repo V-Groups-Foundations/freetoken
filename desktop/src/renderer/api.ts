@@ -1,5 +1,11 @@
 type AndroidCheck = { java: { home: string; version: number } | null; sdk: string | null; adb: string | null; studio: string | null; installer: "winget" | "brew" | null; missing: { studio: boolean; java: boolean; sdk: boolean }; problems: string[] };
 // Typed access to the preload bridge.
+export type GitFile = { path: string; staged: string; unstaged: string; untracked: boolean };
+export type GitStatus = { repo: true; branch: string; ahead: number; behind: number; upstream: string | null; files: GitFile[] } | { repo: false };
+
+/** Settings → Safety: command rules, the per-task token budget, the web reader. */
+export interface Safety { rules: { allow: string[]; deny: string[] }; tokenBudget: number; webReader: boolean }
+
 export interface Entry { name: string; path: string; dir: boolean }
 export interface GrepHit { path: string; line: number; text: string }
 export type DiffLine = { t: " " | "+" | "-"; s: string; a?: number; b?: number };
@@ -22,7 +28,7 @@ export type AgentEvent =
   | { type: "skills_used"; names: string[]; auto: boolean }
   | { type: "progress"; id: string; text: string }
   | { type: "file_changed"; path: string }
-  | { type: "approval"; id: string; command: string; explanation?: string; always?: boolean }
+  | { type: "approval"; id: string; command: string; explanation?: string; always?: boolean; rule?: string }
   | { type: "todos"; todos: { content: string; status: string }[] }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
@@ -46,6 +52,20 @@ interface Api {
   chat(req: { sessionId: string; mode: "agent" | "ask" | "plan" | "team"; text: string; context?: object; attachments?: ChatAttachment[]; skills?: string[] }): Promise<boolean>;
   pathForFile(f: File): string;
   approve(sid: string, toolId: string, ok: boolean): Promise<void>;
+  safetyGet(): Promise<Safety>;
+  gitStatus(): Promise<GitStatus>;
+  gitDiff(p: string): Promise<{ original: string; current: string }>;
+  gitStage(ps: string[]): Promise<boolean>;
+  gitUnstage(ps: string[]): Promise<boolean>;
+  gitDiscard(p: string, untracked: boolean): Promise<boolean>;
+  gitCommit(msg: string, all: boolean): Promise<string>;
+  gitBranches(): Promise<{ current: string; all: string[] }>;
+  gitCheckout(b: string, create: boolean): Promise<boolean>;
+  gitLog(n: number): Promise<{ hash: string; author: string; when: string; subject: string }[]>;
+  gitInit(): Promise<boolean>;
+  safetySet(p: Partial<Safety>): Promise<void>;
+  /** add an "always allow" command rule */
+  safetyAllow(rule: string): Promise<void>;
   stop(sid: string): Promise<void>;
   resetChat(sid: string): Promise<void>;
   chatRestore(): Promise<{ sid: string; mode?: string; items: unknown[]; interrupted?: { text: string; mode: string; startedAt: number }; running?: boolean } | null>;
@@ -64,6 +84,11 @@ interface Api {
   models(): Promise<string[]>;
   termRun(id: string, command: string): Promise<void>;
   termKill(id: string): Promise<void>;
+  /** a line of input for the running command */
+  termInput(id: string, text: string): Promise<boolean>;
+  /** end the running command's input (Ctrl+D) */
+  termEnd(id: string): Promise<boolean>;
+  termCwd(id: string): Promise<string>;
   appStart(command: string): Promise<void>;
   appStop(): Promise<boolean>;
   appInput(text: string): Promise<void>;
@@ -134,7 +159,7 @@ interface Api {
   onIndexStatus(fn: (s: IndexStatus) => void): Unsub;
   onFolderOpened(fn: (root: string) => void): Unsub;
   onTermData(fn: (p: { id: string; data: string }) => void): Unsub;
-  onTermExit(fn: (p: { id: string; code: number | null }) => void): Unsub;
+  onTermExit(fn: (p: { id: string; code: number | null; cwd?: string }) => void): Unsub;
   onAppEvent(fn: (e: AppEvent) => void): Unsub;
   onPreviewOpen(fn: (url: string) => void): Unsub;
   onPreviewState(fn: (s: PreviewState) => void): Unsub;

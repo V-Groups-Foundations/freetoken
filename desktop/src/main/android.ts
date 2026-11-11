@@ -7,8 +7,8 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getRoot } from "./workspace";
-import { killTree, windowsShell } from "./runner";
+import { getRoot, isIgnored } from "./workspace";
+import { killTree, shellArgs, textOutput, windowsShell } from "./runner";
 import { planPublish, siteName, stageSite } from "./publish";
 
 const win = process.platform === "win32";
@@ -256,13 +256,12 @@ let current: ReturnType<typeof spawn> | null = null;
 
 const run: Exec = (cmd, cwd, log, env) => new Promise((resolve) => {
   log(`$ ${cmd}`);
-  const p = spawn(win ? windowsShell() : "/bin/bash", win ? ["-NoProfile", "-NonInteractive", "-Command", cmd] : ["-lc", cmd],
+  const p = spawn(win ? windowsShell() : "/bin/bash", shellArgs(cmd),
     { cwd, windowsHide: true, detached: !win, env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", ...env } });
   current = p;
   let out = "";
-  const onData = (d: Buffer) => { const t = d.toString().replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""); out += t; for (const l of t.split(/\r?\n/)) if (l.trim()) log(l); };
-  p.stdout?.on("data", onData);
-  p.stderr?.on("data", onData);
+  const onData = (d: string) => { const t = d.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""); out += t; for (const l of t.split(/\r?\n/)) if (l.trim()) log(l); };
+  textOutput(p, onData);
   p.on("error", (e) => { out += e.message; log(e.message); });
   p.on("close", (code) => { if (current === p) current = null; resolve({ code, out: out.slice(-200_000) }); });
 });
@@ -376,7 +375,7 @@ export async function buildAndroid(opts: { name: string; appId?: string; build: 
   const webDir = path.join(root, webRel);
   const source = plan.dir && plan.dir !== "." ? path.join(root, plan.dir) : null;
   if (source) { fs.rmSync(webDir, { recursive: true, force: true }); fs.cpSync(source, webDir, { recursive: true }); }
-  else stageSite(root, webDir);
+  else stageSite(root, webDir, { ignored: (r, d) => isIgnored(r, d) });
   addNativeBridge(webDir);
   // 2. Capacitor
   if (!fs.existsSync(path.join(root, "package.json"))) ok(await exec("npm init -y", root, log), "npm init");

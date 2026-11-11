@@ -5,6 +5,7 @@
 //   desktop/skills/<name>/           built in, shipped with V-Run (html-video, frontend-ui, …)
 // Only names and descriptions go in the prompt; the agent reads a skill with use_skill when it needs it.
 import fsp from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getRoot } from "./workspace";
@@ -145,6 +146,10 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
   const plain = request.replace(/```[\s\S]*?```/g, " ").replace(/https?:\/\/\S+/g, " ").replace(/[-+]?\d+\.\d{3,}/g, " ");
   const req = words(plain, true);
   if (!req.size) return [] as Skill[];
+  // the request word each match came from: "fix" also matches as "debugging" (an alias), but that's still
+  // one word of the request — it can't make the two-word match on its own ("fix the typo" loaded debugging)
+  const origin = new Map<string, string>();
+  for (const w of rawWords(plain)) for (const x of [stem(w), ...(ALIASES[w] ?? []).flatMap((a) => rawWords(a).map(stem))]) if (!origin.has(x)) origin.set(x, stem(w));
   const all = (await listSkills()).map((s) => ({ s, name: words(s.name.replace(/-/g, " ")), desc: words(s.description) }));
   const df = new Map<string, number>();
   for (const x of all) for (const w of new Set([...x.name, ...x.desc])) df.set(w, (df.get(w) ?? 0) + 1);
@@ -161,7 +166,7 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
   // someone the link" isn't a reason to load android-app — unless the request names the skill ("a React app")
   const lower = plain.toLowerCase();
   const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD
-    && (new Set(x.hits.filter((h) => !WEAK.has(h))).size >= 2 || lower.includes(x.s.name.toLowerCase().replace(/-/g, " "))));
+    && (new Set(x.hits.filter((h) => !WEAK.has(h)).map((h) => origin.get(h) ?? h)).size >= 2 || lower.includes(x.s.name.toLowerCase().replace(/-/g, " "))));
   strong.sort((a, b) => b.score - a.score);
   // a second skill only when it's nearly as good a match as the first
   return strong.filter((x, i) => i === 0 || x.score >= strong[0].score * 0.9).slice(0, max).map((x) => x.s);
@@ -182,6 +187,12 @@ export async function pickedSkillsContext(names: string[] = [], auto = false) {
 }
 
 const yamlLine = (s: string) => JSON.stringify(s.replace(/\s+/g, " ").trim());
+
+/** Whether a skill of that name is already saved there (saving would replace it). */
+export function skillExists(name: string, scope: "user" | "project" = "user") {
+  const root = scope === "project" ? projectSkillsDir() : userSkillsDir();
+  return !!root && !!slug(name) && fs.existsSync(path.join(root, slug(name), "SKILL.md"));
+}
 
 /** Learn a skill: write SKILL.md (creating or replacing that skill). */
 export async function saveSkill(name: string, description: string, instructions: string, scope: "user" | "project" = "user") {

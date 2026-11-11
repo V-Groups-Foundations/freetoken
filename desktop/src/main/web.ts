@@ -64,33 +64,49 @@ async function duckDuckGo(query: string, max: number, f: Fetch): Promise<Hit[]> 
 
 const isPage = (type: string) => /text\/html|application\/xhtml/i.test(type);
 
+/**
+ * Jina Reader (r.jina.ai) renders pages that build themselves with JavaScript into text. It's a third
+ * party — the address goes to it — so it's used only when a page's own HTML has next to no text, and it
+ * can be turned off in Settings.
+ */
+let useReader = true;
+export const setUseReader = (on: boolean) => { useReader = on; };
+export const readerOn = () => useReader;
+
+/** This computer or the local network: read without asking, and never sent to the reader. */
+export function isLocalHost(host: string) {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  return h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h === "::1" || h === "0.0.0.0" || !h.includes(".") && !h.includes(":")
+    || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^169\.254\./.test(h);
+}
+
 /** A page as readable text (or an API's raw response), from `start` (to read long pages in parts). */
 export async function fetchUrl(target: string, start = 0, f: Fetch = fetch): Promise<{ url: string; title: string; text: string; total: number; via: string }> {
   const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(target.trim()) ? target.trim() : `https://${target.trim()}`;
   const u = new URL(url);
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("Only http(s) URLs can be read.");
-  const local = /^(localhost|127\.|0\.0\.0\.0|\[::1\]|10\.|192\.168\.)/.test(u.hostname);
+  const local = isLocalHost(u.hostname);
   let title = "", text = "", via = "direct";
-  // first a direct request: APIs (JSON, XML, text) and local servers are read as they are
+  // first a direct request: APIs (JSON, XML, text), local servers and plain pages are read as they are
   const res = await f(url, { headers: { "user-agent": UA, accept: "text/html,application/json,text/plain,*/*", "accept-language": "en" }, signal: AbortSignal.timeout(25_000) }).catch((e) => e as Error);
   const type = res instanceof Response ? res.headers.get("content-type") ?? "" : "";
   if (res instanceof Response && res.ok && !isPage(type)) {
     if (/image|video|audio|octet-stream|pdf|zip/i.test(type)) throw new Error(`That's a ${type} file, not text. Download it with a terminal command if you need it.`);
     text = await res.text();
-  } else if (!local) {
-    // web pages: Jina Reader renders them (scripts too) and returns clean markdown
-    const jr = await f(`https://r.jina.ai/${url}`, { headers: { accept: "application/json", "x-return-format": "markdown" }, signal: AbortSignal.timeout(40_000) }).catch(() => null);
-    if (jr?.ok) {
-      const j = (await jr.json().catch(() => null)) as { data?: { title?: string; content?: string } } | null;
-      title = j?.data?.title ?? ""; text = j?.data?.content ?? ""; via = "reader";
-    }
-  }
-  if (!text && res instanceof Response && res.ok && isPage(type)) {
-    // fallback: the page's own HTML, stripped down to its text
+  } else if (res instanceof Response && res.ok) {
+    // a web page: its own HTML, stripped down to its text
     const html = await res.text();
     title = decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "");
     text = html.replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, " ").replace(/<\/(p|div|li|h\d|tr|br)>/gi, "\n").replace(/<[^>]+>/g, " ")
       .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
+  }
+  if (text.length < 400 && !local && useReader && !(res instanceof Response && res.ok && !isPage(type))) {
+    // next to no text (a page built by JavaScript) or the site refused us: Jina Reader renders it
+    const jr = await f(`https://r.jina.ai/${url}`, { headers: { accept: "application/json", "x-return-format": "markdown" }, signal: AbortSignal.timeout(40_000) }).catch(() => null);
+    if (jr?.ok) {
+      const j = (await jr.json().catch(() => null)) as { data?: { title?: string; content?: string } } | null;
+      if (j?.data?.content && j.data.content.length > text.length) { title = j.data.title || title; text = j.data.content; via = "reader"; }
+    }
   }
   if (!text) throw new Error(res instanceof Response ? `The page answered ${res.status} and couldn't be read.` : `Couldn't reach ${u.hostname}: ${(res as Error).message}`);
   return { url, title, text: text.slice(start, start + MAX_CHARS), total: text.length, via };

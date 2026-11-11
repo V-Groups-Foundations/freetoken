@@ -651,3 +651,33 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 /* a provider couldn't be reached from this network */
 .net-warning { display: flex; gap: 8px; align-items: baseline; font-size: 12px; line-height: 1.5; color: var(--fg); padding: 6px 10px; border-radius: 8px; background: #e0b45c14; border: 1px solid #e0b45c55; }
 .net-warning > span:first-child { color: #e0b45c; }
+
+/* Settings → Safety & limits */
+.dialog { max-height: 90vh; overflow-y: auto; }
+.safety { border: 1px solid #3a3a3a; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.safety[open] { gap: 10px; }
+.safety summary { cursor: pointer; }
+.safety > label { margin-top: 8px; }
+.safety textarea.field { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; resize: vertical; }
+.safety label.check { flex-direction: row; align-items: flex-start; gap: 8px; font-size: 12px; }
+.bench-status { color: var(--accent, #4fc3f7); }
+
+/* Source control */
+.git-panel { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; overflow-y: auto; height: 100%; }
+.git-panel .side-title { font-size: 11px; letter-spacing: .06em; color: #999; }
+.git-branch { display: flex; gap: 6px; align-items: center; }
+.git-branch select { flex: 1; }
+.git-msg { resize: vertical; font-family: inherit; }
+.git-group { font-size: 11px; color: #aaa; margin-top: 8px; display: flex; gap: 6px; align-items: center; }
+.git-group .linklike { margin-left: auto; }
+.git-file { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.git-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.git-acts { display: flex; gap: 2px; align-items: center; }
+.git-file .icon-btn { visibility: hidden; background: none; border: 0; color: #ccc; cursor: pointer; padding: 0 4px; font-size: 13px; }
+.git-file:hover .icon-btn, .git-file .icon-btn:focus-visible, .git-file .icon-btn.danger { visibility: visible; }
+.git-file .icon-btn.danger { color: #f48771; }
+.git-letter { width: 14px; text-align: center; font-size: 11px; font-weight: 600; }
+.git-M { color: #e2c08d; } .git-A, .git-U { color: #73c991; } .git-D { color: #f48771; } .git-R { color: #4fc3f7; }
+.git-new { display: flex; gap: 6px; }
+.git-new input { flex: 1; min-width: 0; }
+.git-commit { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

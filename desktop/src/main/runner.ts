@@ -4,6 +4,7 @@
 // PreviewHost so this module (and the agent tools) stay testable in plain Node.
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { getRoot } from "./workspace";
+import { staticServerCommand } from "./static-server";
 
 // PowerShell 7 (pwsh) understands && and || like bash; Windows PowerShell 5.1 rejects them, which is
 // the first thing models write. Use pwsh when it's installed.
@@ -15,6 +16,23 @@ export function windowsShell() {
   }
   return pwsh ?? "powershell.exe";
 }
+/**
+ * The shell's arguments for one command. On Windows, PowerShell is told to write UTF-8 (it defaults to the
+ * console's code page, so Japanese, accents and emoji arrived as "???" or mojibake).
+ */
+export const UTF8_PS = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;";
+export function shellArgs(cmd: string, interactive = false) {
+  if (process.platform !== "win32") return ["-lc", cmd];
+  return ["-NoProfile", ...(interactive ? [] : ["-NonInteractive"]), "-Command", UTF8_PS + cmd];
+}
+/** Read a process's output as text: a character split across two chunks stays whole. */
+export function textOutput(p: ChildProcess, fn: (text: string) => void) {
+  p.stdout?.setEncoding("utf8");
+  p.stderr?.setEncoding("utf8");
+  p.stdout?.on("data", (d: string) => fn(d));
+  p.stderr?.on("data", (d: string) => fn(d));
+}
+
 export const usingPwsh = () => process.platform === "win32" && windowsShell() !== "powershell.exe";
 
 /** Kill a process and everything it started (a server is usually a grandchild of the shell). */
@@ -56,6 +74,18 @@ export interface PreviewHost {
  * say what's missing, so the address goes with it; Tailwind's CDN build warns on every page built the way
  * the design brief says to, so that one is a note (not a warning to fix).
  */
+/**
+ * Why the preview won't open this address, or null when it may: web pages (http/https) only. A file://,
+ * view-source:, chrome:// or data: address would let the agent read any file on the computer through
+ * inspect_preview, outside the project and without asking.
+ */
+export function previewUrlProblem(url: string): string | null {
+  let u: URL;
+  try { u = new URL(url); } catch { return `"${url}" isn't a web address.`; }
+  if (u.protocol === "http:" || u.protocol === "https:") return null;
+  return `The preview only opens web pages (http:// or https://), not ${u.protocol} addresses. To show a local HTML file, start a server for the project with run_app and open its http://localhost address.`;
+}
+
 export function consoleLine(level: string, message: string, source?: string) {
   const text = message.slice(0, 500);
   if (/cdn\.tailwindcss\.com should not be used in production/i.test(text)) return "[note] Tailwind's CDN build warns about production use: expected for a site built with it, nothing to fix.";
@@ -302,7 +332,9 @@ export async function startApp(cmd: string) {
   await stopAppAndWait();
   command = cmd; out = ""; readPos = 0; url = undefined; exitCode = undefined;
   const win = process.platform === "win32";
-  const p = spawn(win ? windowsShell() : "/bin/bash", win ? ["-NoProfile", "-NonInteractive", "-Command", cmd] : ["-lc", cmd], {
+  // a plain file server (npx serve, http-server, python -m http.server) runs as V-Run's built-in one: it
+  // starts at once, with nothing to download (the command shown stays the one asked for)
+  const p = spawn(win ? windowsShell() : "/bin/bash", shellArgs(staticServerCommand(cmd) ?? cmd), {
     cwd: root,
     // unbuffered output, no colors, and dev servers shouldn't pop open an external browser
     env: { ...process.env, PYTHONUNBUFFERED: "1", FORCE_COLOR: "0", NO_COLOR: "1", BROWSER: "none" },
@@ -318,8 +350,7 @@ export async function startApp(cmd: string) {
     const b = background.find((x) => x.proc === p);
     if (b) b.out = (b.out + text.replace(ANSI, "")).slice(-20_000);
   };
-  p.stdout?.on("data", (d) => sink(d.toString()));
-  p.stderr?.on("data", (d) => sink(d.toString()));
+  textOutput(p, sink);
   p.on("error", (e) => sink(`\n${e.message}\n`));
   p.on("close", (code) => {
     const b = background.find((x) => x.proc === p);
@@ -332,18 +363,19 @@ export async function startApp(cmd: string) {
 }
 
 /** Stop every app: the current one and any running alongside it (Stop button, stop_app, quitting). */
-export function stopApp() {
+/** `wait`: kill synchronously (quitting V-Run — an async taskkill started then may never run). */
+export function stopApp(wait = false) {
   const others = background.splice(0);
-  for (const b of others) if (b.exited === undefined) killTree(b.proc);
-  return stopCurrent() || others.length > 0;
+  for (const b of others) if (b.exited === undefined) killTree(b.proc, wait);
+  return stopCurrent(wait) || others.length > 0;
 }
 
 /** Kill the current app and everything it spawned (a dev server is usually a grandchild of the shell). */
-function stopCurrent() {
+function stopCurrent(wait = false) {
   const p = proc;
   if (!p?.pid) return false;
   proc = null; exitCode = null;
-  if (process.platform === "win32") spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  if (process.platform === "win32") killTree(p, wait);
   else try { process.kill(-p.pid, "SIGTERM"); } catch { p.kill(); }
   append("\n[stopped]\n");
   listener({ type: "exit", code: null });
