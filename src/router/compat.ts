@@ -30,9 +30,16 @@ const GEMINI_FIELDS = new Set(['model', 'messages', 'tools', 'tool_choice', 'str
   'temperature', 'top_p', 'n', 'stop', 'response_format', 'seed', 'presence_penalty', 'frequency_penalty', 'reasoning_effort', 'extra_body']);
 const only = (body: Record<string, unknown>, keep: Set<string>) => Object.fromEntries(Object.entries(body).filter(([k]) => keep.has(k)));
 
+export const CLOUDFLARE_MAX_TOKENS = 4096;
+
 /** The request body as this provider accepts it. */
 export function forProvider(provider: string, body: Record<string, unknown>): Record<string, unknown> {
-  if (provider === 'cloudflare') return { ...body, messages: stringContent(body.messages) };
+  // Workers AI caps a reply at 256 tokens unless asked for more — a reasoning model (GPT-OSS) spends all of
+  // that thinking and answers nothing, so a request without its own limit gets a real one
+  if (provider === 'cloudflare') {
+    const limit = body.max_tokens ?? body.max_completion_tokens ?? CLOUDFLARE_MAX_TOKENS;
+    return { ...body, max_tokens: limit, messages: stringContent(body.messages) };
+  }
   if (provider === 'gemini') return only(body, GEMINI_FIELDS);
   return body;
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Markdown } from '../chat/markdown';
-import { MEALS, parseDietBlocks, stripDietBlocks, type DietAction } from '@/diet/protocol';
+import { MEALS, cleanReply, parseDietBlocks, stripDietBlocks, type DietAction } from '@/diet/protocol';
 import { targetsMismatch, type Advice } from '@/diet/advisor';
 import { Progress, type FullProfile, type Photo } from './progress';
 import { Training } from './training';
@@ -56,6 +56,8 @@ export function Diet() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // the last message the coach didn't answer, for the Retry button
+  const [unanswered, setUnanswered] = useState<{ text: string; photos: string[] } | null>(null);
   const [tab, setTab] = useState<'coach' | 'progress' | 'training'>('coach');
   const [checkinBusy, setCheckinBusy] = useState(false);
 
@@ -91,7 +93,7 @@ export function Diet() {
   async function send(content: string, photos: string[] = []) {
     const text = content.trim();
     if ((!text && !photos.length) || busy) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setUnanswered(null);
     const base = [...msgs, { role: 'user' as const, content: text, photos }];
     setMsgs([...base, { role: 'assistant', content: '' }]);
     // a photo goes as an image part (with the words, if any) for a model that can see
@@ -119,6 +121,12 @@ export function Diet() {
           } catch { /* keep-alive */ }
         }
       }
+      if (!cleanReply(out).trim()) {
+        // the model sent no answer (busy, or it only "thought"): the server takes the question back out
+        setMsgs(msgs);
+        setUnanswered({ text, photos });
+        throw new Error("The coach didn't answer — the AI service was busy. Tap Retry.");
+      }
       // the server records the log just after the stream ends: wait for its copy of the reply (which shows
       // what was really recorded, not what the model sent), then show that
       setDay(today);
@@ -134,6 +142,7 @@ export function Diet() {
       }
     } catch (e) {
       setMsgs(msgs);
+      if (!(e instanceof Error && e.message.startsWith("The coach didn't answer"))) setUnanswered(null);
       setError(e instanceof Error ? e.message : 'Something went wrong.');
     } finally {
       setBusy(false);
@@ -192,7 +201,7 @@ export function Diet() {
           day's whole log had to be scrolled past to reach the message box */}
       <div className="min-w-0 space-y-3">
         {s && <Summary s={s} />}
-        <CoachChat msgs={msgs} busy={busy || checkinBusy} error={error} onSend={send} onNew={newConversation} onCheckin={runCheckin} checkinBusy={checkinBusy} />
+        <CoachChat msgs={msgs} busy={busy || checkinBusy} error={error} onSend={send} onRetry={unanswered ? () => send(unanswered.text, unanswered.photos) : undefined} onNew={newConversation} onCheckin={runCheckin} checkinBusy={checkinBusy} />
       </div>
       <div className="min-w-0">
         {s ? <Tracker s={s} day={day} today={today} setDay={setDay} onRemove={removeEntry} onSaved={() => load(day)} /> : <div className="card card-pad muted text-sm">Loading…</div>}
@@ -404,7 +413,7 @@ function Logged({ actions }: { actions: DietAction[] }) {
   );
 }
 
-function CoachChat({ msgs, busy, error, onSend, onNew, onCheckin, checkinBusy }: { msgs: Msg[]; busy: boolean; error: string | null; onSend: (t: string, photos?: string[]) => void; onNew: () => void; onCheckin: () => void; checkinBusy: boolean }) {
+function CoachChat({ msgs, busy, error, onSend, onRetry, onNew, onCheckin, checkinBusy }: { msgs: Msg[]; busy: boolean; error: string | null; onSend: (t: string, photos?: string[]) => void; onRetry?: () => void; onNew: () => void; onCheckin: () => void; checkinBusy: boolean }) {
   const [input, setInput] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -477,7 +486,12 @@ function CoachChat({ msgs, busy, error, onSend, onNew, onCheckin, checkinBusy }:
           </div>
         )}
       </div>
-      {(error || photoError) && <p className="text-sm text-[var(--danger)]">{error ?? photoError}</p>}
+      {(error || photoError) && (
+        <div className="flex items-center gap-3">
+          <p role="alert" className="text-sm text-[var(--danger)]">{error ?? photoError}</p>
+          {error && onRetry && <button type="button" className="btn btn-primary shrink-0" disabled={busy} onClick={onRetry}>Retry</button>}
+        </div>
+      )}
       {photos.length > 0 && (
         <div className="flex gap-2">
           {photos.map((url, k) => (

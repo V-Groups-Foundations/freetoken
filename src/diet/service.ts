@@ -69,7 +69,12 @@ export async function listDietMessages(db: DB, userId: string, limit = 200) {
 }
 
 export async function addDietMessage(db: DB, userId: string, m: { role: 'user' | 'assistant'; content: string; provider?: string | null }) {
-  await db.insert(dietMessages).values({ userId, ...m });
+  const [row] = await db.insert(dietMessages).values({ userId, ...m }).returning({ id: dietMessages.id });
+  return row.id;
+}
+
+export async function deleteDietMessage(db: DB, userId: string, id: number) {
+  await db.delete(dietMessages).where(and(eq(dietMessages.id, id), eq(dietMessages.userId, userId)));
 }
 
 export async function clearDietMessages(db: DB, userId: string) {

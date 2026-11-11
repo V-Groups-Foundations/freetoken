@@ -72,9 +72,20 @@ export function parseDietBlocks(text: string): DietAction[] {
   return out;
 }
 
+/**
+ * The reply without a reasoning model's private thinking, which some hosts (Cloudflare's GPT-OSS) send as
+ * plain text: "analysis…assistantfinal<answer>". Only the answer is kept; thinking with no answer after it
+ * (cut off) leaves nothing, so it counts as no reply rather than being shown.
+ */
+export function cleanReply(text: string): string {
+  if (!/^\s*analysis(?=\s|[A-Z])/.test(text)) return text; // lowercase and glued on, as the model writes it
+  const final = text.search(/assistant\s*final/i);
+  return final < 0 ? '' : text.slice(final).replace(/^assistant\s*final\s*/i, '');
+}
+
 /** The reply as the user reads it: the blocks taken out (a block still streaming in is hidden too). */
 export function stripDietBlocks(text: string): string {
-  return text.replace(BLOCK, '').replace(/```diet[\s\S]*$/, '').replace(/\n{3,}/g, '\n\n').trim();
+  return cleanReply(text).replace(BLOCK, '').replace(/```diet[\s\S]*$/, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 export type Totals = { kcal: number; protein: number; fat: number; carbs: number };

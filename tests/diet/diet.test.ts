@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { coachSystemPrompt, parseDietBlocks, stripDietBlocks } from '@/diet/protocol';
+import { cleanReply, coachSystemPrompt, parseDietBlocks, stripDietBlocks } from '@/diet/protocol';
 import { applyDietActions, coachState, dietState, savedReply, shiftDay } from '@/diet/service';
 import { CHAT_STYLE, withChatStyle } from '@/chat/style';
 import { createTestDb, createUser } from '../helpers/db';
@@ -108,5 +108,19 @@ describe('chat style', () => {
     expect(m[0]).toEqual({ role: 'system', content: CHAT_STYLE });
     expect(CHAT_STYLE).toMatch(/Don't repeat what you already said/);
     expect(CHAT_STYLE).toMatch(/No closing pitch/);
+  });
+});
+
+describe('leaked reasoning', () => {
+  it('drops thinking that was cut off before any answer (what Cloudflare sent on 2026-11-10)', () => {
+    const leaked = 'analysis\n\nWe need to decipher user request: "Okau for dinner how muxh chciken". Chicken breast raw per 100g approx 165 kcal… Rice cooked per 100g';
+    expect(cleanReply(leaked)).toBe('');
+    expect(stripDietBlocks(leaked)).toBe('');
+  });
+  it('keeps only the answer after the thinking, and leaves normal replies alone', () => {
+    expect(cleanReply('analysisThey want chicken and rice.assistantfinalTake 200 g raw chicken and 180 g cooked rice.')).toBe('Take 200 g raw chicken and 180 g cooked rice.');
+    expect(cleanReply('Analysis: your day is on target.')).toBe('Analysis: your day is on target.');
+    const normal = 'Your analysis: dinner adds 363 kcal.';
+    expect(cleanReply(normal)).toBe(normal);
   });
 });

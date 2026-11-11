@@ -5,8 +5,8 @@ import { sessionUserId } from '@/lib/session';
 import { tapAssistant } from '@/server/stream';
 import { routeChat } from '@/router/execute';
 import { getDeps } from '@/server/deps';
-import { coachSystemPrompt, onlyAsking, parseDietBlocks, stripDietBlocks } from '@/diet/protocol';
-import { addDietMessage, applyDietActions, coachState, listDietMessages, savedReply } from '@/diet/service';
+import { cleanReply, coachSystemPrompt, onlyAsking, parseDietBlocks, stripDietBlocks } from '@/diet/protocol';
+import { addDietMessage, applyDietActions, coachState, deleteDietMessage, listDietMessages, savedReply } from '@/diet/service';
 import { dayParam } from '@/diet/day';
 import { currentPlan, generatePlan, trainingCoachLines } from '@/diet/plan';
 import { wantsPlanChange } from '@/diet/training';
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
     body: { model: 'auto-smart', messages: [{ role: 'system', content: coachSystemPrompt(state) }, ...history, { role: 'user', content: rich }], stream: true },
   }, getDeps());
   if (!out.ok) return Response.json({ error: { message: out.message, code: out.code } }, { status: out.status });
-  await addDietMessage(db, uid, { role: 'user', content: stored });
+  const asked = await addDietMessage(db, uid, { role: 'user', content: stored });
 
   const provider = out.response.headers.get('x-freetoken-provider');
   // the reply's full text once it has streamed; the log and any plan change are applied after the response
@@ -55,9 +55,12 @@ export async function POST(req: Request) {
   const replyText = new Promise<string>((ok) => { finished = ok; });
   after(async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const text = await Promise.race([replyText, new Promise<string>((ok) => { timer = setTimeout(() => ok(''), 280_000); })]);
+    const raw = await Promise.race([replyText, new Promise<string>((ok) => { timer = setTimeout(() => ok(''), 280_000); })]);
     clearTimeout(timer);
-    if (!text) return;
+    const text = cleanReply(raw).trim();
+    // no answer (the model only thought, or the stream broke): the page offers to send it again, so the
+    // unanswered question is taken back out rather than left in the conversation twice
+    if (!text) { await deleteDietMessage(db, uid, asked).catch(() => {}); return; }
     // a question with no photo reports nothing eaten: any food the model "logged" was its own suggestion
     const asking = !photos && onlyAsking(words);
     const actions = parseDietBlocks(text).map((a) => (asking ? { ...a, log: undefined, remove: undefined } : a));

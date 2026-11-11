@@ -15,10 +15,11 @@
 ![Cost](https://img.shields.io/badge/cost-%240%20forever-22c55e)
 ![Setup](https://img.shields.io/badge/setup-one%20line-3ad1ff)
 ![API](https://img.shields.io/badge/API-OpenAI%20%2B%20Anthropic%20compatible-a78bfa)
-![Tests](https://img.shields.io/badge/tests-268%20passing-22c55e)
+[![Live](https://img.shields.io/badge/live-freetoken--chi.vercel.app-000000?logo=vercel)](https://freetoken-chi.vercel.app)
+![Tests](https://img.shields.io/badge/tests-413%20passing-22c55e)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-**[Quick start](#-quick-start-one-line) · [Features](#-what-you-get) · [Claude Code & co.](#-claude-code-cursor--cline--on-free-models) · [V-Run](#%EF%B8%8F-v-run--the-free-ai-coding-agent) · [Providers](#-free-providers) · [FAQ](#-faq)**
+**[🌐 Open FreeToken online](https://freetoken-chi.vercel.app) · [Quick start](#-quick-start-one-line) · [Features](#-what-you-get) · [Claude Code & co.](#-claude-code-cursor--cline--on-free-models) · [V-Run](#%EF%B8%8F-v-run--the-free-ai-coding-agent) · [Providers](#-free-providers) · [FAQ](#-faq)**
 
 <sub>A <b>V Groups</b> project · if it saves you money, a ⭐ helps others find it</sub>
 
