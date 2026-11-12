@@ -21,7 +21,12 @@ import * as web from "./web";
 import * as mcp from "./mcp";
 import * as git from "./git";
 import * as terminal from "./terminal";
+import * as pty from "./pty";
 import { fuzzyFiles, grep } from "./search";
+import * as crash from "./crash";
+import * as updates from "./updates";
+import * as starters from "./starters";
+import { randomBytes } from "node:crypto";
 import { deletePath, getRoot, isIgnored, listDir, readText, reloadIgnore, resolveInRoot, setRoot, writeText, clearRoot } from "./workspace";
 
 if (process.env.CURSOR_REMAKE_USER_DATA) app.setPath("userData", process.env.CURSOR_REMAKE_USER_DATA);
@@ -67,14 +72,19 @@ interface Settings {
   tokenBudget?: number;
   /** read JavaScript-built pages through r.jina.ai (a third party) */
   webReader?: boolean;
+  /** send crash reports (nothing personal) to FreeToken; on unless turned off */
+  crashReports?: boolean;
 }
-const DEFAULTS: Settings = { provider: "anthropic", model: ai.DEFAULT_MODEL, ftUrl: ft.FREETOKEN_DEFAULT_URL, ftModel: "auto-smart", recent: [] };
+// V-Run inside the FreeToken source uses the FreeToken next door; an installed V-Run uses the hosted one
+const DEFAULT_FT_URL = link.serverRoot(__dirname) ? ft.FREETOKEN_DEFAULT_URL : ft.FREETOKEN_HOSTED_URL;
+const DEFAULTS: Settings = { provider: "anthropic", model: ai.DEFAULT_MODEL, ftUrl: DEFAULT_FT_URL, ftModel: "auto-smart", recent: [] };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 function loadSettings(): Settings {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsFile(), "utf8")) }; }
   catch { return { ...DEFAULTS }; }
 }
 let settings = loadSettings();
+crash.installCrashReporting(app, { version: app.getVersion(), logDir: app.getPath("userData"), enabled: () => settings.crashReports !== false && app.isPackaged && !process.env.VRUN_NO_CRASH_REPORTS });
 /** The safety settings take effect in the agent. */
 function applySafety() {
   ai.setCommandRules(settings.commandRules ?? { allow: [], deny: [] });
@@ -95,7 +105,7 @@ const storedKey = () => decrypt(settings.apiKeyEnc);
 const ftToken = () => decrypt(settings.ftTokenEnc) || process.env.FREETOKEN_API_TOKEN || "";
 ai.configure({ apiKey: () => storedKey() || process.env.ANTHROPIC_API_KEY || "", model: () => settings.model || ai.DEFAULT_MODEL });
 /** The FreeToken API base (…/api/v1): env override, else Settings. Everything FreeToken-related uses this. */
-const ftBase = () => process.env.FREETOKEN_URL || settings.ftUrl || ft.FREETOKEN_DEFAULT_URL;
+const ftBase = () => process.env.FREETOKEN_URL || settings.ftUrl || DEFAULT_FT_URL;
 // the agent's web_search goes through FreeToken's Tavily search when the user connected a key there
 web.setFreeTokenSearch(async (query) => {
   const token = ftToken();
@@ -498,9 +508,32 @@ async function openFreeTokenProject(id: string) {
 }
 
 let pendingLink: string | null = process.argv.find((a) => a.startsWith(`${PROTOCOL}://`)) ?? null;
+// "Sign in with FreeToken": the one-time state V-Run sent to the browser; only a link carrying it signs in
+let signIn: { state: string; at: number } | null = null;
+function startSignIn() {
+  signIn = { state: randomBytes(24).toString("base64url"), at: Date.now() };
+  shell.openExternal(`${ftOrigin()}/v-run/signin?state=${signIn.state}`);
+}
+function finishSignIn(token: string, state: string) {
+  const ok = !!signIn && signIn.state === state && Date.now() - signIn.at < 30 * 60_000;
+  if (!ok) {
+    // not a sign-in this V-Run started: another site can't sign V-Run in to its account
+    dialog.showMessageBox(win!, { type: "warning", title: "V-Run", message: "Sign-in link ignored", detail: "That link didn't come from a sign-in started in V-Run. Use Sign in with FreeToken in V-Run to connect." });
+    return;
+  }
+  signIn = null;
+  settings.ftTokenEnc = encrypt(token);
+  settings.provider = "freetoken";
+  saveSettings();
+  send("settings-changed", null);
+  send("signed-in", null);
+  if (win) showWindow();
+}
+
 function handleDeepLink(url: string) {
   if (!win) { pendingLink = url; return; } // cold start: handled once the window has loaded
   const d = link.parseDeepLink(url);
+  if (d?.kind === "connect") return finishSignIn(d.token, d.state);
   if (d?.kind !== "project") return; // vrun://open only needed the window, which is up and focused
   // any web page can fire a vrun:// link: switching projects stops the agent's work and the running app,
   // so that's the user's call when something is running
@@ -794,7 +827,19 @@ function registerIpc() {
     finally { completions.delete(id); }
   });
 
+  handle("onboard:signin", () => startSignIn());
+  handle("onboard:starters", () => starters.STARTERS.map(({ id, title, about }) => ({ id, title, about })));
+  handle("onboard:create", async (name: string, starterId: string) => {
+    const made = starters.createProject(String(name ?? ""), String(starterId ?? "empty"));
+    await openFolder(made.dir);
+    return made;
+  });
+  handle("onboard:home", () => starters.projectsHome());
+  handle("update:status", () => updates.updateStatus());
+  handle("update:install", () => updates.installNow());
+  handle("crash:renderer", (message: string, stack?: string) => { crash.report("renderer-error", Object.assign(new Error(String(message).slice(0, 2000)), { stack: stack ? String(stack).slice(0, 12_000) : undefined })); });
   handle("settings:get", () => ({
+    crashReports: settings.crashReports !== false,
     provider: useFreeToken() ? "freetoken" : "anthropic",
     model: settings.model, hasKey: !!storedKey(), envKey: !!process.env.ANTHROPIC_API_KEY, canEncrypt: safeStorage.isEncryptionAvailable(),
     ftUrl: settings.ftUrl, ftModel: settings.ftModel, hasFtToken: !!ftToken(),
@@ -803,8 +848,9 @@ function registerIpc() {
     if (patch.provider) settings.provider = patch.provider;
     if (patch.model) settings.model = patch.model.trim();
     if (patch.apiKey === null) delete settings.apiKeyEnc; else if (patch.apiKey) settings.apiKeyEnc = encrypt(patch.apiKey);
-    if (patch.ftUrl !== undefined) settings.ftUrl = patch.ftUrl.trim() || ft.FREETOKEN_DEFAULT_URL;
+    if (patch.ftUrl !== undefined) settings.ftUrl = patch.ftUrl.trim() || DEFAULT_FT_URL;
     if (patch.ftModel) settings.ftModel = patch.ftModel.trim();
+    if (typeof (patch as { crashReports?: boolean }).crashReports === "boolean") settings.crashReports = (patch as { crashReports: boolean }).crashReports;
     if (patch.ftToken === null) delete settings.ftTokenEnc;
     else if (patch.ftToken) {
       if (!/^ft_\S+$/.test(patch.ftToken.trim())) throw new Error("FreeToken tokens start with ft_ — copy it from FreeToken's API tokens page.");
@@ -918,6 +964,15 @@ function registerIpc() {
   });
   // the whole tree: on Windows p.kill() ends only the shell, and a dev server started in it kept running
   handle("term:kill", (id: string) => terminal.stop(id));
+  // the real terminal (a shell in a pseudo-terminal); the per-command terminal above is its fallback
+  handle("pty:available", () => pty.available());
+  handle("pty:open", (id: string, cols: number, rows: number) => {
+    if (!pty.open(String(id), cols, rows, (data) => send("pty-data", { id, data }), (code) => send("pty-exit", { id, code })))
+      throw new Error(`The terminal couldn't start: ${pty.whyUnavailable()}`);
+  });
+  handle("pty:write", (id: string, data: string) => pty.write(String(id), String(data)));
+  handle("pty:resize", (id: string, cols: number, rows: number) => pty.resize(String(id), cols, rows));
+  handle("pty:kill", (id: string) => pty.kill(String(id)));
   handle("term:input", (id: string, text: string) => terminal.input(id, text));
   handle("term:end", (id: string) => terminal.endInput(id));
   handle("term:cwd", (id: string) => terminal.cwdOf(id));
@@ -931,6 +986,7 @@ app.whenReady().then(async () => {
   if (process.platform !== "darwin") Menu.setApplicationMenu(null);
   registerIpc();
   createWindow();
+  updates.startUpdates(app, (s) => send("update-status", s));
   const initial = process.env.CURSOR_REMAKE_OPEN;
   win!.webContents.once("did-finish-load", async () => {
     if (initial) await openFolder(initial);
@@ -954,6 +1010,7 @@ function stopEverything() {
   if (cleanedUp) return;
   cleanedUp = true;
   terminal.stopAll();
+  pty.killAll();
   runner.stopApp(true);
   mcp.stopAll();
 }

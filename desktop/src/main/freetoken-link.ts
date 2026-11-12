@@ -33,8 +33,15 @@ export function renderTranscript(name: string, messages: ProjectMessage[]) {
 }
 
 /** vrun://open (just bring V-Run up) or vrun://project/<id>. Anything else is ignored. */
-export function parseDeepLink(raw: string): { kind: "open" } | { kind: "project"; id: string } | null {
+export function parseDeepLink(raw: string): { kind: "open" } | { kind: "project"; id: string } | { kind: "connect"; token: string; state: string } | null {
   if (/^vrun:\/\/open\/?$/i.test(raw.trim())) return { kind: "open" };
+  // "Sign in with FreeToken" coming back from the browser: an ft_ token and the one-time state V-Run made
+  const c = /^vrun:\/\/connect\/?\?(.+)$/i.exec(raw.trim());
+  if (c) {
+    const q = new URLSearchParams(c[1]);
+    const token = q.get("token") ?? "", state = q.get("state") ?? "";
+    return /^ft_[A-Za-z0-9_-]{16,200}$/.test(token) && /^[A-Za-z0-9_-]{16,64}$/.test(state) ? { kind: "connect", token, state } : null;
+  }
   const m = /^vrun:\/\/project\/([\w-]{1,64})\/?$/i.exec(raw.trim());
   return m ? { kind: "project", id: m[1] } : null;
 }

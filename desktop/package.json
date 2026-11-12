@@ -1,6 +1,6 @@
 {
   "name": "v-run",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "V-Run — the FreeToken desktop coding app (Electron editor + agent)",
   "main": "dist/main/main.js",
@@ -11,35 +11,118 @@
     "build": "npm run build:main && npm run build:renderer",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json",
     "start": "electron .",
-    "test": "tsx test/core.test.ts",
+    "test": "node scripts/test-all.mjs",
     "e2e": "tsx test/e2e.ts",
-    "test:all": "tsx test/core.test.ts && tsx test/safety.test.ts && tsx test/freetoken.test.ts && tsx test/freetoken-link.test.ts && tsx test/team.test.ts && tsx test/attachments.test.ts && tsx test/history.test.ts && tsx test/share.test.ts && tsx test/publish.test.ts && tsx test/android.test.ts && tsx test/bench.test.ts && tsx test/images.test.ts && tsx test/syntax.test.ts && tsx test/review.test.ts",
-    "e2e:ft": "tsx test/e2e-freetoken.ts"
+    "test:all": "node scripts/test-all.mjs",
+    "e2e:ft": "tsx test/e2e-freetoken.ts",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "release": "npm run build && electron-builder --publish always",
+    "smoke": "tsx test/smoke-packaged.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.134.0",
+    "@lydell/node-pty": "^1.1.0",
     "@vscode/ripgrep": "^1.18.0",
-    "mp4-muxer": "^5.2.2",
-    "openai": "^7.34.0",
-    "qrcode": "^1.5.4",
-    "typescript": "^5.9.3",
-    "webm-muxer": "^5.1.4",
-    "zod": "^4.6.7"
+    "electron-updater": "^6.8.11",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/node": "^22.20.5",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
     "electron": "^38.8.6",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "monaco-editor": "^0.57.0",
+    "mp4-muxer": "^5.2.2",
+    "openai": "^7.34.0",
     "playwright-core": "^1.64.1",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tsx": "^4.23.15",
-    "vite": "^6.4.4"
+    "vite": "^6.4.4",
+    "webm-muxer": "^5.1.4",
+    "zod": "^4.6.7"
+  },
+  "author": "V Groups",
+  "homepage": "https://github.com/V-Groups-Foundations/freetoken",
+  "build": {
+    "appId": "org.vgroups.vrun",
+    "productName": "V-Run",
+    "copyright": "V Groups",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**",
+      "assets/**",
+      "skills/**",
+      "package.json",
+      "!dist/**/*.map"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@vscode/ripgrep*/**",
+      "**/node_modules/@lydell/node-pty*/**"
+    ],
+    "protocols": [
+      {
+        "name": "V-Run",
+        "schemes": [
+          "vrun"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "V-Run-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "V-Run"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.png",
+      "artifactName": "V-Run-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development",
+      "icon": "assets/icon.png",
+      "artifactName": "V-Run-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "V-Groups-Foundations",
+        "repo": "freetoken",
+        "releaseType": "release"
+      }
+    ]
   }
 }

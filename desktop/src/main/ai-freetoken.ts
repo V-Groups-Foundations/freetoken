@@ -5,7 +5,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-  READ_ONLY, TOOLS, MAX_STEPS, spendTokens, schemaFor, mcpToolsFor, prepareProject, beginTurn, buildNudge, regressionGate, startTurnState, stepsLeftNote, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail,
+  READ_ONLY, TOOLS, MAX_STEPS, spendTokens, schemaFor, mcpToolsFor, prepareProject, beginTurn, buildNudge, regressionGate, startTurnState, stepsLeftNote, skillContext, toolNamesFor, execTool, getSession, loadRules, schemas, systemPrompt, toolDetail, messageContext, runToolCalls, closingNote,
   type AgentEvent, type ChatRequest, type ToolName,
 } from "./ai";
 import { prepareAttachments, type Prepared } from "./attachments";
@@ -15,6 +15,8 @@ import { changesForReview, parseReview, reviewFindings, reviewPrompt, REVIEW_SYS
 import type { Session } from "./ai";
 
 export const FREETOKEN_DEFAULT_URL = "http://localhost:3000/api/v1";
+/** The hosted FreeToken: the default for an installed V-Run (no FreeToken source next to it). */
+export const FREETOKEN_HOSTED_URL = "https://freetoken-chi.vercel.app/api/v1";
 
 let cfg = { url: () => FREETOKEN_DEFAULT_URL, token: () => "", model: () => "auto-smart" };
 export const configureFreeToken = (c: Partial<typeof cfg>) => { cfg = { ...cfg, ...c }; };
@@ -397,19 +399,7 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
   const tools: ChatCompletionTool[] = [...OA_TOOLS.filter((t) => t.type === "function" && allowed.has(t.function.name)),
     ...extra.map((t) => ({ type: "function" as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }))];
 
-  const ctx: string[] = [];
-  const c = req.context;
-  if (c?.activeFile) ctx.push(`Currently open file: ${c.activeFile}`);
-  if (c?.openFiles?.length) ctx.push(`Open tabs: ${c.openFiles.join(", ")}`);
-  if (c?.selection?.text) ctx.push(`Selected code (${c.selection.path}:${c.selection.start}-${c.selection.end}):\n\`\`\`\n${c.selection.text}\n\`\`\``);
-  for (const f of c?.mentionedFiles ?? []) {
-    if (hiddenFromAI(f)) { ctx.push(`@${f}: (hidden from the AI by .cursorignore)`); continue; }
-    try { ctx.push(`@${f}:\n\`\`\`\n${clip(await readText(f), 30_000)}\n\`\`\``); } catch (e) { ctx.push(`@${f}: (could not read: ${(e as Error).message})`); }
-  }
-  let att: Prepared = { images: [], texts: [], note: "" };
-  try { att = await prepareAttachments(req.attachments); } catch (e) { ctx.push(`(The user's attachments couldn't be saved: ${(e as Error).message})`); }
-  ctx.push(...(await skillContext(s, req, emit)), ...att.texts);
-  if (att.note) ctx.push(att.note);
+  const { parts: ctx, att } = await messageContext(s, req, emit);
   const userIndex = msgs.length;
   emit({ type: "turn_start", index: beginTurn(s, "ft", msgs.length) });
   const userText = ctx.length ? `<context>\n${ctx.join("\n\n")}\n</context>\n\n${req.text}` : req.text;
@@ -566,53 +556,34 @@ export async function chatFreeToken(req: ChatRequest, emit: (e: AgentEvent) => v
         }
         // a task that changed the project and ended cleanly counts for every model that worked on it
         if (s.turns[s.turns.length - 1]?.files.size && !s.unchecked) for (const m of turnModels) reportModel(m, true, "finished a task");
+        const closing = closingNote(s, text);
+        if (closing) emit({ type: "text", delta: closing });
         return emit({ type: "done", stopReason: finish ?? "stop" });
       }
 
-      for (const u of uses) {
-        // stopped mid-batch: the rest of this reply's tool calls don't run (each still gets a result,
-        // so the transcript stays valid)
-        if (s.abort.signal.aborted) {
-          msgs.push({ role: "tool", tool_call_id: u.id, content: "Not run: the user stopped the task." });
-          continue;
-        }
+      const parsedCalls = uses.map((u) => {
         let input: unknown = {};
         try { input = JSON.parse(u.args || "{}"); } catch { input = undefined; }
-        emit({ type: "tool_start", id: u.id, name: u.name, input });
-        const schema = schemaFor(u.name);
-        const parsed = input === undefined ? null : schema?.safeParse(input);
-        let content: string;
-        if (!schema || !allowed.has(u.name)) {
-          content = `Unknown or unavailable tool: ${u.name}`;
-          emit({ type: "tool_end", id: u.id, ok: false, summary: content });
-          reportModel(stepModel, false, "unknown tool");
-        } else if (!parsed?.success) {
-          content = `Invalid arguments for ${u.name}: ${parsed ? parsed.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; ") : "not valid JSON"}. Retry with valid JSON matching the schema.`;
-          emit({ type: "tool_end", id: u.id, ok: false, summary: "Invalid tool call" });
-          reportModel(stepModel, false, "invalid tool call");
-        } else {
-          try {
-            const r = await execTool(s, u.name as ToolName, parsed.data, emit, u.id);
-            content = r.content;
-            if (/^(edit_file|write_file|delete_file|generate_image)$/.test(u.name)) changed = true;
-            // a write that broke the file's syntax counts against the model that wrote it: routing learns
-            // which models write code that doesn't parse
-            if (/ doesn't parse now — /.test(r.content)) reportModel(stepModel, false, "wrote code that doesn't parse");
-            if (quietStep && /^(edit_file|write_file|delete_file)$/.test(u.name)) quietStep = false;
-            // the agent model may not see images: a vision model looks at the page and describes problems
-            // once per version of the page: the same page reviewed again only repeats (or invents) problems
-            if (u.name === "inspect_preview" && r.image && !s.reviewed) {
-              s.reviewed = true;
-              const look = await lookAtPage(r.image, req.text, s.abort.signal);
-              if (look.text) { content += look.text; r.summary += ` · screenshot reviewed${look.model ? ` by ${look.model.split("/").pop()}` : ""}`; }
-            }
-            emit({ type: "tool_end", id: u.id, ok: true, summary: r.summary, detail: toolDetail(u.name, r) });
-          } catch (e) {
-            content = `Error: ${(e as Error).message}`;
-            emit({ type: "tool_end", id: u.id, ok: false, summary: (e as Error).message });
-          }
+        return { id: u.id, name: u.name, input };
+      });
+      const done = await runToolCalls(s, parsedCalls, allowed, emit, async (u, r) => {
+        // the agent model may not see images: a vision model looks at the page and describes problems
+        // once per version of the page: the same page reviewed again only repeats (or invents) problems
+        if (u.name === "inspect_preview" && r.image && !s.reviewed) {
+          s.reviewed = true;
+          const look = await lookAtPage(r.image, req.text, s.abort?.signal);
+          if (look.text) { r.content += look.text; r.summary += ` · screenshot reviewed${look.model ? ` by ${look.model.split("/").pop()}` : ""}`; }
         }
-        msgs.push({ role: "tool", tool_call_id: u.id, content });
+      });
+      for (const o of done) {
+        if (o.problem === "unknown") reportModel(stepModel, false, "unknown tool");
+        if (o.problem === "invalid") reportModel(stepModel, false, "invalid tool call");
+        if (o.ok && /^(edit_file|write_file|delete_file|generate_image)$/.test(o.name)) changed = true;
+        // a write that broke the file's syntax counts against the model that wrote it: routing learns
+        // which models write code that doesn't parse
+        if (o.ok && / doesn't parse now — /.test(o.content)) reportModel(stepModel, false, "wrote code that doesn't parse");
+        if (quietStep && o.ok && /^(edit_file|write_file|delete_file)$/.test(o.name)) quietStep = false;
+        msgs.push({ role: "tool", tool_call_id: o.id, content: o.content });
       }
       if (escalated) stuckStep(s, changed);
       const budget = stepsLeftNote(turn, req.maxSteps ?? MAX_STEPS) ?? budgetNote;

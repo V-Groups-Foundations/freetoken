@@ -147,11 +147,15 @@ ${e.stack}` : ""}`));
     });
 
     await step("terminal runs a command", async () => {
+      // a real terminal (xterm.js on a shell): type into it like a user
       await page.keyboard.press("Control+`");
-      await page.getByLabel("Terminal command").fill("echo terminal-ok");
+      const term = page.locator(".xterm-box .xterm");
+      await term.waitFor({ timeout: 15000 });
+      await page.waitForTimeout(2500); // the shell starting
+      await term.click();
+      await page.keyboard.type("echo terminal-$(1+1)ok");
       await page.keyboard.press("Enter");
-      await page.locator('section[aria-label="Terminal"] pre', { hasText: "[exit 0]" }).waitFor({ timeout: 15000 });
-      if (!(await page.locator('section[aria-label="Terminal"] pre').innerText()).includes("terminal-ok")) throw new Error("no output");
+      await page.locator(".xterm-rows", { hasText: "terminal-2ok" }).waitFor({ timeout: 15000 });
       await shot("04-workbench");
     });
 

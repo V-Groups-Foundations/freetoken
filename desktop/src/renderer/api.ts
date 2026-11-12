@@ -33,7 +33,9 @@ export type AgentEvent =
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
 export interface IndexStatus { state: "indexing" | "ready" | "error"; files?: number; chunks?: number; changedFiles?: number; ms?: number; message?: string }
-export interface Settings { provider: "anthropic" | "freetoken"; model: string; hasKey: boolean; envKey: boolean; canEncrypt: boolean; ftUrl: string; ftModel: string; hasFtToken: boolean }
+export interface Settings { provider: "anthropic" | "freetoken"; model: string; hasKey: boolean; envKey: boolean; canEncrypt: boolean; ftUrl: string; ftModel: string; hasFtToken: boolean; crashReports: boolean }
+export type UpdateStatus = { state: "idle" | "checking" | "downloading" | "ready" | "error" | "off"; version?: string; percent?: number; error?: string };
+export type Starter = { id: string; title: string; about: string };
 
 type Unsub = () => void;
 interface Api {
@@ -80,9 +82,21 @@ interface Api {
   cmdK(req: { path: string; language: string; fileText: string; start: number; end: number; instruction: string }): Promise<{ replacement: string; original: string }>;
   complete(id: string, req: { path: string; language: string; prefix: string; suffix: string }): Promise<string>;
   getSettings(): Promise<Settings>;
-  setSettings(patch: { provider?: Settings["provider"]; model?: string; apiKey?: string | null; ftUrl?: string; ftModel?: string; ftToken?: string | null }): Promise<void>;
+  setSettings(patch: { provider?: Settings["provider"]; model?: string; apiKey?: string | null; ftUrl?: string; ftModel?: string; ftToken?: string | null; crashReports?: boolean }): Promise<void>;
+  signInFreeToken(): Promise<void>;
+  starters(): Promise<Starter[]>;
+  createProject(name: string, starter: string): Promise<{ dir: string; ask: string | null }>;
+  projectsHome(): Promise<string>;
+  updateStatus(): Promise<UpdateStatus>;
+  installUpdate(): Promise<boolean>;
+  reportError(message: string, stack?: string): Promise<void>;
   models(): Promise<string[]>;
   termRun(id: string, command: string): Promise<void>;
+  ptyAvailable(): Promise<boolean>;
+  ptyOpen(id: string, cols: number, rows: number): Promise<void>;
+  ptyWrite(id: string, data: string): Promise<void>;
+  ptyResize(id: string, cols: number, rows: number): Promise<void>;
+  ptyKill(id: string): Promise<void>;
   termKill(id: string): Promise<void>;
   /** a line of input for the running command */
   termInput(id: string, text: string): Promise<boolean>;
@@ -170,6 +184,10 @@ interface Api {
   onFtProject(fn: (p: { id: string; name: string }) => void): Unsub;
   onFtServer(fn: (state: string) => void): Unsub;
   onSettingsChanged(fn: () => void): Unsub;
+  onSignedIn(fn: () => void): Unsub;
+  onPtyData(fn: (p: { id: string; data: string }) => void): Unsub;
+  onPtyExit(fn: (p: { id: string; code: number }) => void): Unsub;
+  onUpdateStatus(fn: (s: UpdateStatus) => void): Unsub;
 }
 export type AppStatus = { running: boolean; command: string; url?: string; exitCode?: number | null; output: string };
 export type AppEvent = { type: "start"; command: string } | { type: "data"; data: string } | { type: "url"; url: string } | { type: "exit"; code: number | null };

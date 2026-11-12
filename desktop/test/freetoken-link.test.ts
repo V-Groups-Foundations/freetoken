@@ -219,7 +219,7 @@ async function main() {
     ws.setRoot(fs.mkdtempSync(path.join(os.tmpdir(), "vrun-proj-")));
     const s = ai.getSession("skills");
     const events: any[] = [];
-    const saved = await ai.execTool(s, "save_skill", { name: "Deploy to Fly", description: "Use when deploying this kind of app to Fly.io", instructions: "1. fly launch\n2. fly deploy\nAlways set the region to ams." }, (e) => events.push(e), "k1");
+    const saved = await ai.execTool(s, "save_skill", { name: "Deploy to Fly", description: "Use when deploying this kind of app to Fly.io", instructions: "1. fly launch\n2. fly deploy\nAlways set the region to ams." }, (e) => { events.push(e); if (e.type === "approval") ai.approve("skills", e.id, true); }, "k1"); // a skill for every project asks first
     fs.writeFileSync(path.join(home, "skills", "deploy-to-fly", "notes.md"), "extra notes");
     const prompt = await ai.systemPrompt("agent", "deploy it");
     const used = await ai.execTool(s, "use_skill", { name: "deploy-to-fly" }, () => {}, "k2");

@@ -136,7 +136,7 @@ async function check(name: string, fn: () => unknown | Promise<unknown>) {
     ai.setTokenBudget(0);
     const e = ai.spendTokens(s, 50_000_000);
     ai.setTokenBudget(5_000_000);
-    return (!a.note && !a.stop && /Wrap up/.test(b.note ?? "") && !c.note && !c.stop && /token budget/.test(d.stop ?? "") && !e.stop && ai.MAX_STEPS <= 300) || JSON.stringify({ a, b, c, d, e, max: ai.MAX_STEPS });
+    return (!a.note && !a.stop && /Wrap up/.test(b.note ?? "") && !c.note && !c.stop && /token budget/.test(d.stop ?? "") && !e.stop && ai.MAX_STEPS >= 1000) || JSON.stringify({ a, b, c, d, e, max: ai.MAX_STEPS });
   });
 
   await check("Claude busy (429 / 529 overloaded / 5xx / dropped connection): wait and try again, up to 4 times, honouring retry-after", () => {

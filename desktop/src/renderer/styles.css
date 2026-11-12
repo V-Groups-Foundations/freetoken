@@ -32,6 +32,20 @@ code, pre { font-family: "Cascadia Code", Consolas, monospace; }
 .welcome-card { display: flex; flex-direction: column; align-items: center; gap: 10px; width: min(560px, 92vw); text-align: center; }
 .welcome-card h1 { margin: 0; font-size: 26px; font-weight: 600; }
 .welcome-card h3 { margin: 18px 0 2px; font-size: 12px; color: var(--fg2); text-transform: uppercase; letter-spacing: .06em; }
+.welcome.dropping { outline: 2px dashed var(--accent, #4c8dff); outline-offset: -12px; }
+.onboard-step { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; }
+.onboard-step .small, .welcome-card .small { font-size: 12px; margin: 0; }
+.onboard-key { display: flex; gap: 6px; width: min(420px, 100%); }
+.onboard-key .field { flex: 1; }
+.onboard-ok { color: var(--ok, #3ccf91); margin: 4px 0; font-size: 13px; }
+.onboard-new { width: 100%; text-align: left; margin-top: 6px; }
+.onboard-new summary { cursor: pointer; text-align: center; color: var(--fg2); font-size: 13px; }
+.onboard-new[open] { display: flex; flex-direction: column; gap: 8px; }
+.onboard-new .field { width: 100%; box-sizing: border-box; }
+.starters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.starter { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border, #333); background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.starter span { font-size: 11px; color: var(--fg2); }
+.starter.on { border-color: var(--accent, #4c8dff); background: color-mix(in srgb, var(--accent, #4c8dff) 12%, transparent); }
 .logo-mark { display: block; box-shadow: 0 6px 22px #22b8ff33; }
 .logo-banner { display: block; border-radius: 14px; box-shadow: 0 10px 40px #0009, 0 0 0 1px #ffffff10; margin-bottom: 6px; }
 .empty-editor .logo-mark { margin: 0 auto 12px; opacity: .9; }
@@ -681,3 +695,7 @@ kbd { font: 11px "Cascadia Code", Consolas, monospace; background: #ffffff10; bo
 .git-new { display: flex; gap: 6px; }
 .git-new input { flex: 1; min-width: 0; }
 .git-commit { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* real terminal (xterm.js) */
+.xterm-box { height: 100%; width: 100%; padding: 4px 0 0 8px; box-sizing: border-box; }
+.xterm-box .xterm { height: 100%; }

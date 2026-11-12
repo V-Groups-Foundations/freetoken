@@ -25,7 +25,7 @@ type Item =
   | { kind: "approval"; id: string; command: string; explanation?: string; decided?: boolean | null; auto?: boolean; rule?: string }
   | { kind: "todos"; todos: { content: string; status: string }[] }
   | { kind: "error"; text: string }
-  | { kind: "turn"; ms: number; tokens: number; estimated: boolean; reason: string; tools: number; mode: Mode; next: string[]; synced?: true | string; models?: string[] }
+  | { kind: "turn"; ms: number; tokens: number; estimated: boolean; reason: string; tools: number; mode: Mode; next: string[]; synced?: true | string; models?: string[]; changed?: string[] }
   | { kind: "history"; name: string; messages: FtProject["messages"] }
   | { kind: "note"; text: string }
   | { kind: "skills"; names: string[]; auto: boolean }
@@ -109,7 +109,7 @@ function followUps(turn: Item[], mode: Mode, reason: string): string[] {
   return [...new Set(out)].slice(0, 3);
 }
 
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const plural = (n: number, w: string, many = `${w}s`) => `${n} ${n === 1 ? w : many}`;
 const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
 const fmtTime = (ms: number) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; };
 const short = (s: string, n = 60) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -141,7 +141,7 @@ export function ChatPanel(props: {
       // would start a second loop on the same session. Not running: unfinished steps were interrupted.
       if (c.running) {
         setItems(c.items as Item[]);
-        turn.current = { ...turn.current, start: Date.now(), tokens: 0, chars: 0, tools: 0, waitUntil: 0, models: [], mode: (c.mode as Mode) ?? "agent" };
+        turn.current = { ...turn.current, start: Date.now(), tokens: 0, chars: 0, tools: 0, waitUntil: 0, models: [], changed: [], spent: 0, mode: (c.mode as Mode) ?? "agent" };
         setBusy(true);
       } else {
         setItems((c.items as Item[]).map((x) => (x.kind === "tool" && x.status === "running" ? { ...x, status: "error", summary: "Interrupted (window reloaded)" } : x)));
@@ -166,6 +166,7 @@ export function ChatPanel(props: {
   const [skipActive, setSkipActive] = useState(false);
   useEffect(() => setSkipActive(false), [props.activeFile]);
   const [confirmRewind, setConfirmRewind] = useState<number | null>(null);
+  const [confirmUndo, setConfirmUndo] = useState<number | null>(null);
   // a message sent while the agent was busy, waiting for the stop to finish
   const queued = useRef<{ text: string; as: Mode } | null>(null);
   const [queuedText, setQueuedText] = useState<string | null>(null);
@@ -210,6 +211,9 @@ export function ChatPanel(props: {
   const refreshMem = () => api.memoryStatus().then(setMem).catch(() => {});
   useEffect(() => { refreshMem(); }, []);
   const [busy, setBusy] = useState(false);
+  // the token budget per task (Settings → Safety): the status line shows how much of it this task used
+  const [budget, setBudget] = useState(0);
+  useEffect(() => { if (busy) api.safetyGet().then((x) => setBudget(x.tokenBudget)).catch(() => {}); }, [busy]);
   // the agent has built something in this chat: offer a one-click check of it
   const built = items.some((x) => x.kind === "tool" && (x.name === "write_file" || x.name === "edit_file") && x.status === "ok");
   const [mentions, setMentions] = useState<string[]>([]);
@@ -222,7 +226,7 @@ export function ChatPanel(props: {
   const autoRunRef = useRef(autoRun);
   autoRunRef.current = autoRun;
   const [atBottom, setAtBottom] = useState(true);
-  const turn = useRef({ start: 0, tokens: 0, chars: 0, tools: 0, verb: THINKING[0], mode: "agent" as Mode, waitUntil: 0, models: [] as string[] });
+  const turn = useRef({ start: 0, tokens: 0, chars: 0, tools: 0, verb: THINKING[0], mode: "agent" as Mode, waitUntil: 0, models: [] as string[], changed: [] as string[], spent: 0 });
   const history = useRef<string[]>([]);
   const histPos = useRef(-1);
   const list = useRef<HTMLDivElement>(null);
@@ -289,7 +293,7 @@ export function ChatPanel(props: {
     else if (e.type === "approval") api.notify("V-Run needs your approval", e.command).catch(() => {});
     const t = turn.current;
     if (e.type === "text") t.chars += e.delta.length;
-    if (e.type === "usage") { t.tokens += e.output; if (e.input) setCtxTokens(e.input); }
+    if (e.type === "usage") { t.tokens += e.output; t.spent += (e.input ?? 0) + e.output; if (e.input) setCtxTokens(e.input); }
     if (e.type === "tool_start") t.tools++;
     const switched = e.type === "model" && t.models.length > 0;
     if (e.type === "model") { window.dispatchEvent(new CustomEvent("vrun-model", { detail: e.model })); if (!t.models.includes(e.model)) t.models.push(e.model); }
@@ -367,14 +371,14 @@ export function ChatPanel(props: {
         {
           const since = next.map((x) => x.kind).lastIndexOf("user");
           const m = turn.current.mode;
-          next.push({ kind: "turn", ms: Date.now() - t.start, tokens: t.tokens || Math.round(t.chars / 4), estimated: !t.tokens, reason: e.stopReason, tools: t.tools, models: [...t.models],
+          next.push({ kind: "turn", ms: Date.now() - t.start, tokens: t.tokens || Math.round(t.chars / 4), estimated: !t.tokens, reason: e.stopReason, tools: t.tools, models: [...t.models], changed: [...t.changed],
             mode: m, next: m === "plan" && e.stopReason !== "error" ? [] : followUps(next.slice(since + 1), m, e.stopReason) });
           break;
         }
       }
       return next;
     });
-    if (e.type === "file_changed") { props.onFilesChanged([e.path]); refreshPending(); }
+    if (e.type === "file_changed") { props.onFilesChanged([e.path]); refreshPending(); if (!turn.current.changed.includes(e.path)) turn.current.changed.push(e.path); }
     if (e.type === "done") {
       setBusy(false); setAutoRun(false); refreshMem();
       // "Accept all" chosen up front means no questions at all: keep the file changes too (✎ Edit / ↻ Retry still undo them)
@@ -421,7 +425,7 @@ export function ChatPanel(props: {
     const chips = [...mentions.map((m) => `@${m}`), ...(sel ? [`${sel.path}:${sel.start}-${sel.end}`] : [])];
     history.current = [text, ...history.current.filter((h) => h !== text)].slice(0, 50);
     histPos.current = -1;
-    turn.current = { start: Date.now(), tokens: 0, chars: 0, tools: 0, verb: THINKING[Math.floor(Math.random() * THINKING.length)], mode, waitUntil: 0, models: [] };
+    turn.current = { start: Date.now(), tokens: 0, chars: 0, tools: 0, verb: THINKING[Math.floor(Math.random() * THINKING.length)], mode, waitUntil: 0, models: [], changed: [], spent: 0 };
     stick.current = true;
     const files = attach;
     chips.push(...files.filter((f) => !f.preview).map((f) => `📎 ${f.name}`));
@@ -745,7 +749,22 @@ export function ChatPanel(props: {
                       {r.synced === true && <span className="synced" title="This turn was added to the FreeToken project"> · ✓ saved to FreeToken</span>}
                       {typeof r.synced === "string" && <span className="synced err" title={r.synced}> · not saved to FreeToken</span>}
                       {latest && <button className="icon-btn retry" onClick={retryLast} title="Undo this answer and its file changes, and ask again">↻ Retry</button>}
+                      {!busy && !!r.changed?.length && <>
+                        <button className="icon-btn" onClick={() => props.onReview(sid, r.changed![0])} title={`See what this reply changed:\n${r.changed.join("\n")}`}>⇄ See changes ({r.changed.length})</button>
+                        <button className="icon-btn" onClick={() => setConfirmUndo(i)} title="Put back every file this reply changed (and remove this reply and any after it)">↶ Undo</button>
+                      </>}
                     </div>
+                    {confirmUndo === i && (() => {
+                      const at = items.slice(0, i).map((x) => x.kind).lastIndexOf("user");
+                      const later = items.slice(i + 1).filter((x) => x.kind === "turn").length;
+                      return (
+                        <div className="rewind-confirm" role="group" aria-label="Undo this reply">
+                          <span>Undo this reply? {plural(r.changed!.length, "file")} it changed go back to how they were before it{later ? `, and the ${plural(later, "reply", "replies")} after it are undone too` : ""}. Your message comes back in the box.</span>
+                          <div className="row"><button className="btn small" onClick={() => setConfirmUndo(null)}>Cancel</button>
+                            <button className="btn small primary" onClick={async () => { setConfirmUndo(null); await editFrom(at); }}>Undo</button></div>
+                        </div>
+                      );
+                    })()}
                     {latest && r.mode === "plan" && r.reason !== "error" && (
                       <div className="plan-cta">
                         <button className="btn primary" onClick={() => send(EXECUTE_PLAN, "agent")}>▶ Approve plan &amp; build</button>
@@ -762,7 +781,7 @@ export function ChatPanel(props: {
               }
             }
           })}
-          {busy && !waiting && <StatusLine verb={verb} start={turn.current.start} turn={turn} />}
+          {busy && !waiting && <StatusLine verb={verb} start={turn.current.start} turn={turn} budget={budget} />}
         </div>
         {!atBottom && <button className="jump" onClick={jump}>↓ Jump to latest</button>}
       </OpenFileContext.Provider>
@@ -1059,7 +1078,7 @@ function Todos({ todos }: { todos: { content: string; status: string }[] }) {
   );
 }
 
-function StatusLine({ verb, start, turn }: { verb: string; start: number; turn: React.MutableRefObject<{ tokens: number; chars: number }> }) {
+function StatusLine({ verb, start, turn, budget }: { verb: string; start: number; turn: React.MutableRefObject<{ tokens: number; chars: number; spent: number }>; budget: number }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 120); return () => clearInterval(t); }, []);
   const frame = SPIN[Math.floor(now / 120) % SPIN.length];
@@ -1068,7 +1087,7 @@ function StatusLine({ verb, start, turn }: { verb: string; start: number; turn: 
     <div className="status-line" role="status" aria-label="Agent status">
       <span className="spin" aria-hidden>{frame}</span>
       <span className="verb">{verb}…</span>
-      <span className="muted">({fmtTime(Math.max(0, now - start))}{tokens > 0 ? ` · ↓ ${turn.current.tokens ? "" : "~"}${fmtTokens(tokens)} tokens` : ""} · esc to interrupt)</span>
+      <span className="muted">({fmtTime(Math.max(0, now - start))}{tokens > 0 ? ` · ↓ ${turn.current.tokens ? "" : "~"}${fmtTokens(tokens)} tokens` : ""}{turn.current.spent > 0 ? ` · ${fmtTokens(turn.current.spent)} used${budget > 0 ? ` of ${fmtTokens(budget)} (${Math.min(100, Math.round((turn.current.spent / budget) * 100))}%)` : ""}` : ""} · esc to interrupt)</span>
     </div>
   );
 }

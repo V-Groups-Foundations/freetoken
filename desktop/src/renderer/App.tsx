@@ -3,6 +3,8 @@ import { SourceControl } from "./Git";
 import { api, type AppStatus, type Entry, type FtViewState, type GrepHit, type IndexStatus, type PreviewState, type Settings, type ShareInfo, type PublishPlan } from "./api";
 import { ChatPanel } from "./Chat";
 import { Banner } from "./Logo";
+import { Welcome } from "./Welcome";
+import { XTerm } from "./XTerm";
 import ftMark from "./brand/freetoken.png";
 import { FreeTokenHub } from "./FreeTokenHub";
 import * as videoEncoder from "./video-encoder";
@@ -21,34 +23,13 @@ export function App() {
   return <Workbench key={root} root={root} onCloseFolder={closeFolder} />;
 }
 
-function Welcome({ recent, onOpen }: { recent: string[]; onOpen: (r: string) => void }) {
-  const [error, setError] = useState<string | null>(null);
-  const open = async (p?: string) => {
-    try { const r = p ? await api.openFolder(p) : await api.pickFolder(); if (r) onOpen(r); }
-    catch (e) { setError((e as Error).message); }
-  };
-  return (
-    <div className="welcome">
-      <div className="welcome-card">
-        <Banner />
-        <p className="muted">An AI code editor powered by your free FreeToken models.</p>
-        <button className="btn primary big" onClick={() => open()}>Open folder…</button>
-        {error && <div className="error" role="alert">{error}</div>}
-        {recent.length > 0 && <>
-          <h3>Recent</h3>
-          {recent.map((r) => <button key={r} className="linklike recent" onClick={() => open(r)}>{r}</button>)}
-        </>}
-      </div>
-    </div>
-  );
-}
-
 function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () => void }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [review, setReview] = useState<(Review & { sid: string }) | null>(null);
   const [side, setSide] = useState<"files" | "search" | "git">("files");
   const [quickOpen, setQuickOpen] = useState(false);
+  const [palette, setPalette] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // the model answering right now (the chat announces it; FreeToken may switch between steps)
   const [liveModel, setLiveModel] = useState<string | null>(null);
@@ -178,6 +159,9 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && !e.shiftKey && e.key.toLowerCase() === "o") { e.preventDefault(); pickFolder(); }
+      else if (mod && e.shiftKey && e.key.toLowerCase() === "p") { e.preventDefault(); setPalette(true); }
+      // Ctrl+K: the command palette — except in the editor, where it's the AI edit of the selection
+      else if (mod && !e.shiftKey && e.key.toLowerCase() === "k" && !(e.target as HTMLElement).closest(".monaco-editor")) { e.preventDefault(); setPalette(true); }
       else if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); setQuickOpen(true); }
       else if (mod && e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); setSide("search"); }
       else if (mod && e.shiftKey && e.key.toLowerCase() === "g") { e.preventDefault(); setSide("git"); }
@@ -256,6 +240,7 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
       <footer className="status">
         <button className="linklike" onClick={pickFolder} title={`${root} — click to open another folder (Ctrl+O)`}>{root.split(/[\\/]/).pop()}</button>
         <span className="spacer" />
+        <UpdateStatus />
         <BenchStatus />
         <button className="linklike" onClick={() => api.reindex()} title="Re-index codebase">
           {index.state === "indexing" ? "Indexing…" : index.state === "error" ? `Index error: ${index.message}` : `Indexed ${index.files} files · ${index.chunks} chunks`}
@@ -264,10 +249,39 @@ function Workbench({ root, onCloseFolder }: { root: string; onCloseFolder: () =>
         <button className="linklike" onClick={() => setSettingsOpen(true)} title={liveModel ? `Answering now: ${liveModel}` : undefined}>{settings ? (settings.provider === "freetoken" ? (settings.hasFtToken ? `FreeToken · ${settings.ftModel}${liveModel ? ` → ${shortModel(liveModel)}` : ""}` : "⚠ No FreeToken token") : settings.hasKey || settings.envKey ? settings.model : "⚠ No API key") : ""}</button>
       </footer>
       {quickOpen && <QuickOpen onClose={() => setQuickOpen(false)} onPick={(p) => { setQuickOpen(false); openFile(p); }} />}
+      {palette && <CommandPalette onClose={() => setPalette(false)} commands={[
+        { title: "Go to file…", keys: "Ctrl+P", run: () => setQuickOpen(true) },
+        { title: "Open folder…", keys: "Ctrl+O", run: pickFolder },
+        { title: "Close folder", run: onCloseFolder },
+        { title: "Ask the AI (focus chat)", keys: "Ctrl+L", run: () => setChatFocus((n) => n + 1) },
+        { title: "Toggle terminal", keys: "Ctrl+`", run: () => setTermOpen((v) => !v) },
+        { title: "Show terminal", run: () => { setTermOpen(true); setPanelTab("terminal"); } },
+        { title: "Show running app", run: () => { setTermOpen(true); setPanelTab("app"); } },
+        { title: "Show preview", run: () => { setTermOpen(true); setPanelTab("preview"); } },
+        { title: "Explorer: show files", run: () => setSide("files") },
+        { title: "Search in files", keys: "Ctrl+Shift+F", run: () => setSide("search") },
+        { title: "Source control (git)", keys: "Ctrl+Shift+G", run: () => setSide("git") },
+        { title: "Settings", keys: "Ctrl+,", run: () => setSettingsOpen(true) },
+        { title: "Open FreeToken", run: () => openFt("/") },
+        { title: "Re-index the codebase", run: () => api.reindex() },
+        { title: "Zoom in", keys: "Ctrl+=", run: () => api.zoom(0.5) },
+        { title: "Zoom out", keys: "Ctrl+-", run: () => api.zoom(-0.5) },
+        { title: "Reset zoom", keys: "Ctrl+0", run: () => api.zoom(0) },
+        { title: "Restart to install the downloaded update", run: () => api.installUpdate() },
+      ]} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenFreeToken={(route) => { setSettingsOpen(false); openFt(route); }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
+}
+
+/** An installed V-Run updates itself: the status bar offers the restart once the new version is downloaded. */
+function UpdateStatus() {
+  const [u, setU] = useState<{ state: string; version?: string; percent?: number } | null>(null);
+  useEffect(() => { api.updateStatus().then(setU).catch(() => {}); return api.onUpdateStatus(setU); }, []);
+  if (u?.state === "ready") return <button className="linklike update-ready" onClick={() => api.installUpdate()} title="The new version installs when you restart (or when you next quit V-Run).">⬆ Restart to update{u.version ? ` to ${u.version}` : ""}</button>;
+  if (u?.state === "downloading") return <span className="muted">Downloading update… {u.percent ?? 0}%</span>;
+  return null;
 }
 
 /**
@@ -363,6 +377,38 @@ function SearchPanel({ onOpen }: { onOpen: (p: string, line?: number) => void })
   );
 }
 
+type Command = { title: string; keys?: string; run: () => unknown };
+/** Every action by name (Ctrl+Shift+P, or Ctrl+K outside the editor): type a few letters, Enter runs it. */
+function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(0);
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = commands.filter((c) => words.every((w) => c.title.toLowerCase().includes(w)));
+  const run = (c?: Command) => { if (!c) return; onClose(); setTimeout(() => c.run(), 0); };
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <div className="palette" role="dialog" aria-label="Command palette" onMouseDown={(e) => e.stopPropagation()}>
+        <input autoFocus className="field" placeholder="Type a command" value={q} aria-label="Command"
+          onChange={(e) => { setQ(e.target.value); setSel(0); }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onClose();
+            if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, list.length - 1)); }
+            if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
+            if (e.key === "Enter") run(list[sel]);
+          }} />
+        <div className="palette-list" role="listbox">
+          {list.map((c, i) => (
+            <button key={c.title} role="option" aria-selected={i === sel} className={i === sel ? "on" : ""} onClick={() => run(c)}>
+              <b>{c.title}</b> {c.keys && <span className="muted">{c.keys}</span>}
+            </button>
+          ))}
+          {!list.length && <div className="muted" style={{ padding: 8 }}>No command matches “{q}”.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function QuickOpen({ onClose, onPick }: { onClose: () => void; onPick: (p: string) => void }) {
   const [q, setQ] = useState("");
   const [files, setFiles] = useState<string[]>([]);
@@ -408,10 +454,12 @@ function SafetySettings() {
   const [deny, setDeny] = useState("");
   const [budget, setBudget] = useState(5_000_000);
   const [reader, setReader] = useState(true);
+  const [crashes, setCrashes] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
     api.safetyGet().then((x) => { setAllow(x.rules.allow.join("\n")); setDeny(x.rules.deny.join("\n")); setBudget(x.tokenBudget); setReader(x.webReader); }).catch(() => {});
+    api.getSettings().then((x) => setCrashes(x.crashReports !== false)).catch(() => {});
   }, [open]);
   async function save() {
     try { await api.safetySet({ rules: { allow: lines(allow), deny: lines(deny) }, tokenBudget: budget, webReader: reader }); setMsg("Saved"); }
@@ -432,6 +480,7 @@ function SafetySettings() {
         </select>
       </label>
       <label className="check"><input type="checkbox" checked={reader} onChange={(e) => setReader(e.target.checked)} /> Read pages that need JavaScript through r.jina.ai (a third-party reader; the page address is sent to it)</label>
+      <label className="check"><input type="checkbox" checked={crashes} onChange={async (e) => { const on = e.target.checked; setCrashes(on); await api.setSettings({ crashReports: on }).catch(() => {}); }} /> Send crash reports to V Groups (version, OS and the error only — paths, names, emails and keys are removed; never your code or chats)</label>
       <div className="row"><span className="spacer" />{msg && <span className="muted" role="status">{msg}</span>}<button className="btn" onClick={save}>Save safety settings</button></div>
     </details>
   );
@@ -541,6 +590,9 @@ function BottomPanel(props: {
 }) {
   const { tab, expanded } = props;
   const [dragging, setDragging] = useState(false);
+  // a real terminal when the native pseudo-terminal module loads; otherwise the per-command one
+  const [realTerm, setRealTerm] = useState<boolean | null>(null);
+  useEffect(() => { api.ptyAvailable().then(setRealTerm).catch(() => setRealTerm(false)); }, []);
   const self = useRef<HTMLDivElement>(null);
   const tabs: [PanelTab, string][] = [["terminal", "Terminal"], ["app", "App"], ["preview", "Preview"]];
   // drag the top edge to resize; the native preview is hidden meanwhile so it can't swallow the pointer
@@ -565,7 +617,7 @@ function BottomPanel(props: {
         <button aria-label={expanded ? "Restore panel" : "Expand panel"} title={expanded ? "Restore (show the editor again)" : "Expand to fill the editor area"} onClick={props.onToggleExpand}>{expanded ? "⤡" : "⤢"}</button>
         <button aria-label="Close panel" title="Close panel" onClick={props.onClose}>✕</button>
       </div>
-      <div className="panel-body" hidden={tab !== "terminal"}><Terminal /></div>
+      <div className="panel-body" hidden={tab !== "terminal"}>{realTerm === null ? null : realTerm ? <XTerm visible={tab === "terminal"} /> : <Terminal />}</div>
       <div className="panel-body" hidden={tab !== "app"}><AppRunner askAI={props.askAI} /></div>
       <div className="panel-body" hidden={tab !== "preview"}><Preview visible={tab === "preview"} covered={props.covered || dragging} askAI={props.askAI} /></div>
     </div>

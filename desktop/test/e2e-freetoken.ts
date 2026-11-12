@@ -538,7 +538,7 @@ async function main() {
       await page.getByRole("button", { name: "Send" }).waitFor({ timeout: 15000 });
       await page.screenshot({ path: path.join(shots, "network-warning.png") });
     });
-    await step("/benchmark: pick models, run the tasks, see a pass/fail table (a model that only chats fails every task)", async () => {
+    await step("/benchmark: pick models, run the tasks, see a pass/fail table (a model that only chats fails every task but the answer-only one)", async () => {
       const box = page.getByLabel("Message the AI");
       await box.fill("/benchmark");
       await box.press("Enter");
@@ -549,8 +549,8 @@ async function main() {
       await panel.getByRole("button", { name: "Cancel" }).waitFor({ timeout: 10000 });
       await page.locator(".bench-status", { hasText: "Benchmark running" }).waitFor({ timeout: 10000 }); // visible with the panel closed too
       await panel.getByRole("button", { name: /^Run benchmark/ }).waitFor({ timeout: 240000 });
-      if (await panel.locator(".bench-table td.pass").count()) throw new Error("a model that changes nothing passed a task");
-      await panel.locator(".bench-result", { hasText: /^0\/\d+/ }).waitFor();
+      // a model that only chats passes exactly one task: "Answer without changing anything"
+      await panel.locator(".bench-result", { hasText: /^1\/\d+/ }).waitFor();
       await page.screenshot({ path: path.join(shots, "benchmark.png") });
       await panel.getByRole("button", { name: "Close benchmark" }).click();
     });

@@ -125,6 +125,7 @@ const ALIASES: Record<string, string[]> = {
   commit: ["git"], branch: ["git"], pr: ["git"], endpoint: ["api"], rest: ["api"],
   apk: ["apk", "android"], android: ["android", "apk"], wifi: ["wi-fi", "wifi"], "wi-fi": ["wi-fi", "wifi"], indoor: ["indoor", "floor"], capacitor: ["android", "capacitor"],
 };
+const VAGUE = new Set(["fix", "wrong", "broken", "error", "look", "modern", "nicer", "ugly", "rest", "pr", "branch"]);
 const words = (t: string, expand = false) => {
   const out = new Set<string>();
   for (const w of rawWords(t)) {
@@ -148,8 +149,14 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
   if (!req.size) return [] as Skill[];
   // the request word each match came from: "fix" also matches as "debugging" (an alias), but that's still
   // one word of the request — it can't make the two-word match on its own ("fix the typo" loaded debugging)
-  const origin = new Map<string, string>();
-  for (const w of rawWords(plain)) for (const x of [stem(w), ...(ALIASES[w] ?? []).flatMap((a) => rawWords(a).map(stem))]) if (!origin.has(x)) origin.set(x, stem(w));
+  // (every request word a match can come from: "snake game" matches "game" from both words). A specific
+  // word's alias is a meaning of its own ("chart" → visualization); a vague word's isn't ("fix" → debugging)
+  const origin = new Map<string, Set<string>>();
+  for (const w of rawWords(plain)) for (const x of [stem(w), ...(ALIASES[w] ?? []).flatMap((a) => rawWords(a).map(stem))]) (origin.get(x) ?? origin.set(x, new Set()).get(x)!).add(x === stem(w) || VAGUE.has(w) ? stem(w) : `${stem(w)}→${x}`);
+  const twoWords = (hits: string[]) => {
+    const from = hits.filter((h) => !WEAK.has(h)).map((h) => origin.get(h) ?? new Set([h]));
+    return from.some((a, i) => from.some((b, j) => j > i && new Set([...a, ...b]).size >= 2));
+  };
   const all = (await listSkills()).map((s) => ({ s, name: words(s.name.replace(/-/g, " ")), desc: words(s.description) }));
   const df = new Map<string, number>();
   for (const x of all) for (const w of new Set([...x.name, ...x.desc])) df.set(w, (df.get(w) ?? 0) + 1);
@@ -166,7 +173,7 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
   // someone the link" isn't a reason to load android-app — unless the request names the skill ("a React app")
   const lower = plain.toLowerCase();
   const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD
-    && (new Set(x.hits.filter((h) => !WEAK.has(h)).map((h) => origin.get(h) ?? h)).size >= 2 || lower.includes(x.s.name.toLowerCase().replace(/-/g, " "))));
+    && (twoWords(x.hits) || lower.includes(x.s.name.toLowerCase().replace(/-/g, " "))));
   strong.sort((a, b) => b.score - a.score);
   // a second skill only when it's nearly as good a match as the first
   return strong.filter((x, i) => i === 0 || x.score >= strong[0].score * 0.9).slice(0, max).map((x) => x.s);

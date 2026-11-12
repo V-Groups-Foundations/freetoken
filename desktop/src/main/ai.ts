@@ -281,6 +281,8 @@ export type AgentEvent =
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
 
+const sha = (t: string) => createHash("sha1").update(t).digest("hex");
+
 export interface Session {
   id: string;
   messages: MessageParam[];
@@ -315,6 +317,12 @@ export interface Session {
   /** files changed since the preview last loaded: the next inspect reloads it */
   pageStale?: boolean;
   summaryNudged?: boolean;
+  /** tool calls so far this task (for "you wrote this N steps ago") */
+  steps?: number;
+  /** files written whole this task: their hash and the step, so reading one straight back is skipped */
+  wrote?: Map<string, { hash: string; at: number }>;
+  /** where prompt injections were found this task (a file, a page): the user is told */
+  injections?: string[];
   /** recent actions, for spotting loops; warnings this turn; stuck → the next step goes to a reasoning model */
   actions?: { sig: string; out: string; changed: boolean }[];
   loopWarnings?: number;
@@ -772,7 +780,7 @@ export const isBigJob = (text: string) => text.length > 400 || BIG_JOB.test(text
  * it, or when loop detection finds it stuck (going in circles three times). MAX_STEPS is only a guard
  * against a runaway agent; long tasks keep their context through compaction / running summaries.
  */
-export const MAX_STEPS = 250;
+export const MAX_STEPS = 1000; // the token budget is what stops a runaway task
 /** looks at the page in a row, with no file changed in between, before the agent is told to stop checking */
 export const MAX_INSPECTS = 8;
 
@@ -831,6 +839,9 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.doneSteps = 0;
   s.lengthRetries = 0;
   s.summaryNudged = false;
+  s.steps = 0;
+  s.wrote = new Map();
+  s.injections = [];
   s.actions = [];
   s.loopWarnings = 0;
   s.taskTokens = 0;
@@ -921,6 +932,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   if (name === "inspect_preview" && (s.inspectsSinceChange ?? 0) >= MAX_INSPECTS) {
     return { content: `Not inspected: you've looked at the page ${s.inspectsSinceChange} times since your last change. Stop checking. If it works, give the user your summary now; if something is wrong, change the code (then you can look again).`, summary: "Enough checking — wrap up" };
   }
+  s.steps = (s.steps ?? 0) + 1;
   const versions = rel && WRITES.has(name) ? ((s.fileStates ??= new Map()).get(rel) ?? new Set<string>()) : null;
   const before = rel && versions ? await fileVersion(rel) : "";
   if (rel && versions) { versions.add(before); s.fileStates!.set(rel, versions); }
@@ -934,6 +946,10 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
     if (loop) throw new Error(`${(e as Error).message}${loop}`);
     throw e;
   }
+  if (rel && name === "write_file" && typeof input?.contents === "string") (s.wrote ??= new Map()).set(rel, { hash: sha(input.contents), at: s.steps ?? 0 });
+  else if (rel && WRITES.has(name)) s.wrote?.delete(rel);
+  const injected = /⚠ (.+?) contains text addressed to AI agents/.exec(r.content)?.[1];
+  if (injected && !(s.injections ??= []).includes(injected)) s.injections.push(injected);
   const hookSaid = await hooks.postToolUse(name, input, r.content, getRoot());
   if (hookSaid) r = { ...r, content: r.content + hookSaid };
   // toggling a setting back and forth changes files without getting anywhere
@@ -954,7 +970,7 @@ export async function execTool(s: Session, name: ToolName, input: any, emit: (e:
   // A .js file is a page's script only in a web project: a Node library checked by its tests has no page,
   // and asking it to "look at the result" re-ran tests that had just passed
   if (rel && WRITES.has(name) && !s.worker && (/\.(html?|css|scss|vue|svelte|astro)$/i.test(rel)
-    || (/\.(jsx?|tsx|mjs)$/i.test(rel) && (isWebProject(getRoot()) || [...(s.turns.at(-1)?.files.keys() ?? [])].some((f) => /\.html?$/i.test(f))) && !(await isServerCode(rel))))) s.unchecked = true;
+    || (/\.(jsx?|tsx|mjs)$/i.test(rel) && (isWebProject(getRoot()) || /(^|[\\/])(public|static|www|client|frontend)[\\/]/i.test(rel) || [...(s.turns.at(-1)?.files.keys() ?? [])].some((f) => /\.html?$/i.test(f))) && !(await isServerCode(rel))))) s.unchecked = true;
   if (name === "inspect_preview" && !/Preview empty|No preview|didn't load/i.test(r.summary)) { s.unchecked = false; s.lookedAt = true; }
   if ((name === "inspect_preview" && /the page is broken|console error|didn't load/i.test(r.summary)) || (name === "run_app" && /^Ran: /.test(r.summary))) s.sawProblem = true;
   if (rel && name === "read_file") team.noteRead(s.id, rel);
@@ -1131,6 +1147,12 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
   switch (name) {
     case "read_file": {
       const text = await readText(input.path);
+      // reading back a whole file it wrote a few steps ago, unchanged: the contents are in its own write
+      // call already (re-reading every file it had just written made simple tasks slow and costly)
+      const own = input.start_line || input.end_line ? undefined : s.wrote?.get(resolveInRoot(input.path).rel);
+      if (own && own.hash === sha(text) && (s.steps ?? 0) - own.at <= 8) {
+        return { content: `${resolveInRoot(input.path).rel} is exactly what you wrote with write_file ${(s.steps ?? 0) - own.at} step(s) ago — unchanged since, so it isn't shown again. Use your write_file call as its contents (or read a line range if you need line numbers).`, summary: "Unchanged since written — not re-read" };
+      }
       const lines = text.split(/\r?\n/);
       const a = Math.max(1, input.start_line ?? 1);
       // past the end ("L900-899 of 120", "Read 0 lines"): say where the file ends instead
@@ -1691,19 +1713,7 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
   const extra = mcpToolsFor(req);
   for (const t of extra) allowed.add(t.name);
   const tools = [...TOOLS.filter((t) => allowed.has(t.name)), ...extra.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema as Tool["input_schema"] }))];
-  const ctxParts: string[] = [];
-  const c = req.context;
-  if (c?.activeFile) ctxParts.push(`Currently open file: ${c.activeFile}`);
-  if (c?.openFiles?.length) ctxParts.push(`Open tabs: ${c.openFiles.join(", ")}`);
-  if (c?.selection?.text) ctxParts.push(`Selected code (${c.selection.path}:${c.selection.start}-${c.selection.end}):\n\`\`\`\n${c.selection.text}\n\`\`\``);
-  for (const f of c?.mentionedFiles ?? []) {
-    if (hiddenFromAI(f)) { ctxParts.push(`@${f}: (hidden from the AI by .cursorignore)`); continue; }
-    try { ctxParts.push(`@${f}:\n\`\`\`\n${clip(await readText(f), 30_000)}\n\`\`\``); } catch (e) { ctxParts.push(`@${f}: (could not read: ${(e as Error).message})`); }
-  }
-  let att: Prepared = { images: [], texts: [], note: "" };
-  try { att = await prepareAttachments(req.attachments); } catch (e) { ctxParts.push(`(The user's attachments couldn't be saved: ${(e as Error).message})`); }
-  ctxParts.push(...(await skillContext(s, req, emit)), ...att.texts);
-  if (att.note) ctxParts.push(att.note);
+  const { parts: ctxParts, att } = await messageContext(s, req, emit);
   emit({ type: "turn_start", index: beginTurn(s, "claude", s.messages.length) });
   const userText = ctxParts.length ? `<context>\n${ctxParts.join("\n\n")}\n</context>\n\n${req.text}` : req.text;
   s.messages.push({ role: "user", content: att.images.length
@@ -1712,6 +1722,9 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
 
   let jsonRetries = 0, busyRetries = 0, cutRetries = 0;
   let budgetNote: string | undefined;
+  // a step right after one that only looked (read, listed, searched) is navigation: less thinking is
+  // enough there and much faster; after a change, an error or a failed call it thinks hard again
+  let lookOnly = false;
   try {
     const system = await systemPrompt(req.mode, `${recentUserText(s.messages)}\n${req.text}`, req.worker);
     emit({ type: "model", model: `anthropic/${config.model()}` });
@@ -1722,7 +1735,7 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
         system,
         tools,
         messages: s.messages,
-        output_config: { effort: req.mode === "ask" ? "medium" : "high" },
+        output_config: { effort: req.mode === "ask" || (lookOnly && !s.stuck) ? "medium" : "high" },
         thinking: { type: "adaptive", display: "summarized" },
         cache_control: { type: "ephemeral" },
         ...FALLBACK,
@@ -1780,6 +1793,8 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
         if (gate) { s.messages.push({ role: "user", content: gate }); continue; }
         const nudge = buildNudge(s, said, req.text);
         if (nudge) { s.messages.push({ role: "user", content: nudge.prompt }); if (nudge.label) emit({ type: "text", delta: `\n\n${nudge.label}\n\n` }); continue; }
+        const closing = closingNote(s, said);
+        if (closing) emit({ type: "text", delta: closing });
         return emit({ type: "done", stopReason: message.stop_reason ?? "end_turn" });
       }
       if (message.stop_reason === "max_tokens") {
@@ -1792,35 +1807,13 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
         continue;
       }
 
-      const results: ToolResult[] = [];
-      for (const u of uses) {
-        // stopped mid-batch: the rest of this reply's tool calls don't run (each still gets a result,
-        // so the transcript stays valid)
-        if (s.abort.signal.aborted) {
-          results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "Not run: the user stopped the task." });
-          continue;
-        }
-        emit({ type: "tool_start", id: u.id, name: u.name, input: u.input });
-        const schema = schemaFor(u.name);
-        const parsed = schema?.safeParse(u.input);
-        if (!schema || !parsed!.success || !allowed.has(u.name)) {
-          const msg = !schema || !allowed.has(u.name) ? `Unknown or unavailable tool: ${u.name}` : JSON.stringify({ INVALID_JSON: JSON.stringify(u.input) });
-          results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: msg });
-          emit({ type: "tool_end", id: u.id, ok: false, summary: "Invalid tool call" });
-          continue;
-        }
-        try {
-          const r = await execTool(s, u.name as ToolName, parsed!.data, emit, u.id);
-          results.push({ type: "tool_result", tool_use_id: u.id, content: r.image
-            ? [{ type: "text", text: r.content }, { type: "image", source: { type: "base64", media_type: "image/jpeg", data: r.image.toString("base64") } }]
-            : r.content });
-          emit({ type: "tool_end", id: u.id, ok: true, summary: r.summary, detail: toolDetail(u.name, r) });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: msg });
-          emit({ type: "tool_end", id: u.id, ok: false, summary: msg });
-        }
-      }
+      const done = await runToolCalls(s, uses.map((u) => ({ id: u.id, name: u.name, input: u.input })), allowed, emit);
+      lookOnly = done.every((o) => o.ok && PARALLEL_TOOLS.has(o.name));
+      const results: ToolResult[] = done.map((o) => (o.ok
+        ? { type: "tool_result" as const, tool_use_id: o.id, content: o.image
+          ? [{ type: "text" as const, text: o.content }, { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: o.image.toString("base64") } }]
+          : o.content }
+        : { type: "tool_result" as const, tool_use_id: o.id, is_error: true, content: o.content.replace(/^Error: /, "") }));
       const budget = stepsLeftNote(turn, req.maxSteps ?? MAX_STEPS) ?? budgetNote;
       budgetNote = undefined;
       s.messages.push({ role: "user", content: budget ? [...results, { type: "text", text: budget }] : results });
@@ -1841,6 +1834,96 @@ export async function chat(req: ChatRequest, emit: (e: AgentEvent) => void) {
     emit({ type: "error", message: describeError(e) });
     emit({ type: "done", stopReason: "error" });
   }
+}
+
+// ---------------------------------------------------------------- shared by both agent loops (Claude, FreeToken)
+// Everything here used to be written twice, once per loop, and the two copies drifted apart.
+
+/** The <context> for a message: open file and tabs, the selection, @-mentioned files, attachments, skills. */
+export async function messageContext(s: Session, req: ChatRequest, emit: (e: AgentEvent) => void): Promise<{ parts: string[]; att: Prepared }> {
+  const parts: string[] = [];
+  const c = req.context;
+  if (c?.activeFile) parts.push(`Currently open file: ${c.activeFile}`);
+  if (c?.openFiles?.length) parts.push(`Open tabs: ${c.openFiles.join(", ")}`);
+  if (c?.selection?.text) parts.push(`Selected code (${c.selection.path}:${c.selection.start}-${c.selection.end}):\n\`\`\`\n${c.selection.text}\n\`\`\``);
+  for (const f of c?.mentionedFiles ?? []) {
+    if (hiddenFromAI(f)) { parts.push(`@${f}: (hidden from the AI by .cursorignore)`); continue; }
+    try { parts.push(`@${f}:\n\`\`\`\n${clip(await readText(f), 30_000)}\n\`\`\``); } catch (e) { parts.push(`@${f}: (could not read: ${(e as Error).message})`); }
+  }
+  let att: Prepared = { images: [], texts: [], note: "" };
+  try { att = await prepareAttachments(req.attachments); } catch (e) { parts.push(`(The user's attachments couldn't be saved: ${(e as Error).message})`); }
+  parts.push(...(await skillContext(s, req, emit)), ...att.texts);
+  if (att.note) parts.push(att.note);
+  return { parts, att };
+}
+
+/** Tools that only look (no changes, no approval): a run of these in one reply is done at the same time. */
+export const PARALLEL_TOOLS = new Set(["read_file", "list_dir", "grep_search", "file_search", "codebase_search", "web_search", "use_skill", "agent_status"]);
+export type ToolCall = { id: string; name: string; input: unknown };
+export type CallOutcome = { id: string; name: string; ok: boolean; content: string; image?: Buffer; problem?: "unknown" | "invalid" | "failed" };
+
+/**
+ * Runs one reply's tool calls in order — consecutive look-only calls together — and returns one outcome per
+ * call (in the same order). `input` undefined = arguments that weren't JSON. `after` may add to a result
+ * before its card is closed (FreeToken has a vision model describe screenshots).
+ */
+export async function runToolCalls(s: Session, calls: ToolCall[], allowed: Set<string>, emit: (e: AgentEvent) => void,
+  after?: (call: ToolCall, r: ToolOutput) => Promise<void>): Promise<CallOutcome[]> {
+  const one = async (u: ToolCall): Promise<CallOutcome> => {
+    // stopped mid-batch: the rest don't run (each still gets a result, so the transcript stays valid)
+    if (s.abort?.signal.aborted) return { id: u.id, name: u.name, ok: false, content: "Not run: the user stopped the task." };
+    emit({ type: "tool_start", id: u.id, name: u.name, input: u.input });
+    const schema = schemaFor(u.name);
+    if (!schema || !allowed.has(u.name)) {
+      const content = `Unknown or unavailable tool: ${u.name}`;
+      emit({ type: "tool_end", id: u.id, ok: false, summary: content });
+      return { id: u.id, name: u.name, ok: false, content, problem: "unknown" };
+    }
+    const parsed = u.input === undefined ? null : schema.safeParse(u.input);
+    if (!parsed?.success) {
+      emit({ type: "tool_end", id: u.id, ok: false, summary: "Invalid tool call" });
+      return { id: u.id, name: u.name, ok: false, problem: "invalid",
+        content: `Invalid arguments for ${u.name}: ${parsed ? parsed.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; ") : "not valid JSON"}. Retry with valid JSON matching the schema.` };
+    }
+    try {
+      const r = await execTool(s, u.name as ToolName, parsed.data, emit, u.id);
+      if (after) await after(u, r);
+      emit({ type: "tool_end", id: u.id, ok: true, summary: r.summary, detail: toolDetail(u.name, r) });
+      return { id: u.id, name: u.name, ok: true, content: r.content, ...(r.image ? { image: r.image } : {}) };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      emit({ type: "tool_end", id: u.id, ok: false, summary: msg });
+      return { id: u.id, name: u.name, ok: false, content: `Error: ${msg}`, problem: "failed" };
+    }
+  };
+  const out: CallOutcome[] = [];
+  for (let i = 0; i < calls.length;) {
+    let j = i;
+    while (j < calls.length && PARALLEL_TOOLS.has(calls[j].name)) j++;
+    if (j - i > 1) { out.push(...(await Promise.all(calls.slice(i, j).map(one)))); i = j; }
+    else { out.push(await one(calls[i])); i++; }
+  }
+  return out;
+}
+
+/**
+ * Said at the very end of a task, by the app: a summary when the model ended with nothing to say even after
+ * being asked (the user was left with no answer), and any prompt injection the agent ran into that its
+ * reply doesn't mention (it ignored the instructions — good — but the user should know they're there).
+ */
+export function closingNote(s: Session, said: string): string {
+  const out: string[] = [];
+  if (!said.trim() && !s.worker && canAct(s.mode ?? "agent")) {
+    const files = [...(s.turns.at(-1)?.files.keys() ?? [])];
+    out.push(files.length
+      ? `**Finished** (the model ended without a summary). Changed: ${files.slice(0, 15).map((f) => `\`${f}\``).join(", ")}${files.length > 15 ? ` and ${files.length - 15} more` : ""}. ${s.unchecked ? "The result wasn't checked in the preview." : ""}`.trim()
+      : "**Finished** (the model ended without a summary). No files were changed.");
+  }
+  const found = (s.injections ?? []).filter(Boolean);
+  if (found.length && !/inject|instructions? (aimed|addressed|for (an )?ai)|ignored (it|them|those|the instructions)/i.test(said)) {
+    out.push(`⚠ **Heads-up:** ${found.slice(0, 5).join(", ")} contained instructions aimed at the AI (a prompt injection). They were ignored — nothing they asked for was run — but check where that text came from.`);
+  }
+  return out.length ? `\n\n${out.join("\n\n")}` : "";
 }
 
 const stripFences = (t: string) => {
