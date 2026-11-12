@@ -16,8 +16,10 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm test
   desktop:
-    name: V-Run (types)
-    runs-on: ubuntu-latest
+    name: V-Run (types · all test suites)
+    # the agent runs commands in PowerShell and the tests drive Chrome: Windows, like V-Run's users
+    runs-on: windows-latest
+    timeout-minutes: 40
     defaults: { run: { working-directory: desktop } }
     steps:
       - uses: actions/checkout@v5
@@ -25,3 +27,5 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
       - run: npm ci
       - run: npm run typecheck
+      - run: npm test
+        env: { VRUN_TEST_LIMIT_MS: '600000' }

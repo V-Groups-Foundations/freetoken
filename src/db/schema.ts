@@ -312,3 +312,20 @@ export const authTokens = pgTable('auth_tokens', {
   usedAt: timestamp('used_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('auth_tokens_user').on(t.userId, t.kind)]);
+
+/**
+ * A V-Run crash or unhandled error, sent by the app with nothing personal in it (paths, emails and keys are
+ * removed on the computer and again here). Same message from the same version = one row with a count.
+ */
+export const vrunCrashes = pgTable('vrun_crashes', {
+  id: serial('id').primaryKey(),
+  signature: text('signature').notNull(), // hash of version + kind + message + top of stack
+  version: text('version').notNull(),
+  os: text('os').notNull(),
+  kind: text('kind').notNull(), // main-error | rejection | renderer-gone | child-gone | renderer-error
+  message: text('message').notNull(),
+  stack: text('stack'),
+  count: integer('count').notNull().default(1),
+  firstSeen: timestamp('first_seen').notNull().defaultNow(),
+  lastSeen: timestamp('last_seen').notNull().defaultNow(),
+}, (t) => [uniqueIndex('vrun_crashes_signature').on(t.signature), index('vrun_crashes_last').on(t.lastSeen)]);

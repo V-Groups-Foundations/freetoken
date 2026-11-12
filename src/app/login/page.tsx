@@ -10,15 +10,22 @@ import { emailEnabled, linkEmail, sendEmail } from '@/server/email';
 import { clientIp, siteUrl } from '@/server/site';
 import { PasswordInput } from '../password-input';
 
+/** Where to go after signing in: only V-Run's sign-in handoff may be asked for (no open redirects). */
+const afterSignIn = (v: unknown, fallback: string) => {
+  const t = typeof v === 'string' ? v : '';
+  return /^\/v-run\/signin\?state=[A-Za-z0-9_-]{16,64}$/.test(t) ? t : fallback;
+};
+const nextParam = (v: unknown) => (afterSignIn(v, '') ? `&next=${encodeURIComponent(String(v))}` : '');
+
 async function signInWithPassword(fd: FormData) {
   'use server';
   try {
-    await signIn('password', { email: fd.get('email'), password: fd.get('password'), redirectTo: '/connect' });
+    await signIn('password', { email: fd.get('email'), password: fd.get('password'), redirectTo: afterSignIn(fd.get('next'), '/connect') });
   } catch (e) {
     if (e instanceof AuthError) {
       // only counts go in the address, never the email
       const { left, waitMinutes } = await attempts(getDb(), fd.get('email'));
-      redirect(left > 0 ? `/login?error=wrong&left=${left}` : `/login?error=locked&wait=${waitMinutes}`);
+      redirect(`${left > 0 ? `/login?error=wrong&left=${left}` : `/login?error=locked&wait=${waitMinutes}`}${nextParam(fd.get('next'))}`);
     }
     throw e; // the redirect after a successful sign-in
   }
@@ -29,9 +36,9 @@ async function createAccount(fd: FormData) {
   const password = String(fd.get('password') ?? '');
   const db = getDb();
   const ip = await clientIp();
-  if (!(await signupAllowed(db, ip))) redirect('/login?mode=signup&error=busy');
+  if (!(await signupAllowed(db, ip))) redirect(`/login?mode=signup&error=busy${nextParam(fd.get('next'))}`);
   const r = await signUp(db, fd.get('email'), password, fd.get('name'));
-  if (!r.ok) redirect(`/login?mode=signup&error=${r.error}`);
+  if (!r.ok) redirect(`/login?mode=signup&error=${r.error}${nextParam(fd.get('next'))}`);
   await noteSignup(db, ip);
   // confirm the address when this site can send email (signing in doesn't wait for it)
   if (emailEnabled()) {
@@ -40,12 +47,13 @@ async function createAccount(fd: FormData) {
     const sent = await sendEmail(String(fd.get('email')).trim().toLowerCase(), 'Confirm your FreeToken email', m.text, m.html);
     if (!sent.ok) console.error('signup: verification email failed', sent.error);
   }
-  await signIn('password', { email: fd.get('email'), password, redirectTo: '/connect?welcome=1' });
+  await signIn('password', { email: fd.get('email'), password, redirectTo: afterSignIn(fd.get('next'), '/connect?welcome=1') });
 }
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; mode?: string; left?: string; wait?: string; reset?: string }> }) {
-  if (await sessionUserId()) redirect('/connect');
-  const { error, mode, left, wait, reset } = await searchParams;
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; mode?: string; left?: string; wait?: string; reset?: string; next?: string }> }) {
+  const { error, mode, left, wait, reset, next: askedNext } = await searchParams;
+  const next = afterSignIn(askedNext, '');
+  if (await sessionUserId()) redirect(next || '/connect');
   const n = (v: string | undefined, max: number) => Math.min(max, Math.max(0, Math.floor(Number(v)) || 0));
   const signup = mode === 'signup';
   const local = onOwnComputer();
@@ -67,6 +75,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         </div>
 
         <form action={signup ? createAccount : signInWithPassword} className="space-y-3">
+          {next && <input type="hidden" name="next" value={next} />}
           {signup && (
             <label className="block space-y-1 text-sm">
               <span className="muted">Name <span className="faint">(optional)</span></span>
@@ -90,12 +99,12 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
 
         <p className="muted text-center text-sm">
           {signup
-            ? <>Already have an account? <Link href="/login" className="underline">Sign in</Link></>
-            : <>New here? <Link href="/login?mode=signup" className="underline">Create an account</Link></>}
+            ? <>Already have an account? <Link href={`/login${next ? `?next=${encodeURIComponent(next)}` : ''}`} className="underline">Sign in</Link></>
+            : <>New here? <Link href={`/login?mode=signup${next ? `&next=${encodeURIComponent(next)}` : ''}`} className="underline">Create an account</Link></>}
         </p>
 
         {google && (
-          <form action={async () => { 'use server'; await signIn('google', { redirectTo: '/connect' }); }}>
+          <form action={async () => { 'use server'; await signIn('google', { redirectTo: next || '/connect' }); }}>
             <button className="btn btn-secondary w-full">Continue with Google</button>
           </form>
         )}

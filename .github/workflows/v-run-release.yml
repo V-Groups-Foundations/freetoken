@@ -1,0 +1,44 @@
+# Builds V-Run's installers and publishes them as a GitHub Release, which installed copies update from
+# (electron-updater reads latest.yml / latest-mac.yml from the newest release).
+# To release: set "version" in desktop/package.json, commit, then push a tag v-run-v<that version>:
+#   git tag v-run-v0.2.0 && git push origin v-run-v0.2.0
+name: V-Run release
+
+on:
+  push:
+    tags: ['v-run-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults: { run: { working-directory: desktop } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - name: The tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          want="v-run-v$(node -p "require('./package.json').version")"
+          [ "$want" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} but package.json says $want"; exit 1; }
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Build and publish
+        run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS: unsigned until an Apple Developer ID certificate is added (CSC_LINK / CSC_KEY_PASSWORD
+          # and APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID secrets for notarising)
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
