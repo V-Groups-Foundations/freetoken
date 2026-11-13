@@ -14,7 +14,12 @@ Crash reports: the installed app sends crashes and unhandled errors (version, OS
 
 ### Releasing
 
-Set `version` in `package.json`, commit, and push a tag `v-run-v<version>` — the *V-Run release* workflow builds the Windows installer and the macOS app and publishes them as a GitHub Release (installed copies update from the newest one). `npm run dist` builds the installer locally into `release/`. The macOS build is unsigned until an Apple Developer ID certificate is added as the `CSC_LINK` / `CSC_KEY_PASSWORD` secrets.
+Automatic. Every push to `master` that changes `desktop/` runs the *V-Run release* workflow (`.github/workflows/v-run-release.yml`): all tests on Windows → the next version (patch +1: 0.2.1 → 0.2.2) → Windows installer and macOS app → a GitHub Release `v-run-v<version>` with the changes listed, and the same files in the `v-run-latest` release, which is the update feed every installed V-Run checks (on start and every 4 hours; it downloads in the background and offers *Restart to update*).
+
+- A minor or major version: Actions → *V-Run release* → *Run workflow* → pick `minor` / `major` (or raise `version` in `package.json` — the higher one wins).
+- No release for one push: put `[skip release]` in the commit message.
+- Failing tests stop the release; a failed macOS build doesn't hold back Windows.
+- `npm run dist` builds the installer locally into `release/`. The macOS build is unsigned (it installs, but can't update itself) until an Apple Developer ID certificate is added as the `CSC_LINK` / `CSC_KEY_PASSWORD` secrets.
 
 ## Run from source
 

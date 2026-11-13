@@ -82,5 +82,11 @@ export const demoScript: Script = (body) => {
     void done;
     return { blocks: steps[Math.min(batches, steps.length - 1)] };
   }
+  // the agent can't decide and asks (ask_user); the answer comes back as the tool result
+  if (/which database/i.test(text)) {
+    const answered = toolResults(body).map((r: any) => String(typeof r.content === "string" ? r.content : r.content?.[0]?.text ?? "")).find((c: string) => c.startsWith("The user answered:"));
+    if (!answered) return { blocks: [{ type: "tool_use", name: "ask_user", input: { question: "Which database should this project use?", why: "It has both a SQLite file and a Postgres config, and they hold different data.", options: [{ label: "SQLite (Recommended)", description: "Nothing to install; fine for one user" }, { label: "Postgres", description: "Needs the server running" }] } }] };
+    return { blocks: [{ type: "text", text: `Going with ${answered.replace("The user answered: ", "").split("\n")[0]}.` }] };
+  }
   return { blocks: [{ type: "text", text: `You asked: ${text.replace(/<context>[\s\S]*<\/context>\s*/, "").slice(0, 80)}` }] };
 };

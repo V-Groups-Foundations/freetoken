@@ -29,6 +29,7 @@ export type AgentEvent =
   | { type: "progress"; id: string; text: string }
   | { type: "file_changed"; path: string }
   | { type: "approval"; id: string; command: string; explanation?: string; always?: boolean; rule?: string }
+  | { type: "question"; id: string; question: string; why?: string; options: { label: string; description?: string }[]; multi?: boolean }
   | { type: "todos"; todos: { content: string; status: string }[] }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
@@ -54,6 +55,7 @@ interface Api {
   chat(req: { sessionId: string; mode: "agent" | "ask" | "plan" | "team"; text: string; context?: object; attachments?: ChatAttachment[]; skills?: string[] }): Promise<boolean>;
   pathForFile(f: File): string;
   approve(sid: string, toolId: string, ok: boolean): Promise<void>;
+  answer(sid: string, toolId: string, text: string): Promise<void>;
   safetyGet(): Promise<Safety>;
   gitStatus(): Promise<GitStatus>;
   gitDiff(p: string): Promise<{ original: string; current: string }>;
@@ -147,6 +149,7 @@ interface Api {
   onShareTunnel(fn: (s: { status: "on" | "error" | "off" | "starting"; url?: string; via?: string; message?: string; qr: string | null }) => void): Unsub;
   historyRestore(id: string): Promise<{ restored: number; removed: string[]; files: string[] }>;
   skillsInstall(source: string): Promise<{ source: string; installed: { name: string; files: number; skipped: number }[]; readme: string }>;
+  skillsSearch(query: string): Promise<{ id: string; name: string; installs: number; url: string; github: boolean }[]>;
   skillsRemove(name: string): Promise<void>;
   skillsOpen(name: string): Promise<void>;
   videoExport(file: string, opts?: { fps?: number; width?: number; height?: number; duration?: number }): Promise<{ file: string; bytes: number; frames: number; duration: number; ext: string; errors: string[] }>;

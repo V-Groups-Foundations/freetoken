@@ -123,7 +123,9 @@ const ALIASES: Record<string, string[]> = {
   animate: ["animation"], motion: ["animation"], scroll: ["scroll", "animation"],
   redesign: ["redesign", "restyle"], restyle: ["redesign", "restyle"], look: ["design", "ui"], ugly: ["design", "polish"], modern: ["design"], nicer: ["polish", "design"],
   commit: ["git"], branch: ["git"], pr: ["git"], endpoint: ["api"], rest: ["api"],
-  apk: ["apk", "android"], android: ["android", "apk"], wifi: ["wi-fi", "wifi"], "wi-fi": ["wi-fi", "wifi"], indoor: ["indoor", "floor"], capacitor: ["android", "capacitor"],
+  apk: ["apk", "android"], android: ["android", "apk"], phone: ["android", "mobile"], mobile: ["android", "mobile"], ios: ["mobile"],
+  powerpoint: ["pptx", "presentation", "slides"], ppt: ["pptx", "presentation"], slides: ["pptx", "presentation"], deck: ["pptx", "presentation"], presentation: ["pptx", "slides"],
+  excel: ["xlsx", "spreadsheet"], spreadsheet: ["xlsx", "spreadsheet"], csv: ["xlsx", "spreadsheet"], wifi: ["wi-fi", "wifi"], "wi-fi": ["wi-fi", "wifi"], indoor: ["indoor", "floor"], capacitor: ["android", "capacitor"],
 };
 const VAGUE = new Set(["fix", "wrong", "broken", "error", "look", "modern", "nicer", "ugly", "rest", "pr", "branch"]);
 const words = (t: string, expand = false) => {
@@ -172,8 +174,11 @@ export async function matchSkills(request: string, max = 2, skip: Set<string> = 
   // and words nearly every request has ("app", "website") never make up that pair: "run the app and send
   // someone the link" isn't a reason to load android-app — unless the request names the skill ("a React app")
   const lower = plain.toLowerCase();
+  // a word only this skill has, in its own name ("a gif" → slack-gif-creator, "pptx"), is enough on its own
+  const ownName = (x: { s: Skill; hits: string[] }) => x.hits.some((h) => h.length >= 3 && !WEAK.has(h) && (df.get(h) ?? 0) === 1
+    && all.find((a) => a.s === x.s)!.name.has(h) && !!origin.get(h)?.has(h)); // the request says the word itself, not an alias of it
   const strong = scored.filter((x) => x.score >= MATCH_THRESHOLD
-    && (twoWords(x.hits) || lower.includes(x.s.name.toLowerCase().replace(/-/g, " "))));
+    && (twoWords(x.hits) || ownName(x) || lower.includes(x.s.name.toLowerCase().replace(/-/g, " "))));
   strong.sort((a, b) => b.score - a.score);
   // a second skill only when it's nearly as good a match as the first
   return strong.filter((x, i) => i === 0 || x.score >= strong[0].score * 0.9).slice(0, max).map((x) => x.s);
@@ -249,7 +254,7 @@ async function gh(url: string, f: Fetch) {
  * Install every skill (folder with a SKILL.md) in a GitHub repo, or under a path in it, into
  * ~/.v-run/skills. A repo without skills returns its README so the agent can write a skill from it.
  */
-export async function installFromGitHub(input: string, f: Fetch = fetch, dest = userSkillsDir()) {
+export async function installFromGitHub(input: string, f: Fetch = fetch, dest = userSkillsDir(), only?: string) {
   const ref = parseRepo(input);
   if (!ref) throw new Error(`"${input}" isn't a GitHub repository — use owner/repo or a github.com link.`);
   const api = `https://api.github.com/repos/${ref.owner}/${ref.repo}`;
@@ -257,10 +262,14 @@ export async function installFromGitHub(input: string, f: Fetch = fetch, dest = 
   const tree = await gh(`${api}/git/trees/${encodeURIComponent(branch)}?recursive=1`, f);
   const blobs: { path: string; size: number }[] = (tree.tree ?? []).filter((t: any) => t.type === "blob");
   const inSub = (p: string) => !ref.sub || p === ref.sub || p.startsWith(`${ref.sub}/`);
-  const skillDirs = blobs.filter((b) => /(^|\/)SKILL\.md$/i.test(b.path) && inSub(b.path)).map((b) => path.posix.dirname(b.path)).slice(0, 60);
+  let skillDirs = blobs.filter((b) => /(^|\/)SKILL\.md$/i.test(b.path) && inSub(b.path)).map((b) => path.posix.dirname(b.path)).slice(0, 200);
+  // one skill of the repo (a skills.sh id): its folder is named after it
+  if (only) skillDirs = skillDirs.filter((d) => slug(path.posix.basename(d === "." ? ref.repo : d)) === slug(only));
+  skillDirs = skillDirs.slice(0, 60);
   const raw = (p: string) => f(`https://raw.githubusercontent.com/${ref.owner}/${ref.repo}/${encodeURIComponent(branch)}/${p.split("/").map(encodeURIComponent).join("/")}`);
   const source = `github.com/${ref.owner}/${ref.repo}${ref.sub ? `/${ref.sub}` : ""}`;
 
+  if (!skillDirs.length && only) return { source, installed: [] as { name: string; files: number; skipped: number }[], readme: "", files: blobs.length };
   if (!skillDirs.length) {
     const readme = blobs.find((b) => /^readme(\.md|\.markdown|\.txt)?$/i.test(path.posix.basename(b.path)) && path.posix.dirname(b.path) === (ref.sub || "."))
       ?? blobs.find((b) => /^readme(\.md)?$/i.test(b.path));
@@ -299,4 +308,49 @@ export async function installFromGitHub(input: string, f: Fetch = fetch, dest = 
     installed.push({ name, files: kept + 1, skipped });
   }
   return { source, installed, readme: "", files: blobs.length };
+}
+
+
+// ---------------------------------------------------------------- skills.sh (the open agent-skills directory)
+
+/** "Is there a skill for…", "find a skill that…", "any skills to…": a question about skills, not a task. */
+export const ASKS_FOR_SKILL = /\b(is there|are there|do you have|got|find|search|look(ing)? for|recommend|suggest|which|what|any)\b[^.?!\n]{0,40}\bskills?\b|\bskills?\s+(for|that|to|about)\b|skills\.sh/i;
+/** "Make/write/create a skill …": the skill-creator's job. */
+export const MAKES_SKILL = /\b(make|create|write|build|author|new)\b[^.?!\n]{0,20}\bskills?\b/i;
+
+export type SkillsShHit = { id: string; source: string; skillId: string; name: string; installs: number; url: string; github: boolean };
+
+/** Searches skills.sh (only the words of the query are sent), most relevant first. */
+export async function searchSkillsSh(query: string, limit = 8, f: Fetch = fetch): Promise<SkillsShHit[]> {
+  const q = query.replace(/\s+/g, " ").trim().slice(0, 120);
+  if (!q) return [];
+  const r = await f(`https://skills.sh/api/search?q=${encodeURIComponent(q)}&limit=${Math.min(20, Math.max(1, limit))}`, { headers: { accept: "application/json", "user-agent": "V-Run" }, signal: AbortSignal.timeout(15_000) });
+  if (!r.ok) throw new Error(`skills.sh answered ${r.status}.`);
+  const j = await r.json() as { skills?: { id: string; source: string; skillId: string; name?: string; installs?: number }[] };
+  return (j.skills ?? []).map((x) => ({
+    id: x.id, source: x.source, skillId: x.skillId, name: x.name ?? x.skillId, installs: Number(x.installs) || 0,
+    url: `https://skills.sh/${x.id}`, github: /^[\w.-]+\/[\w.-]+$/.test(x.source) && !/\.(com|cn|io|dev|net|org)$/i.test(x.source.split("/")[0]),
+  })); // in skills.sh's order: most relevant first (sorting by installs put popular, unrelated skills on top)
+}
+
+/**
+ * One skill from skills.sh or the skills CLI: "owner/repo/skill", "owner/repo@skill", "skills.sh/owner/repo/skill",
+ * "npx skills add owner/repo --skill skill". Null for anything else (a plain repo installs all its skills).
+ */
+export function parseSkillRef(input: string): { owner: string; repo: string; skill: string } | null {
+  const t = input.trim();
+  const cli = /(?:npx\s+)?skills\s+(?:add|use|install)\s+(?:https?:\/\/github\.com\/)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?\s+(?:--skill|-s)\s+["']?([\w.-]+)["']?/i.exec(t);
+  if (cli) return { owner: cli[1], repo: cli[2], skill: cli[3] };
+  const m = /^(?:https?:\/\/)?(?:www\.)?(?:skills\.sh\/)?([\w.-]+)\/([\w.-]+)(?:\/|@)([\w.-]+)\/?$/i.exec(t);
+  if (!m || /^(tree|blob)$/i.test(m[3]) || /github\.com/i.test(m[1])) return null;
+  return { owner: m[1], repo: m[2], skill: m[3] };
+}
+
+/** Installs from a skills.sh id (just that skill) or a GitHub repo (all its skills). */
+export async function installSkills(input: string, f: Fetch = fetch, dest = userSkillsDir()) {
+  const one = parseSkillRef(input);
+  if (!one) return installFromGitHub(input, f, dest);
+  const r = await installFromGitHub(`${one.owner}/${one.repo}`, f, dest, one.skill);
+  if (!r.installed.length) throw new Error(`${one.owner}/${one.repo} has no skill named "${one.skill}".`);
+  return r;
 }

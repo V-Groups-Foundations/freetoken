@@ -657,7 +657,8 @@ function registerIpc() {
   handle("memory:status", () => memory.memoryStatus());
   // skills
   handle("skills:list", () => skills.listSkills());
-  handle("skills:install", (source: string) => skills.installFromGitHub(String(source)));
+  handle("skills:install", (source: string) => skills.installSkills(String(source)));
+  handle("skills:search", (query: string) => skills.searchSkillsSh(String(query), 12));
   handle("skills:remove", (name: string) => skills.removeSkill(String(name)));
   handle("skills:open", async (name: string) => {
     const s = (await skills.listSkills()).find((x) => x.name === name);
@@ -743,6 +744,7 @@ function registerIpc() {
     catch (err) { return { ok: false, error: (err as Error).message }; }
   });
   handle("ai:approve", (sid: string, toolId: string, ok: boolean) => ai.approve(sid, toolId, ok));
+  handle("ai:answer", (sid: string, toolId: string, text: string) => ai.answer(sid, toolId, text));
   handle("git:status", () => git.status());
   handle("git:diff", (p: string) => git.diffPair(p));
   handle("git:stage", (ps: string[]) => git.stage(ps));

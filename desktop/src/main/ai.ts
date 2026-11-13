@@ -63,8 +63,13 @@ export async function loadRules(): Promise<string> {
   const root = getRoot();
   if (!root) return "";
   const out: string[] = [];
-  for (const f of [".cursorrules", "AGENTS.md"]) {
-    try { out.push(`# ${f}\n${(await fsp.readFile(path.join(root, f), "utf8")).slice(0, 8000)}`); } catch { /* none */ }
+  // the project's own instructions for AI agents, whichever tool they were written for (a project's whole
+  // briefing in CLAUDE.md was never read)
+  for (const f of [".cursorrules", "AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md", "GEMINI.md"]) {
+    try {
+      const text = await fsp.readFile(path.join(root, f), "utf8");
+      out.push(`# ${f}\n${text.length > 20_000 ? `${text.slice(0, 20_000)}\n…(${text.length - 20_000} more characters — read_file ${f} for the rest)` : text}`);
+    } catch { /* none */ }
   }
   try {
     for (const f of (await fsp.readdir(path.join(root, ".cursor", "rules"))).sort()) {
@@ -76,7 +81,7 @@ export async function loadRules(): Promise<string> {
 
 // ---------------------------------------------------------------- tools
 // read-only as far as the code goes (remember only writes V.md), so they are offered in Ask and Plan too
-export const READ_ONLY = new Set(["list_checkpoints", "read_file", "list_dir", "grep_search", "file_search", "codebase_search", "todo_write", "remember", "use_skill", "save_skill", "web_search", "fetch_url"]);
+export const READ_ONLY = new Set(["ask_user", "list_checkpoints", "read_file", "list_dir", "grep_search", "file_search", "codebase_search", "todo_write", "remember", "use_skill", "save_skill", "find_skills", "web_search", "fetch_url"]);
 
 export const schemas = {
   read_file: z.object({ path: z.string(), start_line: z.number().int().positive().optional(), end_line: z.number().int().positive().optional() }),
@@ -95,6 +100,13 @@ export const schemas = {
   fetch_url: z.object({ url: z.string().min(4).max(4000), start: z.number().int().min(0).optional() }),
   save_skill: z.object({ name: z.string().min(1).max(64), description: z.string().min(1).max(600), instructions: z.string().min(1).max(40_000), scope: z.enum(["user", "project"]).optional() }),
   install_skills: z.object({ source: z.string().min(3) }),
+  find_skills: z.object({ query: z.string().min(2).max(200) }),
+  ask_user: z.object({
+    question: z.string().min(5).max(500),
+    why: z.string().max(600).optional(),
+    options: z.array(z.object({ label: z.string().min(1).max(80), description: z.string().max(300).optional() })).min(2).max(4),
+    multi: z.boolean().optional(),
+  }),
   generate_image: z.object({ prompt: z.string().min(3).max(2000), path: z.string().min(1), width: z.number().int().min(256).max(2048).optional(), height: z.number().int().min(256).max(2048).optional() }),
   export_video: z.object({ path: z.string().min(1), duration: z.number().positive().max(180).optional(), fps: z.number().int().min(1).max(60).optional(), width: z.number().int().min(64).max(3840).optional(), height: z.number().int().min(64).max(2160).optional() }),
   // team mode: the supervisor's tools, and the one workers get
@@ -219,7 +231,16 @@ export const TOOLS: Tool[] = [
     input_schema: { type: "object", properties: { name: { type: "string" }, file: { type: "string" } }, required: ["name"] } },
   { name: "save_skill", description: "Learn a skill: save reusable know-how as a skill so future chats can use it. Use when the user teaches you a workflow ('when I ask for X, do Y'), asks you to learn/remember how to do something, or you worked out a reliable multi-step procedure worth reusing. `description` says WHEN to use it (that's how it gets picked); `instructions` is Markdown: the steps, rules, commands and a short example. scope 'user' (default) = all projects; 'project' = this project's .v-run/skills. Saving the same name updates it.",
     input_schema: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, instructions: { type: "string" }, scope: { type: "string", enum: ["user", "project"] } }, required: ["name", "description", "instructions"] } },
-  { name: "install_skills", description: "Install skills from a GitHub repository (owner/repo or a github.com link, optionally to a folder: https://github.com/o/r/tree/main/skills/x). Every folder with a SKILL.md becomes a skill. If the repo has none, you get its README: then learn it yourself — write a skill with save_skill that captures how to use that project (install, key commands/APIs, examples). The user must approve.",
+  { name: "ask_user", description: "Ask the user to decide something you can't decide yourself, with 2–4 options to pick from (they can also type their own answer). Use it when the choice is genuinely theirs and changes what you do: two reasonable approaches with different trade-offs, which of several things they meant, missing information you can't find in the project or on the web, or before something with big consequences. Say the problem in `why` (what you found, why it matters) and make each option a concrete action with its trade-off in `description`; put the one you recommend first and add \"(Recommended)\" to its label. Don't ask what you can find out yourself, don't ask for permission to do what was asked, and don't ask more than one thing at a time. You wait for the answer, then continue.",
+    input_schema: { type: "object", properties: {
+      question: { type: "string", description: "The decision, as one clear question ending with ?" },
+      why: { type: "string", description: "The problem in a sentence or two: what you found and why it needs their call" },
+      options: { type: "array", minItems: 2, maxItems: 4, items: { type: "object", properties: { label: { type: "string", description: "Short (1–6 words)" }, description: { type: "string", description: "What happens with this choice, and its trade-off" } }, required: ["label"] } },
+      multi: { type: "boolean", description: "true when several options can be picked together" },
+    }, required: ["question", "options"] } },
+  { name: "find_skills", description: "Find skills for a task: the user's installed skills that fit, and skills on skills.sh (the open agent-skills directory) with their install counts and ids. Use it whenever the user asks whether there's a skill for something, wants to find or install a skill, or asks for a specialised capability you have no skill for. Instead of `npx skills find` (which needs a terminal), always use this. Then recommend the best ones — prefer many installs and known sources (anthropics, vercel-labs, microsoft) — and install one with install_skills only when the user agrees.",
+    input_schema: { type: "object", properties: { query: { type: "string", description: "What the skill should do, in a few words, e.g. \"android app\", \"changelog\", \"react performance\"" } }, required: ["query"] } },
+  { name: "install_skills", description: "Install skills: one skill from skills.sh by its id (owner/repo/skill — the id find_skills shows; `npx skills add owner/repo --skill x` means the same), or every skill in a GitHub repository (owner/repo or a github.com link, optionally to a folder: https://github.com/o/r/tree/main/skills/x). Every folder with a SKILL.md becomes a skill. If the repo has none, you get its README: then learn it yourself — write a skill with save_skill that captures how to use that project (install, key commands/APIs, examples). The user must approve.",
     input_schema: { type: "object", properties: { source: { type: "string" } }, required: ["source"] } },
   { name: "generate_image", description: "Make a real picture for the app and save it in the project: hero and background images, product or food photos, illustrations, avatars, app icons and logos (free FLUX through FreeToken). Use it instead of grey placeholder boxes, stock-photo links or emoji when the design needs an image. Describe the picture concretely (subject, style, colors, lighting; 'flat vector icon, no text' for icons — image models spell words badly). width/height set the shape (default 1024x1024; the long side is capped at 1024). The file extension is fixed to match the image format; the result says the path actually written — reference that path.",
     input_schema: { type: "object", properties: { prompt: { type: "string" }, path: { type: "string", description: "Where to save it, e.g. public/images/hero.jpg" }, width: { type: "number" }, height: { type: "number" } }, required: ["prompt", "path"] } },
@@ -251,6 +272,8 @@ export const canAct = (mode: string) => mode === "agent" || mode === "team";
 export function toolNamesFor(req: Pick<ChatRequest, "mode" | "worker">): Set<string> {
   return new Set(TOOLS.map((t) => t.name).filter((n) =>
     TEAM_TOOLS.has(n) ? req.mode === "team" && !req.worker
+      // a team's workers ask their supervisor (ask_supervisor), not the user
+      : n === "ask_user" ? !req.worker
       : WORKER_TOOLS.has(n) ? !!req.worker
       // the reviewer reads and runs checks (tests, type checker) but changes nothing
       : req.worker?.reviewer ? (READ_ONLY.has(n) && n !== "save_skill" && n !== "remember") || n === "run_terminal_command"
@@ -273,6 +296,7 @@ export type AgentEvent =
   | { type: "synced"; ok: boolean; error?: string }
   | { type: "file_changed"; path: string }
   | { type: "approval"; id: string; command: string; explanation?: string; always?: boolean; rule?: string }
+  | { type: "question"; id: string; question: string; why?: string; options: { label: string; description?: string }[]; multi?: boolean }
   | { type: "todos"; todos: { content: string; status: string }[] }
   | { type: "memory"; scope: "project" | "user"; line: string; added: boolean }
   | { type: "skill"; name: string; scope: "project" | "user" }
@@ -280,6 +304,17 @@ export type AgentEvent =
   | { type: "progress"; id: string; text: string }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
+
+/** "Read the whole folder and tell me", "explain this project", "walk me through the codebase" */
+// (typos welcome: "read the whoel folder and understand and tell me" is the request that went badly)
+export const OVERVIEW = /\b(read|go through|scan|look (at|through)|understand|explain|overview|summari[sz]e|walk me through|tell me about|describe|what('s| is| does))\b[^.?!\n]{0,40}\b(folder|project|repo|repository|codebase|code ?base|source code|directory)\b|\bhow (is|does) (this|the) (project|repo|codebase|app) (work|structured|organi[sz]ed)\b/i;
+export const REREAD_LINES = 150;
+export const OVERVIEW_NOTE = `How to understand a whole project well and fast (the user wants an overview):
+1. Read the docs first: the project rules above, README, any PROJECT_CONTEXT / ARCHITECTURE / docs folder, and the manifests (package.json, pyproject.toml / requirements.txt, docker-compose, Dockerfile).
+2. list_dir the top level and each top-level folder; find each part's entry point (main, app, server, index, routes).
+3. Don't read big files whole (over ~400 lines): grep_search them for routes, classes and functions (e.g. "@router\\.|def |class |export (function|const|class)") and read only the parts that matter.
+4. Answer about EVERY top-level folder: what it is, how it runs, how the parts talk to each other, the main data and the key files — then what's notable (risks, TODOs, oddities).
+5. Then save the 3–6 most useful lasting facts (how to run and test it, the main parts and where they live, gotchas) with remember (scope project), so the next chat starts knowing them.`;
 
 const sha = (t: string) => createHash("sha1").update(t).digest("hex");
 
@@ -290,6 +325,8 @@ export interface Session {
   checkpoints: Map<string, string | null>;
   abort?: AbortController;
   approvals: Map<string, (ok: boolean) => void>;
+  /** questions waiting for the user's pick (ask_user) */
+  questions?: Map<string, (answer: string) => void>;
   /** read-only calls made since the workspace last changed, to stop re-read loops */
   seen: Map<string, number>;
   /** app_output calls in a row that found nothing new */
@@ -323,6 +360,8 @@ export interface Session {
   wrote?: Map<string, { hash: string; at: number }>;
   /** where prompt injections were found this task (a file, a page): the user is told */
   injections?: string[];
+  /** what was read of each file this task (hash + line ranges): reading an unchanged big file again is refused */
+  reads?: Map<string, { hash: string; ranges: [number, number][]; at: number }>;
   /** recent actions, for spotting loops; warnings this turn; stuck → the next step goes to a reasoning model */
   actions?: { sig: string; out: string; changed: boolean }[];
   loopWarnings?: number;
@@ -663,7 +702,13 @@ export async function skillContext(s: Session, req: Pick<ChatRequest, "text" | "
   // in a web project, "redesign the app" is web design work: match it as such
   const ask = isWebTask(req.text, isWebProject(getRoot())) && !isVideoTask(req.text) ? `${req.text} (website UI)` : req.text;
   const auto = (await skills.matchSkills(ask, 2, new Set([...s.skills, ...picked])).catch(() => [])).map((x) => x.name);
+  const installed = new Set((await skills.listSkills().catch(() => [])).map((x) => x.name));
+  // "write a skill for…" is making one; "is there a skill for…" is looking for one
+  const makes = skills.MAKES_SKILL.test(req.text), asks = !makes && skills.ASKS_FOR_SKILL.test(req.text);
+  const meta = makes ? "skill-creator" : asks ? "find-skills" : null;
+  if (meta && installed.has(meta) && !s.skills.has(meta) && !picked.includes(meta) && !auto.includes(meta)) auto.unshift(meta);
   const parts = [...(await skills.pickedSkillsContext(picked)), ...(await skills.pickedSkillsContext(auto, true))];
+  if (asks) parts.push("The user is asking about skills: call find_skills first (it searches their installed skills and skills.sh), then answer with what fits — installed ones first, then skills.sh ones worth installing (installs, source, id). In V-Run, find_skills and install_skills replace `npx skills find` / `npx skills add`.");
   for (const n of [...picked, ...auto]) s.skills.add(n);
   if (picked.length || auto.length) emit({ type: "skills_used", names: [...picked, ...auto], auto: !picked.length });
   return parts;
@@ -842,6 +887,7 @@ export function startTurnState(s: Session, req: ChatRequest, earlier = "") {
   s.steps = 0;
   s.wrote = new Map();
   s.injections = [];
+  s.reads = new Map();
   s.actions = [];
   s.loopWarnings = 0;
   s.taskTokens = 0;
@@ -1126,7 +1172,10 @@ export function noteAction(s: Session, name: string, input: any, outcome: string
 
 async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEvent) => void, id: string): Promise<ToolOutput> {
   if (READ_ONLY.has(name) && name !== "todo_write") {
-    const key = name + JSON.stringify(input);
+    // a file changed outside the agent (the user saved it) is a new read, not a repeat
+    let version = "";
+    if (name === "read_file" && typeof input?.path === "string") { try { version = await fileVersion(resolveInRoot(input.path).rel); } catch { /* the tool reports it */ } }
+    const key = name + JSON.stringify(input) + version;
     const n = (s.seen.get(key) ?? 0) + 1;
     s.seen.set(key, n);
     if (n >= 3) return {
@@ -1158,6 +1207,16 @@ async function runTool(s: Session, name: ToolName, input: any, emit: (e: AgentEv
       // past the end ("L900-899 of 120", "Read 0 lines"): say where the file ends instead
       if (a > lines.length) return { content: `${resolveInRoot(input.path).rel} has only ${lines.length} line${lines.length === 1 ? "" : "s"} — start_line ${a} is past the end.`, summary: `Past the end (${lines.length} lines)` };
       const b = Math.max(a, Math.min(lines.length, input.end_line ?? Math.min(lines.length, a + 799)));
+      // the same big stretch of an unchanged file again (after its earlier steps were summarised, a whole
+      // project read went through 2,800-line files twice): search it or read a short part instead
+      const relp = resolveInRoot(input.path).rel, hash = sha(text);
+      if (!s.reads) s.reads = new Map();
+      const seen = s.reads.get(relp);
+      if (seen && seen.hash === hash && b - a + 1 > REREAD_LINES && seen.ranges.some(([x, y]) => x <= a && y >= b)) {
+        return { content: `You already read ${relp} lines ${a}-${b} earlier in this task (step ${seen.at}) and it hasn't changed since, so it isn't sent again. If you need something from it, grep_search it, or read a short range (up to ${REREAD_LINES} lines) around what you need.`, summary: "Already read — not re-read" };
+      }
+      if (!seen || seen.hash !== hash) s.reads.set(relp, { hash, ranges: [[a, b]], at: s.steps ?? 0 });
+      else seen.ranges.push([a, b]);
       const more = b < lines.length ? `\n…(${lines.length - b} more lines; read with start_line=${b + 1})` : "";
       const warn = injectionNote(text, resolveInRoot(input.path).rel);
       return { content: `${resolveInRoot(input.path).rel} (${lines.length} lines)\n${numbered(lines.slice(a - 1, b).join("\n"), a)}${more}${warn}`, summary: warn ? `⚠ Read ${b - a + 1} lines — contains instructions aimed at AI` :`Read ${b - a + 1} line${b - a ? "s" : ""}${a > 1 || b < lines.length ? ` (L${a}-${b} of ${lines.length})` : ""}` };
@@ -1533,10 +1592,36 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
       emit({ type: "skill", name: r.name, scope: r.scope });
       return { content: `Saved skill "${r.name}" (${r.scope === "user" ? "~/.v-run/skills" : ".v-run/skills in this project"}). It's listed in future chats.`, summary: `Learned skill: ${r.name}` };
     }
+    case "ask_user": {
+      // stopped: nothing to ask (a listener on an aborted signal never fires)
+      if (s.abort?.signal.aborted) return { content: "Not asked: the user stopped the task.", summary: "Stopped" };
+      const answer = await new Promise<string>((resolve) => {
+        (s.questions ??= new Map()).set(id, resolve);
+        emit({ type: "question", id, question: input.question, ...(input.why ? { why: input.why } : {}), options: input.options, ...(input.multi ? { multi: true } : {}) });
+        s.abort?.signal.addEventListener("abort", () => resolve(""), { once: true });
+      }).finally(() => s.questions?.delete(id));
+      if (!answer) return { content: "The user stopped the task instead of answering.", summary: "Not answered" };
+      return { content: `The user answered: ${answer}\nContinue with that.`, summary: `Answered: ${answer.slice(0, 80)}` };
+    }
+    case "find_skills": {
+      let top: { name: string; score: number }[] = [];
+      await skills.matchSkills(input.query, 2, new Set(), (d) => { top = d; }).catch(() => []);
+      const mine = top.filter((x) => x.score >= 2.5);
+      let found: skills.SkillsShHit[] = [], err = "";
+      try { found = await skills.searchSkillsSh(input.query, 10); } catch (e) { err = (e as Error).message; }
+      const have = new Set((await skills.listSkills()).map((x) => x.name));
+      const lines = [
+        mine.length ? `Installed skills that fit (load with use_skill):\n${mine.map((x) => `- ${x.name}`).join("\n")}` : "No installed skill fits this.",
+        err ? `skills.sh couldn't be searched: ${err}`
+          : found.length ? `On skills.sh (most relevant first):\n${found.map((x) => `- ${x.id} — ${x.installs.toLocaleString("en-US")} installs${have.has(skills.slug(x.skillId)) ? " (already installed)" : x.github ? "" : " (not on GitHub — can't be installed here)"} · ${x.url}`).join("\n")}\nInstall one with install_skills source="<id>" once the user agrees.`
+          : "Nothing on skills.sh for that.",
+      ];
+      return { content: lines.join("\n\n"), summary: `Skills for "${input.query}": ${mine.length} installed, ${found.length} on skills.sh` };
+    }
     case "install_skills": {
       if (!(await askApproval(s, emit, id, `Install skills from ${input.source}`, "Skills are instructions V-Run will follow. Install them?")))
         return { content: "The user declined to install those skills.", summary: "Declined skill install" };
-      const r = await skills.installFromGitHub(input.source);
+      const r = await skills.installSkills(input.source);
       if (r.installed.length) {
         emit({ type: "skill", name: r.installed.map((x) => x.name).join(", "), scope: "user" });
         return { content: `Installed ${r.installed.length} skill(s) from ${r.source}: ${r.installed.map((x) => `${x.name} (${x.files} files${x.skipped ? `, ${x.skipped} large files skipped` : ""})`).join(", ")}. They're now listed under Skills; load one with use_skill when a task fits.`, summary: `Installed ${r.installed.length} skill${r.installed.length > 1 ? "s" : ""} from ${r.source}` };
@@ -1588,6 +1673,8 @@ Port ${busyPort} is ${mine.name}, the AI service you are running on — never st
   }
 }
 
+/** The user's pick (or their own words) for an ask_user question. */
+export function answer(sessionId: string, toolId: string, text: string) { getSession(sessionId).questions?.get(toolId)?.(String(text).slice(0, 2000) || "(no answer)"); }
 export function approve(sessionId: string, toolId: string, ok: boolean) { getSession(sessionId).approvals.get(toolId)?.(ok); }
 /**
  * The user's Stop: this session's task, and its team — including agents started in earlier turns, which
@@ -1689,6 +1776,7 @@ export async function systemPrompt(mode: ChatRequest["mode"], task = "", worker?
     canAct(mode) && !worker && mode !== "team" ? "Plan bigger jobs: for a new app, site or a feature across several files, first write a short plan with todo_write (3-7 steps, each ending in a checkpoint you can verify), then work one step at a time: build it, verify its checkpoint, mark it completed, then the next." : "",
     canAct(mode) ? "Build, don't paste: when the user wants something made or changed, change the project with your tools (write_file / edit_file / run_app). Never answer with whole files or long code for the user to copy-paste. If a key or file you need is missing, build it anyway with a clear placeholder, and say exactly what they must provide and where." : "",
     "Use the conversation: before answering, connect the request to what was said and done earlier in this chat (errors you saw, links, decisions, files you changed). If the user refers to something you can't find in the conversation or the project (\"the link\", \"that error\", \"what we discussed\"), say plainly that you don't see it and ask — don't guess, and don't search the code for words from it repeatedly.",
+    worker ? "" : "When you can't decide something that is the user's call — two reasonable ways with different trade-offs, which of several things they meant, information you can't find yourself, or a step with big consequences — don't guess and don't stop with a question in prose: call ask_user with the problem in `why` and 2–4 concrete options (your recommendation first, marked \"(Recommended)\"), wait for the answer, then carry on. Don't ask about things you can look up, and don't ask permission for what was already asked.",
     teamPart,
     uploads,
     "Memory: V-Run keeps a V.md memory (project V.md + the user's personal ~/.v-run/V.md), shown below when it exists. Follow it. Save one short line with the remember tool when the user tells you a preference or rule ('always…', 'never…', 'I prefer…' — use scope 'user' when it applies to every project), or when you learned a non-obvious fact that will matter next time. Good: \"Run the dev server with npm run dev (port 5173)\", \"Tests: npx vitest run; the e2e suite needs Chrome\", \"User prefers Tailwind over plain CSS\". Bad: anything describing what you just did (\"Fixed the navbar in 3 files\"), what is obvious from the code, temporary details, secrets. In Agent mode, when you finish a task in which you learned how to run, test or build the project, or hit a pitfall worth avoiding, and it isn't in V.md yet, save it before your final summary.",
@@ -1854,6 +1942,7 @@ export async function messageContext(s: Session, req: ChatRequest, emit: (e: Age
   try { att = await prepareAttachments(req.attachments); } catch (e) { parts.push(`(The user's attachments couldn't be saved: ${(e as Error).message})`); }
   parts.push(...(await skillContext(s, req, emit)), ...att.texts);
   if (att.note) parts.push(att.note);
+  if (OVERVIEW.test(req.text)) parts.push(OVERVIEW_NOTE);
   return { parts, att };
 }
 

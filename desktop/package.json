@@ -1,6 +1,6 @@
 {
   "name": "v-run",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "V-Run — the FreeToken desktop coding app (Electron editor + agent)",
   "main": "dist/main/main.js",
@@ -17,7 +17,6 @@
     "e2e:ft": "tsx test/e2e-freetoken.ts",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "release": "npm run build && electron-builder --publish always",
     "smoke": "tsx test/smoke-packaged.ts"
   },
   "dependencies": {
@@ -118,10 +117,9 @@
     },
     "publish": [
       {
-        "provider": "github",
-        "owner": "V-Groups-Foundations",
-        "repo": "freetoken",
-        "releaseType": "release"
+        "provider": "generic",
+        "url": "https://github.com/V-Groups-Foundations/freetoken/releases/download/v-run-latest",
+        "channel": "latest"
       }
     ]
   }

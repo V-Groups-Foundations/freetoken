@@ -1,44 +1,157 @@
-# Builds V-Run's installers and publishes them as a GitHub Release, which installed copies update from
-# (electron-updater reads latest.yml / latest-mac.yml from the newest release).
-# To release: set "version" in desktop/package.json, commit, then push a tag v-run-v<that version>:
-#   git tag v-run-v0.2.0 && git push origin v-run-v0.2.0
+# V-Run's release pipeline: every push to master that changes desktop/ is tested, given the next version,
+# built for Windows and macOS, and published — installed copies pick it up by themselves.
+#
+#   push to master (desktop/**)  →  tests on Windows  →  next version  →  build (Windows, macOS)
+#     →  GitHub Release "v-run-v<version>" (the history)  +  the files of "v-run-latest" replaced (the
+#        update feed every installed V-Run reads: desktop/package.json → build.publish)
+#
+# Version: the patch number goes up by one on each release (0.2.1 → 0.2.2). Run the workflow by hand
+# (Actions → V-Run release → Run workflow) to release a minor or major version instead. Raising "version" in
+# desktop/package.json also works: the release uses whichever is higher. The version isn't committed back —
+# the v-run-v<version> tag marks the released commit.
+# Skip a release for one push: put [skip release] in the commit message.
 name: V-Run release
 
 on:
   push:
-    tags: ['v-run-v*']
+    branches: [master]
+    paths: ['desktop/**', '.github/workflows/v-run-release.yml']
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version goes up
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: write
 
+# one release at a time, in push order
+concurrency:
+  group: v-run-release
+  cancel-in-progress: false
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  test:
+    name: Test
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: windows-latest
     timeout-minutes: 40
     defaults: { run: { working-directory: desktop } }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
-      - name: The tag matches package.json
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          want="v-run-v$(node -p "require('./package.json').version")"
-          [ "$want" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} but package.json says $want"; exit 1; }
       - run: npm ci
       - run: npm run typecheck
-      - name: Build and publish
-        run: npm run release
+      - run: npm test
+        env: { VRUN_TEST_LIMIT_MS: '600000' }
+
+  version:
+    name: Next version
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      previous: ${{ steps.next.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - id: next
+        env: { BUMP: "${{ github.event.inputs.bump || 'patch' }}" }
+        run: |
+          node - <<'EOF' >> "$GITHUB_OUTPUT"
+          const { execSync } = require('child_process');
+          const parse = (v) => v.split('.').map(Number);
+          const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+          const tags = execSync('git tag --list "v-run-v*"').toString().split('\n').map((t) => t.trim().replace(/^v-run-v/, '')).filter((t) => /^\d+\.\d+\.\d+$/.test(t)).map(parse).sort(cmp);
+          const last = tags.at(-1) ?? null;
+          const pkg = parse(require('./desktop/package.json').version);
+          let next;
+          if (!last) next = pkg; // the first release is package.json's version
+          else {
+            const b = process.env.BUMP;
+            next = b === 'major' ? [last[0] + 1, 0, 0] : b === 'minor' ? [last[0], last[1] + 1, 0] : [last[0], last[1], last[2] + 1];
+            if (cmp(pkg, next) > 0) next = pkg; // package.json was raised by hand
+          }
+          console.log(`version=${next.join('.')}`);
+          console.log(`previous=${last ? `v-run-v${last.join('.')}` : ''}`);
+          EOF
+      - run: echo "Releasing ${{ steps.next.outputs.version }} (previous ${{ steps.next.outputs.previous || 'none' }})"
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # a failed Mac build doesn't hold back the Windows release (Windows is what users run)
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    timeout-minutes: 40
+    defaults: { run: { working-directory: desktop } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - run: npm ci
+      - name: Set the version
+        run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
+      - name: Build the installer
+        run: npm run build && npx electron-builder --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS: unsigned until an Apple Developer ID certificate is added (CSC_LINK / CSC_KEY_PASSWORD
-          # and APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID secrets for notarising)
+          # macOS: unsigned until an Apple Developer ID certificate is added as CSC_LINK / CSC_KEY_PASSWORD
+          # secrets (an unsigned Mac app installs, but can't update itself)
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v-run-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.blockmap
+            desktop/release/latest*.yml
+
+  publish:
+    name: Publish
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PREVIOUS: ${{ needs.version.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Release notes
+        run: |
+          {
+            echo "## V-Run $VERSION"
+            echo
+            echo "Download **V-Run-Setup-$VERSION.exe** (Windows) or the **.dmg** (macOS). Installed copies update by themselves."
+            echo
+            echo "### Changes"
+            if [ -n "$PREVIOUS" ]; then git log --no-merges --format='- %s' "$PREVIOUS..HEAD" -- desktop; else git log --no-merges --format='- %s' -20 -- desktop; fi
+          } > notes.md
+          cat notes.md
+      - name: The versioned release (history)
+        run: gh release create "v-run-v$VERSION" dist/* --target "$GITHUB_SHA" --title "V-Run $VERSION" --notes-file notes.md --latest=false
+      - name: The update feed (v-run-latest) gets this version's files
+        run: |
+          gh release view v-run-latest >/dev/null 2>&1 || gh release create v-run-latest --target "$GITHUB_SHA" --title "V-Run — update feed" --latest=false \
+            --notes "The files installed copies of V-Run update from. Always the newest version — see the v-run-v* releases for each version and its changes."
+          gh release upload v-run-latest dist/* --clobber
+          # files of older versions go, so the feed holds exactly one version
+          keep=$(ls dist)
+          for a in $(gh release view v-run-latest --json assets --jq '.assets[].name'); do
+            echo "$keep" | grep -qxF "$a" || gh release delete-asset v-run-latest "$a" --yes
+          done
+          gh release view v-run-latest --json assets --jq '.assets[].name'

@@ -128,6 +128,19 @@ ${e.stack}` : ""}`));
       if (req.tools.some((t: any) => t.name === "edit_file")) throw new Error("ask mode exposed edit_file");
     });
 
+    await step("the agent asks when it can't decide: the problem, options to click, the answer goes back", async () => {
+      const box = page.getByLabel("Message the AI");
+      await box.fill("Which database should we use here?");
+      await box.press("Enter");
+      const q = page.getByRole("group", { name: "The agent has a question" });
+      await q.getByText("Which database should this project use?").waitFor({ timeout: 10000 });
+      await q.getByText(/both a SQLite file and a Postgres config/).waitFor();
+      await shot("05-question");
+      await q.getByRole("button", { name: /Postgres/ }).click();
+      await page.locator(".msg-ai", { hasText: "Going with Postgres." }).waitFor({ timeout: 10000 });
+      await page.locator(".question-done", { hasText: "→ Postgres" }).waitFor();
+    });
+
     await step("@ mention attaches a file to the message", async () => {
       const box = page.getByLabel("Message the AI");
       await box.fill("explain @READ");

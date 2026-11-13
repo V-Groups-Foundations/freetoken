@@ -20,12 +20,21 @@ export function SkillsPanel({ onClose, onPrefill, onAsk, busy }: {
   const [source, setSource] = useState("");
   const [query, setQuery] = useState("");
   const [state, setState] = useState<{ kind: "idle" | "working" | "ok" | "error" | "readme"; text?: string; names?: string[] }>({ kind: "idle" });
+  // plain words search skills.sh; a repo or skill id installs
+  const [found, setFound] = useState<{ id: string; name: string; installs: number; url: string; github: boolean }[] | null>(null);
   const refresh = () => api.skillsList().then(setList).catch(() => setList([]));
   useEffect(() => { refresh(); }, []);
 
-  async function install() {
-    const s = source.trim();
+  async function install(given?: string) {
+    const s = (given ?? source).trim();
     if (!s) return;
+    if (!s.includes("/") && !/^npx\s/i.test(s)) {
+      setState({ kind: "working", text: `Searching skills.sh for “${s}”…` });
+      try { const hits = await api.skillsSearch(s); setFound(hits); setState(hits.length ? { kind: "idle" } : { kind: "error", text: `Nothing on skills.sh for “${s}”.` }); }
+      catch (e) { setState({ kind: "error", text: (e as Error).message }); }
+      return;
+    }
+    setFound(null);
     setState({ kind: "working", text: `Installing from ${s}…` });
     try {
       const r = await api.skillsInstall(s);
@@ -45,9 +54,23 @@ export function SkillsPanel({ onClose, onPrefill, onAsk, busy }: {
       <div className="mem-head"><b>Skills</b><span className="spacer" /><button className="icon-btn" onClick={onClose} aria-label="Close skills">✕</button></div>
       <p className="muted small">Every skill here is active: V-Run picks the right one by itself when your request matches, and the chat shows which. Install more from any GitHub repo, or teach it new ones in the chat.</p>
       <form className="skill-install" onSubmit={(e) => { e.preventDefault(); install(); }}>
-        <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="owner/repo or github.com link — e.g. anthropics/skills" aria-label="GitHub repository" />
-        <button className="btn primary small" disabled={!source.trim() || state.kind === "working"}>Install</button>
+        <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="Search skills.sh (e.g. android app), or owner/repo, owner/repo/skill" aria-label="Search skills.sh or install from GitHub" />
+        <button className="btn primary small" disabled={!source.trim() || state.kind === "working"}>{source.trim() && !source.includes("/") && !/^npx\s/i.test(source.trim()) ? "Search" : "Install"}</button>
       </form>
+      {found && found.length > 0 && (
+        <div className="skill-found" aria-label="skills.sh results">
+          {found.map((h) => (
+            <div key={h.id} className="skill-row">
+              <div><b>{h.name}</b> <span className="muted small">{h.id} · {h.installs.toLocaleString("en-US")} installs</span></div>
+              <span className="spacer" />
+              <a className="link-btn" href={h.url} target="_blank" rel="noreferrer">skills.sh ↗</a>
+              {list?.some((x) => x.name === h.name)
+                ? <span className="muted small">installed</span>
+                : <button className="btn small" disabled={!h.github || state.kind === "working"} title={h.github ? `Install ${h.id}` : "Not on GitHub — can't be installed here"} onClick={() => install(h.id)}>Install</button>}
+            </div>
+          ))}
+        </div>
+      )}
       {state.kind !== "idle" && (
         <div className={`skill-state ${state.kind}`} role="status">
           {state.kind === "readme" ? (

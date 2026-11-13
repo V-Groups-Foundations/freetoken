@@ -28,6 +28,7 @@ const api = {
   indexStatus: () => call("index:status"),
   chat: (req: object) => call("ai:chat", req),
   approve: (sid: string, toolId: string, ok: boolean) => call("ai:approve", sid, toolId, ok),
+  answer: (sid: string, toolId: string, text: string) => call("ai:answer", sid, toolId, text),
   safetyGet: () => call("safety:get"),
   gitStatus: () => call("git:status"),
   gitDiff: (p: string) => call("git:diff", p),
@@ -119,6 +120,7 @@ const api = {
   /** where a dropped file lives on disk ("" for pasted data, which has no file) */
   pathForFile: (f: File) => { try { return webUtils.getPathForFile(f); } catch { return ""; } },
   skillsInstall: (source: string) => call("skills:install", source),
+  skillsSearch: (query: string) => call("skills:search", query),
   skillsRemove: (name: string) => call("skills:remove", name),
   skillsOpen: (name: string) => call("skills:open", name),
   videoExport: (file: string, opts?: object) => call("video:export", file, opts),

@@ -23,6 +23,7 @@ type Item =
   | { kind: "thinking"; text: string; start: number; ms?: number }
   | ToolItem
   | { kind: "approval"; id: string; command: string; explanation?: string; decided?: boolean | null; auto?: boolean; rule?: string }
+  | { kind: "question"; id: string; question: string; why?: string; options: { label: string; description?: string }[]; multi?: boolean; answer?: string | null }
   | { kind: "todos"; todos: { content: string; status: string }[] }
   | { kind: "error"; text: string }
   | { kind: "turn"; ms: number; tokens: number; estimated: boolean; reason: string; tools: number; mode: Mode; next: string[]; synced?: true | string; models?: string[]; changed?: string[] }
@@ -66,6 +67,8 @@ const TOOLS: Record<string, { label: string; arg?: string; verb: string }> = {
   fetch_url: { label: "Read", arg: "url", verb: "Reading the page" },
   save_skill: { label: "Learn skill", arg: "name", verb: "Learning skill" },
   install_skills: { label: "Install skills", arg: "source", verb: "Installing skills" },
+  find_skills: { label: "Find skills", arg: "query", verb: "Searching skills" },
+  ask_user: { label: "Question for you", arg: "question", verb: "Waiting for your answer" },
   export_video: { label: "Export video", arg: "path", verb: "Rendering video" },
   spawn_agent: { label: "Start agent", arg: "name", verb: "Starting an agent" },
   agent_status: { label: "Team status", verb: "Checking the agents" },
@@ -109,6 +112,8 @@ function followUps(turn: Item[], mode: Mode, reason: string): string[] {
   return [...new Set(out)].slice(0, 3);
 }
 
+/** "try that again", "retry", "again please"… */
+export const RETRY_WORDS = /^\s*(please\s+)?(try (that|it|this) again|try again|retry|again|do (it|that) again|one more time|redo( it| that)?)(\s+please)?[\s.!]*$/i;
 const plural = (n: number, w: string, many = `${w}s`) => `${n} ${n === 1 ? w : many}`;
 const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
 const fmtTime = (ms: number) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; };
@@ -291,6 +296,7 @@ export function ChatPanel(props: {
     const auto = e.type === "approval" && autoRunRef.current && !e.always;
     if (auto) api.approve(sidRef.current, e.id, true);
     else if (e.type === "approval") api.notify("V-Run needs your approval", e.command).catch(() => {});
+    if (e.type === "question") api.notify("V-Run has a question", e.question).catch(() => {});
     const t = turn.current;
     if (e.type === "text") t.chars += e.delta.length;
     if (e.type === "usage") { t.tokens += e.output; t.spent += (e.input ?? 0) + e.output; if (e.input) setCtxTokens(e.input); }
@@ -327,8 +333,12 @@ export function ChatPanel(props: {
           const i = next.findIndex((x) => x.kind === "tool" && x.id === e.id);
           if (i >= 0) next[i] = { ...(next[i] as ToolItem), status: e.ok ? "ok" : "error", summary: e.summary, detail: e.detail };
           next.forEach((x, j) => { if (x.kind === "approval" && x.id === e.id && x.decided === undefined) next[j] = { ...x, decided: null }; });
+          next.forEach((x, j) => { if (x.kind === "question" && x.id === e.id && x.answer === undefined) next[j] = { ...x, answer: null }; });
           break;
         }
+        case "question":
+          next.push({ kind: "question", id: e.id, question: e.question, why: e.why, options: e.options, multi: e.multi });
+          break;
         case "approval":
           next.push({ kind: "approval", id: e.id, command: e.command, explanation: e.explanation, ...(e.rule ? { rule: e.rule } : {}), ...(auto ? { decided: true, auto: true } : {}) });
           break;
@@ -407,6 +417,10 @@ export function ChatPanel(props: {
     if (text === "/benchmark") { setInput(""); setMemOpen(false); setSkillsOpen(false); setHistoryOpen(false); setBenchOpen(true); return; }
     if (text === "/history") { setInput(""); setMemOpen(false); setSkillsOpen(false); setHistoryOpen(true); return; }
     if (text === "/init") { setInput(""); return send(INIT_PROMPT, "agent", run); }
+    // "try that again" right after a reply that failed: the failed message never reached the model (it's
+    // taken back out), so the model had nothing to retry — resend that message instead, like ↻ Retry
+    const lastTurn = [...items].reverse().find((x) => x.kind === "turn") as Extract<Item, { kind: "turn" }> | undefined;
+    if (RETRY_WORDS.test(text) && items.at(-1) === lastTurn && lastTurn?.reason === "error" && !attach.length) { setInput(""); return retryLast(); }
     // "# something" is a note to remember, not a message (Ctrl+Enter: personal memory)
     if (/^#(?!#)\s*\S/.test(text)) { await saveNote(text.replace(/^#\s*/, ""), noteScope.current); noteScope.current = "project"; return; }
     // Agent work can run commands: ask once, up front, whether to run everything or approve each step
@@ -736,6 +750,7 @@ export function ChatPanel(props: {
               );
               case "text": return <AiText key={i} text={r.text} streaming={busy && i === rows.length - 1} />;
               case "tool": return <ToolRow key={r.id} t={r} waiting={waiting?.id === r.id} />;
+              case "question": return <Question key={`q${r.id}`} q={r} onAnswer={(text) => { api.answer(sid, r.id, text).catch(() => {}); setItems((p) => p.map((x) => (x === r ? { ...r, answer: text } : x))); }} />;
               case "approval": return <Approval key={`a${r.id}`} a={r} tool={items.find((x): x is ToolItem => x.kind === "tool" && x.id === r.id)} onDecide={decide} />;
               case "todos": return <Todos key={i} todos={r.todos} />;
               case "error": return <div key={i} className="row-err" role="alert"><span className="dot err" aria-hidden />{r.text}</div>;
@@ -1038,6 +1053,34 @@ function ExploreGroup({ tools }: { tools: ToolItem[] }) {
         <button className="trow-title" onClick={() => setOpen((v) => !v)} aria-expanded={open}><b>Explored</b><span className="trow-arg">{parts.charAt(0).toUpperCase() + parts.slice(1)}</span><span className="chev">{open ? "▾" : "▸"}</span></button>
       </div>
       {open && <div className="group-body">{tools.map((t) => <ToolRow key={t.id} t={t} nested />)}</div>}
+    </div>
+  );
+}
+
+/** The agent can't decide something and asks: the problem, 2–4 options, or the user's own words. */
+function Question({ q, onAnswer }: { q: Extract<Item, { kind: "question" }>; onAnswer: (text: string) => void }) {
+  const [picked, setPicked] = useState<string[]>([]);
+  const [own, setOwn] = useState("");
+  if (q.answer !== undefined) return <div className="question-done"><span className="muted">Asked:</span> {q.question} <b>→ {q.answer ?? "not answered"}</b></div>;
+  const send = (text: string) => { if (text.trim()) onAnswer(text.trim()); };
+  return (
+    <div className="question" role="group" aria-label="The agent has a question">
+      <div className="question-title">❓ {q.question}</div>
+      {q.why && <div className="muted">{q.why}</div>}
+      <div className="question-options">
+        {q.options.map((o, i) => (
+          <button key={o.label} className={`question-option${picked.includes(o.label) ? " on" : ""}`} aria-pressed={q.multi ? picked.includes(o.label) : undefined}
+            onClick={() => (q.multi ? setPicked((p) => (p.includes(o.label) ? p.filter((x) => x !== o.label) : [...p, o.label])) : send(o.label))}>
+            <span className="question-num" aria-hidden>{i + 1}</span>
+            <span><b>{o.label}</b>{o.description && <span className="muted small"> — {o.description}</span>}</span>
+          </button>
+        ))}
+      </div>
+      {q.multi && <button className="btn small primary" disabled={!picked.length} onClick={() => send(picked.join(", "))}>Send {picked.length ? `(${picked.length})` : ""}</button>}
+      <form className="question-own" onSubmit={(e) => { e.preventDefault(); send(own); }}>
+        <input className="field" placeholder="Or type your own answer…" value={own} onChange={(e) => setOwn(e.target.value)} aria-label="Your own answer" />
+        <button className="btn small" disabled={!own.trim()}>Answer</button>
+      </form>
     </div>
   );
 }
