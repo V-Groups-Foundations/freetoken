@@ -103,11 +103,15 @@ export const sumTotals = (rows: Totals[]): Totals => rows.reduce(
 
 export type CoachState = {
   today: string;
+  /** yesterday's log: food said to be from yesterday is checked against it (it was being logged twice) */
+  yesterday?: { day: string; entries: { meal: string; name: string; kcal: number; protein: number; fat: number; carbs: number }[] };
   /** foods this user logged before (name → numbers): reused exactly */
   myFoods?: { name: string; kcal: number; protein: number; fat: number; carbs: number }[];
   profile: { sex?: string | null; age?: number | null; heightCm?: number | null; goal?: string | null; calories?: number | null; protein?: number | null; fat?: number | null; carbs?: number | null; notes?: string | null; activity?: string | null; goalWeightKg?: number | null } | null;
   advice?: string; // computed numbers (src/diet/advisor.ts adviceLines)
   physique?: { day: string; pose: string; bodyFat: string | null; summary: string }[]; // latest progress-photo reads
+  /** where they're eating and what the web says about its menu (searched for this message, or kept from earlier in the meal) */
+  menu?: { venue: string; facts: string | null; why?: string };
   training?: string; // their training details, plan, next targets and recent lifts (src/diet/plan.ts trainingCoachLines)
   entries: { meal: string; name: string; kcal: number; protein: number; fat: number; carbs: number }[];
   week: { day: string; kcal: number; protein: number }[];
@@ -139,6 +143,8 @@ How to answer:
 - Use a table only for a plan or a breakdown the user asks for. A day plan must add up to their targets (show the totals).
 - "How much X and Y should I eat?" (or you suggest amounts of foods from the table): do NOT work out the grams yourself — the app calculates them exactly from what's left today and adds them under your reply. Say in one line which foods and why, then put a "portion" block (see Recording). Anything they say they'll have anyway (another SAVAS latte, 2 eggs) goes in "keep" with its numbers, so the app counts it first.
 - Suggesting a meal: build it around what's LEFT today — cover the remaining protein first (lean meat, fish, eggs, Greek yogurt, protein drinks, tofu), then fit carbs and fat into what's left. Say what it leaves for the rest of the day.
+- Every item's numbers must add up: protein×4 + carbs×4 + fat×9 ≈ kcal (the app checks and corrects fat and carbs when they don't). When a menu or label gives the kcal, keep it and split it into P/F/C that add up to it.
+- Sushi chains (Hama Sushi, Sushiro, Kura…): a nigiri plate is 2 pieces ≈ 36 g sushi rice (≈ 60 kcal, C 13 g, P 1 g) plus the topping; gunkan is a little less rice. Fish without rice has no carbs, and salmon has real fat (about 0.7 g per g of protein).
 - Values: for foods in the table below use exactly its numbers (raw vs cooked matters: raw chicken breast is 105 kcal / 23 g protein per 100 g, cooked is 165 / 31). Write raw or cooked and the grams in the item's name. For a food under "Their own foods" use those numbers exactly (scale them if the amount differs). For Japanese and branded products use the label values you know; if unsure, say it's an estimate and give a sensible one.
 - Food photos: from a nutrition label (栄養成分表示) use its numbers exactly, scaled to what they had. From a meal, name each food with an estimated amount in grams. Log what's in a photo as eaten unless they say they're only asking; if the amount eaten is unclear, ask one short question instead of logging.
 - Body photos: give a frank, respectful assessment — estimated body-fat range, strongest and lagging areas, posture or symmetry issues worth fixing, and the 2–3 changes (food and training) that matter most for their goal. Never comment on anything but physique, and never log food from a body photo.
@@ -151,7 +157,7 @@ Recording (the app reads this; the user doesn't see it): whenever the user says 
 {"log":[{"meal":"breakfast","name":"<food and amount>","kcal":0,"protein":0,"fat":0,"carbs":0}]}
 \`\`\`
 "meal" is one of breakfast, lunch, dinner, snack, drink. Other keys, only with values the user actually gave or agreed to: "weight": kg; "targets": {"calories","protein","fat","carbs"}; "profile": {"sex":"male|female","age","heightCm","goal","notes","activity":"sedentary|light|moderate|active|athlete","goalWeightKg"}; "remove": ["<name of an item logged today>"]; "workout": [{"exercise":"<name as in their plan>","kg":80,"reps":8,"sets":3}] for sets they say they did (kg 0 for bodyweight; one entry per weight×reps, "sets" = how many times); "replan": "<the change to make to their training plan>" — REQUIRED whenever they ask to swap, add, remove or change anything in their plan, or agree to a change you proposed (describing the change in words does not change the plan; only this key does) — the app rewrites the plan and shows it on the Training tab, so tell them it's updating there.
-The block records only what the LATEST message newly reports. Food already listed under "Today so far" is logged already: never put it in "log" again (that counts it twice). Include "weight", "targets" or "profile" only when the latest message gives new values (or the user accepts targets you proposed). Leave out the block entirely when there's nothing new to record.
+The block records only what the LATEST message newly reports. Food already listed under "Today so far" or "Yesterday" is logged already: never put it in "log" again (that counts it twice) — a follow-up like "also add 400 kcal" logs only the 400 kcal. Include "weight", "targets" or "profile" only when the latest message gives new values (or the user accepts targets you proposed). Leave out the block entirely when there's nothing new to record.
 One "log" item per food, with its amount in the name. "remove" takes back items logged today, by name. Add "day":"YYYY-MM-DD" to an item only if it was on another day. Never log food the user only asked about, is planning to eat, or that you suggested — a suggestion or plan gets NO "log". Log it only after they say they ate it.
 "portion" (for "how much should I eat"): {"portion":{"meal":"dinner","foods":["chicken breast raw","white rice cooked"],"keep":[{"meal":"drink","name":"SAVAS Milk Protein latte 430ml","kcal":193,"protein":30,"fat":0,"carbs":13}]}} — "foods" are names from the food table (say raw or cooked); "keep" is what they'll have anyway (NOT logged). Use it instead of writing grams yourself.
 
@@ -164,23 +170,26 @@ ${s.advice || '  - nothing yet (needs profile and weight)'}
 - Training: ${s.training || 'no plan yet — they can set one up on the Training tab'}
 - Physique (from their progress photos): ${s.physique?.length ? s.physique.map((ph) => `${ph.day} ${ph.pose}${ph.bodyFat ? ` ~${ph.bodyFat}% body fat` : ''}: ${ph.summary}`).join(' | ') : 'no photos yet'}
 - Today (${s.today}) so far: ${s.entries.length ? s.entries.map((e) => `${e.meal}: ${e.name} ${r(e.kcal)} kcal P${r(e.protein)} F${r(e.fat)} C${r(e.carbs)}`).join('; ') : 'nothing logged'}
+- Yesterday (${s.yesterday?.day ?? 'n/a'}) logged: ${s.yesterday?.entries.length ? `${s.yesterday.entries.map((e) => `${e.meal}: ${e.name} ${r(e.kcal)} kcal P${r(e.protein)}`).join('; ')} — total ${r(sumTotals(s.yesterday.entries).kcal)} kcal` : 'nothing'}
 - Today total: ${r(t.kcal)} kcal · P ${r(t.protein)} g · F ${r(t.fat)} g · C ${r(t.carbs)} g
 - Left today: ${left}
 - Last days: ${s.week.length ? s.week.map((d) => `${d.day} ${r(d.kcal)} kcal P${r(d.protein)}`).join(', ') : 'no history'}
 - Their own foods (logged before — reuse these exact numbers for the same food and amount): ${s.myFoods?.length ? `\n${s.myFoods.map((f) => `  - ${f.name}: ${r(f.kcal)} kcal P${f.protein} F${f.fat} C${f.carbs}`).join('\n')}` : 'none yet'}
-
+${s.menu ? `\nEating out at ${s.menu.venue}: ${s.menu.facts
+    ? `use THESE numbers from the web for its menu (say they're from ${s.menu.venue}'s published menu / the source), not your own guesses. If an item they ask about isn't in them, say so and give your estimate as an estimate.\n${s.menu.facts}`
+    : `the web couldn't be searched (${s.menu.why}) — say your numbers are estimates and ask them to check the menu's kcal, or to send a photo of it.`}\n` : ''}
 Food table (per 100 g; use these exactly):
 ${foodTableText()}`;
 }
 
 /** The day's line under a food log, from the real log (the model's own arithmetic went wrong across days). */
-export function todayLine(entries: { kcal: number; protein: number; fat: number; carbs: number }[], p: { calories?: number | null; protein?: number | null; fat?: number | null; carbs?: number | null } | null) {
+export function todayLine(entries: { kcal: number; protein: number; fat: number; carbs: number }[], p: { calories?: number | null; protein?: number | null; fat?: number | null; carbs?: number | null } | null, label = 'Today') {
   const t = sumTotals(entries);
   const g = (n: number) => Math.round(n);
-  if (!p?.calories) return `**Today:** ${g(t.kcal)} kcal · P ${g(t.protein)} g · F ${g(t.fat)} g · C ${g(t.carbs)} g`;
+  if (!p?.calories) return `**${label}:** ${g(t.kcal)} kcal · P ${g(t.protein)} g · F ${g(t.fat)} g · C ${g(t.carbs)} g`;
   const left = p.calories - t.kcal;
   const macro = (name: string, have: number, want?: number | null) => (want ? `${name} ${g(have)}/${g(want)}` : `${name} ${g(have)}`);
-  return `**Today:** ${g(t.kcal)} of ${g(p.calories)} kcal — ${left >= 0 ? `**${g(left)} kcal left**` : `**${g(-left)} kcal over**`} · ${macro('P', t.protein, p.protein)} · ${macro('F', t.fat, p.fat)} · ${macro('C', t.carbs, p.carbs)} g`;
+  return `**${label}:** ${g(t.kcal)} of ${g(p.calories)} kcal — ${left >= 0 ? `**${g(left)} kcal left**` : `**${g(-left)} kcal over**`} · ${macro('P', t.protein, p.protein)} · ${macro('F', t.fat, p.fat)} · ${macro('C', t.carbs, p.carbs)} g`;
 }
 
 /** Lines where the model did the day's arithmetic itself (the app's line replaces them). */

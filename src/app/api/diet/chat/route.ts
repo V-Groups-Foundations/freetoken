@@ -9,6 +9,17 @@ import { cleanReply, coachSystemPrompt, onlyAsking, parseDietBlocks, stripDietBl
 import { addDietMessage, applyDietActions, coachState, deleteDietMessage, exactNumbers, getProfile, listDietMessages, listEntries, myFoods, savedReply } from '@/diet/service';
 import { portionLine } from '@/diet/portion';
 import { dayParam } from '@/diet/day';
+import { menuFacts } from '@/diet/eating-out';
+import { loadCredentials } from '@/keys/service';
+import { searchWeb } from '@/web/search';
+
+/** "Today", "Yesterday (Wed 11-11)", or "Mon 11-09". */
+function dayLabel(d: string, today: string) {
+  if (d === today) return 'Today';
+  const date = new Date(`${d}T12:00:00Z`);
+  const name = `${date.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })} ${d.slice(5)}`;
+  return new Date(`${today}T12:00:00Z`).getTime() - date.getTime() === 86_400_000 ? `Yesterday (${name})` : name;
+}
 import { currentPlan, generatePlan, trainingCoachLines } from '@/diet/plan';
 import { wantsPlanChange } from '@/diet/training';
 
@@ -38,8 +49,13 @@ export async function POST(req: Request) {
   const today = dayParam(parsed.data.day);
   const db = getDb();
 
-  const [state, prior, training] = await Promise.all([coachState(db, uid, today), listDietMessages(db, uid, HISTORY), trainingCoachLines(db, uid, today)]);
+  const deps = getDeps();
+  // eating out: the place's menu nutrition from the web (not the model's guesses), with their own search key
+  const searchKey = (await loadCredentials(db, uid, deps.vaultKey).catch(() => null))?.get('tavily')?.creds.key as string | undefined;
+  const [state, prior, training, menu] = await Promise.all([coachState(db, uid, today), listDietMessages(db, uid, HISTORY), trainingCoachLines(db, uid, today),
+    menuFacts(deps.kv, uid, words, searchKey ? (q) => searchWeb(q, searchKey, { maxResults: 6 }, deps.fetchImpl) : null)]);
   state.training = training;
+  if (menu) state.menu = menu;
   // earlier replies without their recording blocks: what was logged is in the system prompt already
   const history = prior.map((m) => ({ role: m.role, content: m.role === 'assistant' ? stripDietBlocks(m.content) || '(logged)' : m.content }));
   const out = await routeChat({
@@ -66,10 +82,18 @@ export async function POST(req: Request) {
     const asking = !photos && onlyAsking(words);
     const actions = parseDietBlocks(text).map((a) => (asking ? { ...a, log: undefined, remove: undefined } : a));
     try {
-      const applied = await applyDietActions(db, uid, today, actions, words);
-      // food logged or taken back: the day's line comes from the real log (the model's sums went wrong)
-      const day = applied.log?.length || applied.remove?.length
-        ? todayLine(await listEntries(db, uid, today), await getProfile(db, uid)) : undefined;
+      const balanced: string[] = [];
+      const applied = await applyDietActions(db, uid, today, actions, words, balanced);
+      // food logged or taken back: each day's line comes from the real log (the model's sums went wrong) —
+      // food logged for yesterday gets yesterday's line, not "Today: 0 of 2000"
+      let day: string | undefined;
+      if (applied.log?.length || applied.remove?.length) {
+        const profile = await getProfile(db, uid);
+        const days = [...new Set([...(applied.log ?? []).map((i) => i.day ?? today), ...(applied.remove?.length ? [today] : [])])].sort();
+        const lines = await Promise.all(days.map(async (d) => todayLine(await listEntries(db, uid, d), profile, dayLabel(d, today))));
+        if (balanced.length) lines.unshift(`_Fat and carbs adjusted so they add up to the calories: ${balanced.join(', ')}._`);
+        day = lines.join('\n');
+      }
       // "how much should I eat": the app sizes the foods the coach named from what's really left
       const ask = actions.find((a) => a.portion)?.portion;
       let portion: string | null = null;

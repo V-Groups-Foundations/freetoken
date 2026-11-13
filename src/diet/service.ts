@@ -94,12 +94,13 @@ export async function dietState(db: DB, userId: string, day: string, today = day
 
 /** What the coach is told before it answers (yesterday and before, not today: today is listed item by item). */
 export async function coachState(db: DB, userId: string, today: string): Promise<CoachState> {
-  const [s, mine] = await Promise.all([dietState(db, userId, today), myFoods(db, userId)]);
+  const yesterday = shiftDay(today, -1);
+  const [s, mine, before] = await Promise.all([dietState(db, userId, today), myFoods(db, userId), listEntries(db, userId, yesterday)]);
   // the latest read of each pose, so the coach remembers what the photos showed
   const latest = new Map<string, (typeof s.photos)[number]>();
   for (const ph of s.photos) if (ph.analysis && !latest.has(ph.pose)) latest.set(ph.pose, ph);
   return {
-    today, myFoods: mine, profile: s.profile, entries: s.entries, week: s.week.filter((d) => d.day !== today), weights: s.weights.slice(-30),
+    today, myFoods: mine, yesterday: { day: yesterday, entries: before }, profile: s.profile, entries: s.entries, week: s.week.filter((d) => d.day !== today), weights: s.weights.slice(-30),
     advice: adviceLines(s.advice, s.profile),
     physique: [...latest.values()].map((ph) => ({ day: ph.day, pose: ph.pose, bodyFat: bodyFatText(ph), summary: ph.summary ?? '' })),
   };
@@ -143,6 +144,44 @@ export async function deletePhoto(db: DB, userId: string, id: number) {
 }
 
 // words that name a food ("salmon", "onigiri", "savas"), for telling a re-sent item from a new one
+// what a food's missing energy most likely is, when its P/F/C don't add up to its kcal
+const CARBY = /\b(rice|sushi|nigiri|gunkan|maki|roll|onigiri|bread|toast|sandwich|noodles?|ramen|udon|soba|pasta|oats?|oatmeal|banana|fruit|juice|latte|coffee|tea|milk|shake|smoothie|yogh?urt|cake|cookie|bar|sweet|candy|potato|cereal|drink|soda|beer|curry|bowl|don|gyudon)\b|ご飯|飯|寿司|鮨|おにぎり|パン|麺|ラテ|丼/i;
+const FATTY = /\b(salmon|mackerel|saba|toro|eel|unagi|beef|pork|lamb|bacon|sausage|egg|eggs|cheese|nuts?|almonds?|peanuts?|oil|butter|mayo|mayonnaise|avocado|karaage|fried|tempura|katsu|cream)\b|サーモン|鯖|トロ|マヨ|唐揚|天ぷら/i;
+const NO_CARBS = /\b(no|without) rice\b|rice removed|\bsashimi\b|刺身/i;
+const r1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * An item whose protein, fat and carbs don't add up to its calories (P×4 + C×4 + F×9 more than ~15% off) is
+ * corrected: the kcal and protein stay (they come from the menu or label, or were asked for), fat and carbs
+ * are set so they add up — the missing energy goes to carbs for rice, bread and drinks, to fat for fish
+ * without rice and fatty foods. (The coach logged salmon at 0 g fat and sushi with half its rice carbs.)
+ */
+export function balanceMacros<T extends { name: string; kcal: number; protein: number; fat: number; carbs: number }>(i: T): { item: T; fixed: boolean } {
+  const atwater = 4 * i.protein + 4 * i.carbs + 9 * i.fat;
+  if (i.kcal < 30 || Math.abs(atwater - i.kcal) <= Math.max(15, i.kcal * 0.15)) return { item: i, fixed: false };
+  // protein alone is more than the calories: the kcal is the wrong number, not the macros
+  if (4 * i.protein >= i.kcal) return { item: { ...i, kcal: Math.round(atwater) }, fixed: true };
+  let { fat, carbs } = i;
+  if (atwater < i.kcal) {
+    const gap = i.kcal - atwater;
+    const carby = CARBY.test(i.name), fatty = FATTY.test(i.name);
+    const toCarbs = NO_CARBS.test(i.name) ? 0 : carby && fatty ? 0.6 : carby ? 1 : fatty ? 0 : 0.5;
+    carbs += (gap * toCarbs) / 4;
+    fat += (gap * (1 - toCarbs)) / 9;
+  } else {
+    // more energy in the macros than the calories: fat and carbs shrink to fit (protein is the one people count)
+    const room = i.kcal - 4 * i.protein, fc = 4 * carbs + 9 * fat;
+    if (fc > 0) { carbs *= room / fc; fat *= room / fc; }
+  }
+  return { item: { ...i, fat: r1(fat), carbs: r1(carbs) }, fixed: true };
+}
+
+/** The same food again: by name, or by the same numbers under another name ("restaurant meal" = "estimated meal"). */
+function sameEntry(e: { name: string; kcal: number; protein: number; fat: number; carbs: number }, i: { name: string; kcal: number; protein: number; fat: number; carbs: number }) {
+  if (Math.round(e.kcal) !== Math.round(i.kcal)) return false;
+  return e.name.toLowerCase() === i.name.toLowerCase() || (i.kcal >= 50 && Math.abs(e.protein - i.protein) <= 1 && Math.abs(e.fat - i.fat) <= 1.5 && Math.abs(e.carbs - i.carbs) <= 1.5);
+}
+
 const foodWords = (name: string) => name.toLowerCase().match(/[\p{L}]{4,}/gu) ?? [];
 
 /**
@@ -151,7 +190,7 @@ const foodWords = (name: string) => name.toLowerCase().match(/[\p{L}]{4,}/gu) ??
  * targets every turn. An item matching one already logged that day is skipped unless the user's message
  * names it ("another SAVAS" still logs a second one); weight, targets and profile count only when they change.
  */
-export async function applyDietActions(db: DB, userId: string, today: string, actions: DietAction[], userText = '') {
+export async function applyDietActions(db: DB, userId: string, today: string, actions: DietAction[], userText = '', balanced: string[] = []) {
   const said = userText.toLowerCase();
   let known: Awaited<ReturnType<typeof myFoods>> | undefined;
   const applied: DietAction = {};
@@ -168,9 +207,13 @@ export async function applyDietActions(db: DB, userId: string, today: string, ac
     }
     for (const raw of a.log ?? []) {
       // exact numbers: a table food with an amount, else the same food as they logged before
-      const i = exactNumbers(raw, known ??= await myFoods(db, userId));
+      const exact = exactNumbers(raw, known ??= await myFoods(db, userId));
+      // the numbers have to add up (table foods and their own foods already do)
+      const { item: i, fixed } = exact === raw ? balanceMacros(exact) : { item: exact, fixed: false };
+      if (fixed) balanced.push(i.name);
       const day = i.day ?? today;
-      const already = (await listEntries(db, userId, day)).some((e) => e.name.toLowerCase() === i.name.toLowerCase() && Math.round(e.kcal) === Math.round(i.kcal));
+      // re-sent food: a follow-up ("also add 400 kcal for yesterday") came back with yesterday's meal again
+      const already = (await listEntries(db, userId, day)).some((e) => sameEntry(e, i));
       if (already && !foodWords(i.name).some((w) => said.includes(w))) continue;
       await db.insert(dietEntries).values({ userId, day, meal: i.meal, name: i.name, kcal: i.kcal, protein: i.protein, fat: i.fat, carbs: i.carbs });
       (applied.log ??= []).push(i);
